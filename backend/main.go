@@ -1,13 +1,23 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
+	"os"
 )
 
-const addr = ":8080"
-
 func main() {
-	log.Printf("listening on %s", addr)
-	log.Fatal(http.ListenAndServe(addr, NewHandler()))
+	cfg, err := LoadConfig(os.Getenv)
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	pool, err := NewPool(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		log.Fatalf("database: %v", err)
+	}
+	defer pool.Close()
+
+	log.Printf("listening on %s", cfg.Addr)
+	log.Fatal(http.ListenAndServe(cfg.Addr, NewServer(pool).Handler()))
 }
