@@ -9,3 +9,4 @@ Format: `- [ ] (#issue) question - default used - date`
 - [ ] (#12) A commit that only adds or removes a final newline: `modified` with no hunks acceptable? Default: yes. - 2026-10-15
 - [ ] (#15/#19/#20) Branch create and repo delete UI placed inside #15; branch delete UI deferred to #20; #19 overlaps #15. Default: as groomed. - 2026-10-15
 - [ ] (#21) Stretch features (merge, compare, README render, rename) have an issue but are not part of the 18 tasks. Default: skipped unless time remains. - 2026-10-15
+- [ ] (#13) `react-hook-form` (shadcn `Form`) is not in the approved packages list. Default: plain controlled inputs with `Label`/`Input`; swap to `Form` if approved. - 2026-10-15
