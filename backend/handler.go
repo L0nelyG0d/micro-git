@@ -3,6 +3,8 @@ package main
 import (
 	"log"
 	"net/http"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -43,6 +45,14 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/auth/login", allow(http.MethodPost, s.login))
 	mux.HandleFunc("/auth/logout", allow(http.MethodPost, s.logout))
 	mux.HandleFunc("/auth/me", allow(http.MethodGet, s.requireAuth(s.me)))
+	mux.HandleFunc("/repos", methods{
+		http.MethodGet:  s.listRepos,
+		http.MethodPost: s.requireAuth(s.createRepo),
+	}.serve)
+	mux.HandleFunc("/repos/{owner}/{repo}", methods{
+		http.MethodGet:    s.getRepo,
+		http.MethodDelete: s.requireAuth(s.deleteRepo),
+	}.serve)
 	mux.HandleFunc("/", notFound)
 }
 
@@ -56,6 +66,24 @@ func allow(method string, h http.HandlerFunc) http.HandlerFunc {
 		}
 		h(w, r)
 	}
+}
+
+// methods dispatches by HTTP method; any other method gets 405 with an Allow
+// header. Used for paths that serve several methods.
+type methods map[string]http.HandlerFunc
+
+func (m methods) serve(w http.ResponseWriter, r *http.Request) {
+	if h, ok := m[r.Method]; ok {
+		h(w, r)
+		return
+	}
+	allowed := make([]string, 0, len(m))
+	for k := range m {
+		allowed = append(allowed, k)
+	}
+	sort.Strings(allowed)
+	w.Header().Set("Allow", strings.Join(allowed, ", "))
+	writeError(w, http.StatusMethodNotAllowed, "method not allowed")
 }
 
 func health(w http.ResponseWriter, r *http.Request) {
