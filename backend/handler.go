@@ -53,6 +53,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 		http.MethodGet:    s.getRepo,
 		http.MethodDelete: s.requireAuth(s.deleteRepo),
 	}.serve)
+	mux.HandleFunc("/repos/{owner}/{repo}/commits", methods{
+		http.MethodPost: s.requireAuth(s.createCommit),
+	}.serve)
 	mux.HandleFunc("/", notFound)
 }
 
