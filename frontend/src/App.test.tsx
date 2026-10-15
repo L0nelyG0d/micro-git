@@ -201,8 +201,6 @@ it("renders placeholders with route params for every route", async () => {
   const cases: [string, string, string][] = [
     ["/alice/hello/edit/main/src/a.go", "Edit file", "src/a.go"],
     ["/alice/hello/new/main", "New file", "main"],
-    ["/alice/hello/commits/main", "History", "main"],
-    ["/alice/hello/commit/abc123", "Commit", "abc123"],
   ]
   for (const [path, name, param] of cases) {
     const { unmount } = renderAt(path)

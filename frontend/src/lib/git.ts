@@ -56,3 +56,39 @@ export function uiPath(
   const base = `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/${kind}/${encodeURIComponent(ref)}`
   return path ? `${base}/${enc(path)}` : base
 }
+
+export type CommitsPage = {
+  ref: string
+  page: number
+  per_page: number
+  has_more: boolean
+  commits: CommitSummary[]
+}
+export type DiffLine = { type: "context" | "add" | "del"; text: string }
+export type Hunk = {
+  old_start: number
+  old_lines: number
+  new_start: number
+  new_lines: number
+  lines: DiffLine[]
+}
+export type FileDiff = {
+  path: string
+  status: "added" | "modified" | "deleted"
+  additions: number
+  deletions: number
+  truncated: boolean
+  hunks: Hunk[]
+}
+export type CommitDetail = CommitSummary & { tree: string; files: FileDiff[] }
+
+/** UI route to a commit (full oid). */
+export function commitPath(owner: string, repo: string, oid: string): string {
+  return `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commit/${oid}`
+}
+
+/** UI route to the history of `ref`, page 1 without a query. */
+export function historyPath(owner: string, repo: string, ref: string, page = 1): string {
+  const base = `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(ref)}`
+  return page > 1 ? `${base}?page=${page}` : base
+}
