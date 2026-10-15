@@ -1,0 +1,161 @@
+import { Link, useNavigate, useParams } from "react-router-dom"
+import { useAuth, isOwner } from "@/auth/AuthContext"
+import { BranchSwitcher } from "@/components/BranchSwitcher"
+import { Breadcrumbs } from "@/components/Breadcrumbs"
+import { DeleteRepoDialog } from "@/components/DeleteRepoDialog"
+import { FileTree } from "@/components/FileTree"
+import { LatestCommitBar } from "@/components/LatestCommitBar"
+import { ErrorBlock, LoadingBlock, NotFoundBlock } from "@/components/StateViews"
+import { Button } from "@/components/ui/button"
+import { ApiError } from "@/lib/api"
+import { canWrite, readPath, uiPath, type Branch, type CommitSummary, type Tree } from "@/lib/git"
+import type { Repo } from "@/lib/repos"
+import { useFetch } from "@/lib/useFetch"
+
+/** `/:owner/:repo` (default branch) and `/:owner/:repo/tree/:ref/*`. */
+export function RepoPage() {
+  const { owner = "", repo: name = "", ref: refParam, "*": splat = "" } = useParams()
+  const path = splat.replace(/\/+$/, "")
+  const navigate = useNavigate()
+  const { user, expireSession } = useAuth()
+
+  const repoQ = useFetch<Repo>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`)
+  const repo = repoQ.data
+  const live = repo && !repo.empty ? repo : undefined
+  const ref = refParam ?? repo?.default_branch ?? ""
+  const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+
+  const branchesQ = useFetch<{ branches: Branch[] }>(live ? `${base}/branches` : null)
+  const treeQ = useFetch<Tree>(live ? readPath("tree", owner, name, ref, path) : null)
+  const commitsQ = useFetch<{ commits: CommitSummary[] }>(
+    live ? `${base}/commits?ref=${encodeURIComponent(ref)}&page=1` : null,
+  )
+
+  const retryAll = () => {
+    repoQ.reload()
+    branchesQ.reload()
+    treeQ.reload()
+    commitsQ.reload()
+  }
+
+  if (repoQ.error instanceof ApiError && repoQ.error.status === 404) {
+    return (
+      <NotFoundBlock
+        title="Repository not found"
+        hint={`There is no repository ${owner}/${name}. Check the address or go back to the list.`}
+      />
+    )
+  }
+  if (repoQ.error) return <ErrorBlock error={repoQ.error} onRetry={retryAll} />
+  if (!repo) return <LoadingBlock label="Loading repository" />
+
+  const owns = isOwner(user, owner)
+  const writable = canWrite(user, owner, ref)
+
+  const header = (
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h1 className="text-xl font-semibold break-all">
+          {repo.owner}/{repo.name}
+        </h1>
+        {repo.description && <p className="text-sm text-muted-foreground">{repo.description}</p>}
+      </div>
+      {owns && (
+        <DeleteRepoDialog
+          owner={owner}
+          repo={name}
+          onUnauthorized={expireSession}
+          onDeleted={() => navigate("/")}
+        />
+      )}
+    </div>
+  )
+
+  if (repo.empty) {
+    return (
+      <div className="flex flex-col gap-3">
+        {header}
+        <div className="flex flex-col items-start gap-2 rounded-xl bg-card p-3 text-sm shadow-xs ring-1 ring-border">
+          {owns ? (
+            <>
+              <p className="text-muted-foreground">This repository is empty. Add the first file to create the {repo.default_branch} branch.</p>
+              <Button asChild size="sm">
+                <Link to={`/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/new/${encodeURIComponent(repo.default_branch)}`}>
+                  Add file
+                </Link>
+              </Button>
+            </>
+          ) : (
+            <p className="text-muted-foreground">This repository is empty. Nothing has been committed yet.</p>
+          )}
+        </div>
+      </div>
+    )
+  }
+
+  const treeNotFound =
+    treeQ.error instanceof ApiError && (treeQ.error.status === 404 || treeQ.error.status === 400)
+  const firstError = branchesQ.error ?? (treeNotFound ? undefined : treeQ.error)
+  const commit = commitsQ.data?.commits[0]
+
+  let body
+  if (firstError) {
+    body = <ErrorBlock error={firstError} onRetry={retryAll} />
+  } else if (treeNotFound || (treeQ.data && path && treeQ.data.entries.length === 0)) {
+    body = (
+      <div className="flex flex-col gap-1" data-testid="not-found">
+        <h2 className="font-semibold">Path not found</h2>
+        <p className="text-sm text-muted-foreground">
+          {path ? `${path} does not exist` : "This branch does not exist"} at {ref}. Go back to the{" "}
+          <Link to={uiPath("tree", owner, name, repo.default_branch, "")} className="text-primary underline underline-offset-2">
+            default branch
+          </Link>
+          .
+        </p>
+      </div>
+    )
+  } else if (!treeQ.data || !branchesQ.data) {
+    body = <LoadingBlock label="Loading files" />
+  } else {
+    body = (
+      <>
+        {commit && <LatestCommitBar owner={owner} repo={name} commit={commit} historyRef={ref} />}
+        <FileTree owner={owner} repo={name} ref_={ref} path={path} entries={treeQ.data.entries} />
+      </>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      {header}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        {branchesQ.data ? (
+          <BranchSwitcher
+            owner={owner}
+            repo={name}
+            current={ref}
+            branches={branchesQ.data.branches}
+            canCreate={writable}
+            onSelect={(b) => navigate(uiPath("tree", owner, name, b, ""))}
+            onCreated={(b) => {
+              branchesQ.reload()
+              navigate(uiPath("tree", owner, name, b, ""))
+            }}
+            onUnauthorized={expireSession}
+          />
+        ) : (
+          <span />
+        )}
+        {writable && (
+          <Button asChild size="sm">
+            <Link to={`/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/new/${encodeURIComponent(ref)}`}>
+              Add file
+            </Link>
+          </Button>
+        )}
+      </div>
+      <Breadcrumbs owner={owner} repo={name} ref_={ref} path={path} />
+      {body}
+    </div>
+  )
+}

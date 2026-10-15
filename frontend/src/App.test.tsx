@@ -45,6 +45,11 @@ function renderAt(path: string) {
 
 const me = () => json(200, { id: 1, username: "alice" })
 const loggedOut = () => json(401, { error: "authentication required" })
+const emptyRepo = () =>
+  json(200, {
+    id: 1, owner: "alice", name: "hello", description: "", default_branch: "main",
+    empty: true, created_at: "2026-01-02T15:04:05Z",
+  })
 
 it("shows Log in and Register when logged out, and /auth/me 401 is not an error", async () => {
   routes["GET /api/auth/me"] = loggedOut
@@ -83,12 +88,13 @@ it("logs in and goes back to the page the user came from", async () => {
     expect(b).toEqual({ username: "alice", password: "secret123" })
     return me()
   }
+  routes["GET /api/repos/alice/hello"] = emptyRepo
   renderAt("/alice/hello")
   await userEvent.click(await screen.findByRole("link", { name: "Log in" }))
   await userEvent.type(screen.getByLabelText("Username"), "alice")
   await userEvent.type(screen.getByLabelText("Password"), "secret123")
   await userEvent.click(screen.getByRole("button", { name: "Log in" }))
-  expect(await screen.findByRole("heading", { name: "Repository" })).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
   expect(within(screen.getByRole("navigation")).getByText("alice")).toBeInTheDocument()
 })
 
@@ -172,6 +178,7 @@ it("redirects a logged-in user from /login and /register to /", async () => {
 it("logs out, clears the session and goes to /", async () => {
   routes["GET /api/auth/me"] = me
   routes["POST /api/auth/logout"] = () => json(204)
+  routes["GET /api/repos/alice/hello"] = emptyRepo
   renderAt("/alice/hello")
   await userEvent.click(await screen.findByRole("button", { name: "Log out" }))
   expect(await screen.findByRole("link", { name: "Log in" })).toBeInTheDocument()
@@ -181,17 +188,17 @@ it("logs out, clears the session and goes to /", async () => {
 it("stays logged in and shows an error when logout fails", async () => {
   routes["GET /api/auth/me"] = me
   routes["POST /api/auth/logout"] = () => json(500, { error: "internal error" })
+  routes["GET /api/repos/alice/hello"] = emptyRepo
   renderAt("/alice/hello")
   await userEvent.click(await screen.findByRole("button", { name: "Log out" }))
   expect(await screen.findByText(/could not log out/i)).toBeInTheDocument()
   expect(within(screen.getByRole("navigation")).getByText("alice")).toBeInTheDocument()
-  expect(screen.getByRole("heading", { name: "Repository" })).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
 })
 
 it("renders placeholders with route params for every route", async () => {
   routes["GET /api/auth/me"] = loggedOut
   const cases: [string, string, string][] = [
-    ["/alice/hello/blob/main/src/a.go", "File viewer", "src/a.go"],
     ["/alice/hello/edit/main/src/a.go", "Edit file", "src/a.go"],
     ["/alice/hello/new/main", "New file", "main"],
     ["/alice/hello/commits/main", "History", "main"],
