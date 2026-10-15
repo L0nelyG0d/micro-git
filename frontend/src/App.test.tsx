@@ -1,9 +1,213 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { MemoryRouter } from "react-router-dom"
+import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "./App"
 
-describe("App", () => {
-  it("renders the heading", () => {
-    render(<App />)
-    expect(screen.getByRole("heading", { level: 1, name: "micro git" })).toBeInTheDocument()
+type Handler = (body: unknown) => { status: number; body?: unknown } | Error
+let routes: Record<string, Handler>
+const calls: string[] = []
+
+function json(status: number, body?: unknown) {
+  return { status, body }
+}
+
+beforeEach(() => {
+  calls.length = 0
+  routes = {}
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string, init?: RequestInit) => {
+      const key = `${init?.method ?? "GET"} ${url}`
+      calls.push(key)
+      expect(init?.credentials).toBe("include")
+      const h = routes[key]
+      if (!h) throw new Error(`unexpected fetch ${key}`)
+      const r = h(init?.body ? JSON.parse(init.body as string) : undefined)
+      if (r instanceof Error) throw r
+      return {
+        status: r.status,
+        ok: r.status >= 200 && r.status < 300,
+        json: async () => r.body,
+      } as Response
+    }),
+  )
+})
+afterEach(() => vi.unstubAllGlobals())
+
+function renderAt(path: string) {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  )
+}
+
+const me = () => json(200, { id: 1, username: "alice" })
+const loggedOut = () => json(401, { error: "authentication required" })
+
+it("shows Log in and Register when logged out, and /auth/me 401 is not an error", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  renderAt("/")
+  expect(await screen.findByRole("link", { name: "Log in" })).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "Register" })).toBeInTheDocument()
+  expect(screen.queryByText(/session unavailable/i)).not.toBeInTheDocument()
+  expect(localStorage.length + sessionStorage.length).toBe(0)
+})
+
+it("shows a loading state, then the username and Log out when logged in", async () => {
+  routes["GET /api/auth/me"] = me
+  renderAt("/")
+  expect(screen.getByRole("status", { name: "Loading session" })).toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument()
+  expect(await screen.findByText("alice")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument()
+})
+
+it("shows a non-blocking indication on a 500 from /auth/me", async () => {
+  routes["GET /api/auth/me"] = () => json(500, { error: "internal error" })
+  renderAt("/")
+  expect(await screen.findByText(/session unavailable/i)).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "Repository list" })).toBeInTheDocument()
+})
+
+it("shows the indication on a network error", async () => {
+  routes["GET /api/auth/me"] = () => new TypeError("Failed to fetch")
+  renderAt("/")
+  expect(await screen.findByText(/session unavailable/i)).toBeInTheDocument()
+})
+
+it("logs in and goes back to the page the user came from", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["POST /api/auth/login"] = (b) => {
+    expect(b).toEqual({ username: "alice", password: "secret123" })
+    return me()
+  }
+  renderAt("/alice/hello")
+  await userEvent.click(await screen.findByRole("link", { name: "Log in" }))
+  await userEvent.type(screen.getByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "secret123")
+  await userEvent.click(screen.getByRole("button", { name: "Log in" }))
+  expect(await screen.findByRole("heading", { name: "Repository" })).toBeInTheDocument()
+  expect(within(screen.getByRole("navigation")).getByText("alice")).toBeInTheDocument()
+})
+
+it("shows the login error inline, clears the password and re-enables submit", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["POST /api/auth/login"] = () => json(401, { error: "invalid username or password" })
+  renderAt("/login")
+  await screen.findByRole("link", { name: "Register" })
+  await userEvent.type(screen.getByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "wrongpass")
+  await userEvent.click(screen.getByRole("button", { name: "Log in" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent("invalid username or password")
+  expect(screen.getByLabelText("Password")).toHaveValue("")
+  expect(screen.getByRole("button", { name: "Log in" })).toBeEnabled()
+})
+
+it("disables submit while the request is in flight", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  routes["POST /api/auth/login"] = () => me()
+  const inner = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (u, i) => {
+    if (i?.method === "POST") await gate
+    return inner(u, i)
   })
+  renderAt("/login")
+  await screen.findByRole("link", { name: "Register" })
+  await userEvent.type(screen.getByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "secret123")
+  await userEvent.click(screen.getByRole("button", { name: "Log in" }))
+  expect(screen.getByRole("button", { name: "Log in" })).toBeDisabled()
+  release()
+  await screen.findByRole("heading", { name: "Repository list" })
+})
+
+it("registers then logs in, in that order", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["POST /api/auth/register"] = () => json(201, { id: 1, username: "alice" })
+  routes["POST /api/auth/login"] = () => me()
+  renderAt("/register")
+  await screen.findByRole("link", { name: "Log in" })
+  await userEvent.type(screen.getByLabelText("Username"), "Alice")
+  await userEvent.type(screen.getByLabelText("Password"), "secret123")
+  await userEvent.click(screen.getByRole("button", { name: "Register" }))
+  expect(await screen.findByText("alice")).toBeInTheDocument()
+  expect(calls.slice(1)).toEqual(["POST /api/auth/register", "POST /api/auth/login"])
+  expect(screen.getByRole("heading", { name: "Repository list" })).toBeInTheDocument()
+})
+
+it("shows a 409 on register inline", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["POST /api/auth/register"] = () => json(409, { error: "username already taken" })
+  renderAt("/register")
+  await screen.findByRole("link", { name: "Log in" })
+  await userEvent.type(screen.getByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "secret123")
+  await userEvent.click(screen.getByRole("button", { name: "Register" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent("username already taken")
+})
+
+it("sends the user to /login with a message if login after register fails", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["POST /api/auth/register"] = () => json(201, { id: 1, username: "alice" })
+  routes["POST /api/auth/login"] = () => json(500, { error: "internal error" })
+  renderAt("/register")
+  await screen.findByRole("link", { name: "Log in" })
+  await userEvent.type(screen.getByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "secret123")
+  await userEvent.click(screen.getByRole("button", { name: "Register" }))
+  expect(await screen.findByRole("heading", { name: "Log in" })).toBeInTheDocument()
+  expect(screen.getByRole("status", { name: "" })).toHaveTextContent(/account was created/i)
+})
+
+it("redirects a logged-in user from /login and /register to /", async () => {
+  routes["GET /api/auth/me"] = me
+  renderAt("/login")
+  expect(await screen.findByRole("heading", { name: "Repository list" })).toBeInTheDocument()
+})
+
+it("logs out, clears the session and goes to /", async () => {
+  routes["GET /api/auth/me"] = me
+  routes["POST /api/auth/logout"] = () => json(204)
+  renderAt("/alice/hello")
+  await userEvent.click(await screen.findByRole("button", { name: "Log out" }))
+  expect(await screen.findByRole("link", { name: "Log in" })).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "Repository list" })).toBeInTheDocument()
+})
+
+it("stays logged in and shows an error when logout fails", async () => {
+  routes["GET /api/auth/me"] = me
+  routes["POST /api/auth/logout"] = () => json(500, { error: "internal error" })
+  renderAt("/alice/hello")
+  await userEvent.click(await screen.findByRole("button", { name: "Log out" }))
+  expect(await screen.findByText(/could not log out/i)).toBeInTheDocument()
+  expect(within(screen.getByRole("navigation")).getByText("alice")).toBeInTheDocument()
+  expect(screen.getByRole("heading", { name: "Repository" })).toBeInTheDocument()
+})
+
+it("renders placeholders with route params for every route", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  const cases: [string, string, string][] = [
+    ["/alice/hello/blob/main/src/a.go", "File viewer", "src/a.go"],
+    ["/alice/hello/edit/main/src/a.go", "Edit file", "src/a.go"],
+    ["/alice/hello/new/main", "New file", "main"],
+    ["/alice/hello/commits/main", "History", "main"],
+    ["/alice/hello/commit/abc123", "Commit", "abc123"],
+  ]
+  for (const [path, name, param] of cases) {
+    const { unmount } = renderAt(path)
+    expect(await screen.findByRole("heading", { name })).toBeInTheDocument()
+    expect(screen.getByText(param)).toBeInTheDocument()
+    unmount()
+  }
+})
+
+it("shows page not found with a link home for unknown URLs", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  renderAt("/nope/nope/nope/nope/nope/nope")
+  expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "Go home" })).toHaveAttribute("href", "/")
 })
