@@ -3,12 +3,12 @@ import { Toaster } from "sonner"
 import { AuthProvider } from "@/auth/AuthContext"
 import { Nav } from "@/components/Nav"
 import { BlobPage } from "@/pages/BlobPage"
+import { EditorPage } from "@/pages/EditorPage"
 import { CommitPage } from "@/pages/CommitPage"
 import { HistoryPage } from "@/pages/HistoryPage"
 import { Home } from "@/pages/Home"
 import { Login } from "@/pages/Login"
 import { NotFound } from "@/pages/NotFound"
-import { Placeholder } from "@/pages/Placeholder"
 import { Register } from "@/pages/Register"
 import { RepoPage } from "@/pages/RepoPage"
 
@@ -25,8 +25,8 @@ export default function App() {
           <Route path="/:owner/:repo" element={<RepoPage />} />
           <Route path="/:owner/:repo/tree/:ref/*" element={<RepoPage />} />
           <Route path="/:owner/:repo/blob/:ref/*" element={<BlobPage />} />
-          <Route path="/:owner/:repo/edit/:ref/*" element={<Placeholder name="Edit file" />} />
-          <Route path="/:owner/:repo/new/:ref" element={<Placeholder name="New file" />} />
+          <Route path="/:owner/:repo/edit/:ref/*" element={<EditorPage mode="edit" />} />
+          <Route path="/:owner/:repo/new/:ref" element={<EditorPage mode="new" />} />
           <Route path="/:owner/:repo/commits/:ref" element={<HistoryPage />} />
           <Route path="/:owner/:repo/commit/:oid" element={<CommitPage />} />
           <Route path="*" element={<NotFound />} />

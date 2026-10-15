@@ -196,20 +196,6 @@ it("stays logged in and shows an error when logout fails", async () => {
   expect(screen.getByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
 })
 
-it("renders placeholders with route params for every route", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  const cases: [string, string, string][] = [
-    ["/alice/hello/edit/main/src/a.go", "Edit file", "src/a.go"],
-    ["/alice/hello/new/main", "New file", "main"],
-  ]
-  for (const [path, name, param] of cases) {
-    const { unmount } = renderAt(path)
-    expect(await screen.findByRole("heading", { name })).toBeInTheDocument()
-    expect(screen.getByText(param)).toBeInTheDocument()
-    unmount()
-  }
-})
-
 it("shows page not found with a link home for unknown URLs", async () => {
   routes["GET /api/auth/me"] = loggedOut
   renderAt("/nope/nope/nope/nope/nope/nope")
