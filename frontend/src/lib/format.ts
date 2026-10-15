@@ -5,3 +5,21 @@ export function formatDate(iso: string): string {
   const p = (n: number) => String(n).padStart(2, "0")
   return `${p(d.getDate())}.${p(d.getMonth() + 1)}.${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`
 }
+
+/** Human-readable byte size: "12 bytes", "1.5 KB". */
+export function formatSize(bytes: number): string {
+  if (bytes === 1) return "1 byte"
+  if (bytes < 1024) return `${bytes} bytes`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+/** First line of a commit message. */
+export function firstLine(message: string): string {
+  return message.split("\n", 1)[0]
+}
+
+/** Oids show as 7 characters. */
+export function shortOid(oid: string): string {
+  return oid.slice(0, 7)
+}
