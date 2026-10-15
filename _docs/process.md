@@ -29,3 +29,4 @@ The main session is the orchestrator. It launches the roles below as subagents a
 - The engineer does not close the issue. QA does not fix code, it only outputs PASS or FAIL
 - Close an issue only after QA outputs PASS with the tests green: `go test ./...` and `go test -race ./...` for backend work, `npm test` for frontend work
 - If an issue is unclear or conflicts with `_docs/plan.md`, ask the user before building
+- If a decision needs the user (architecture, data model, stack, endpoint set) and they are away, do not wait: append the question to `_docs/questions.md` with the default you used, take the simplest reversible default, comment on the issue, and keep going. The user reviews that file on return
