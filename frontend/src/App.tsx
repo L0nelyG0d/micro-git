@@ -2,6 +2,7 @@ import { Route, Routes } from "react-router-dom"
 import { Toaster } from "sonner"
 import { AuthProvider } from "@/auth/AuthContext"
 import { Nav } from "@/components/Nav"
+import { Home } from "@/pages/Home"
 import { Login } from "@/pages/Login"
 import { NotFound } from "@/pages/NotFound"
 import { Placeholder } from "@/pages/Placeholder"
@@ -16,7 +17,7 @@ export default function App() {
         <Routes>
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
-          <Route path="/" element={<Placeholder name="Repository list" />} />
+          <Route path="/" element={<Home />} />
           <Route path="/:owner/:repo" element={<Placeholder name="Repository" />} />
           <Route path="/:owner/:repo/blob/:ref/*" element={<Placeholder name="File viewer" />} />
           <Route path="/:owner/:repo/edit/:ref/*" element={<Placeholder name="Edit file" />} />
