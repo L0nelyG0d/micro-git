@@ -13,6 +13,8 @@ type AuthState = {
   sessionError: boolean
   login: (username: string, password: string) => Promise<User>
   logout: () => Promise<void>
+  /** Marks the session as gone locally (after a 401 from any endpoint). */
+  expireSession: () => void
 }
 
 const AuthContext = createContext<AuthState | null>(null)
@@ -48,9 +50,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null)
   }, [])
 
+  const expireSession = useCallback(() => setUser(null), [])
+
   const value = useMemo(
-    () => ({ user, loading, sessionError, login, logout }),
-    [user, loading, sessionError, login, logout],
+    () => ({ user, loading, sessionError, login, logout, expireSession }),
+    [user, loading, sessionError, login, logout, expireSession],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
