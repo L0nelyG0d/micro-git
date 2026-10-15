@@ -11,8 +11,10 @@ import (
 // Server holds the dependencies handlers share. Later tasks add fields here
 // (JWT secret, cookie settings) and register routes in routes().
 type Server struct {
-	DB  *pgxpool.Pool
-	Now func() time.Time // injected clock
+	DB           *pgxpool.Pool
+	Now          func() time.Time // injected clock
+	JWTSecret    []byte           // HMAC key for session tokens
+	CookieSecure bool             // Secure attribute on the session cookie
 }
 
 // NewServer builds a Server with the real clock.
@@ -38,6 +40,9 @@ func (s *Server) Handler() http.Handler {
 func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", health)
 	mux.HandleFunc("/auth/register", allow(http.MethodPost, s.register))
+	mux.HandleFunc("/auth/login", allow(http.MethodPost, s.login))
+	mux.HandleFunc("/auth/logout", allow(http.MethodPost, s.logout))
+	mux.HandleFunc("/auth/me", allow(http.MethodGet, s.requireAuth(s.me)))
 	mux.HandleFunc("/", notFound)
 }
 

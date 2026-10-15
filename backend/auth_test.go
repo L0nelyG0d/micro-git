@@ -31,7 +31,9 @@ func testServer(t *testing.T) *Server {
 		t.Fatalf("connect: %v", err)
 	}
 	t.Cleanup(pool.Close)
-	return NewServer(pool)
+	srv := NewServer(pool)
+	srv.JWTSecret = []byte("test-secret")
+	return srv
 }
 
 // cleanupUser deletes the user row (any case) when the test ends.

@@ -18,6 +18,10 @@ func main() {
 	}
 	defer pool.Close()
 
+	srv := NewServer(pool)
+	srv.JWTSecret = []byte(cfg.JWTSecret)
+	srv.CookieSecure = cfg.CookieSecure
+
 	log.Printf("listening on %s", cfg.Addr)
-	log.Fatal(http.ListenAndServe(cfg.Addr, NewServer(pool).Handler()))
+	log.Fatal(http.ListenAndServe(cfg.Addr, srv.Handler()))
 }

@@ -10,6 +10,9 @@ import (
 type Config struct {
 	Addr        string // listen address, ":" + PORT
 	DatabaseURL string
+	JWTSecret   string
+	// CookieSecure adds the Secure attribute to the session cookie (COOKIE_SECURE=true).
+	CookieSecure bool
 }
 
 // LoadConfig reads settings through getenv (os.Getenv in production) so tests
@@ -26,5 +29,14 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if dbURL == "" {
 		return Config{}, errors.New("DATABASE_URL is not set")
 	}
-	return Config{Addr: ":" + port, DatabaseURL: dbURL}, nil
+	secret := getenv("JWT_SECRET")
+	if secret == "" {
+		return Config{}, errors.New("JWT_SECRET is not set")
+	}
+	return Config{
+		Addr:         ":" + port,
+		DatabaseURL:  dbURL,
+		JWTSecret:    secret,
+		CookieSecure: getenv("COOKIE_SECURE") == "true",
+	}, nil
 }
