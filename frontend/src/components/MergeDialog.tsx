@@ -49,14 +49,16 @@ function BranchSelect({
     <div className="flex flex-col gap-1.5">
       <Label htmlFor={id}>{label}</Label>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger id={id} className="w-full">
-          <SelectValue />
+        <SelectTrigger id={id} className="w-full min-w-0" title={value}>
+          <SelectValue className="min-w-0" />
         </SelectTrigger>
         <SelectContent>
           {branches.map((b) => (
             <SelectItem key={b.name} value={b.name}>
-              {b.name}
-              {b.is_default ? " (default)" : ""}
+              <span className="min-w-0 truncate">
+                {b.name}
+                {b.is_default ? " (default)" : ""}
+              </span>
             </SelectItem>
           ))}
         </SelectContent>

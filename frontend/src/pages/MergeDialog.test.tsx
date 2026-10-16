@@ -200,3 +200,32 @@ it("401 expires the session with a toast and hides owner actions", async () => {
   expect(screen.queryByRole("button", { name: "Delete repository" })).not.toBeInTheDocument()
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
 })
+
+it("long branch names are clipped inside the dialog and keep the full name as a title", async () => {
+  const long = "feature/" + "x".repeat(24) // 32 characters
+  setup("alice", {
+    branches: [
+      { name: long, oid: OID2, is_default: false },
+      { name: "main", oid: OID, is_default: true },
+    ],
+  })
+  renderAt("/alice/hello")
+  const dlg = await openDialog()
+  // jsdom has no layout; the 320px result is checked in a real browser. Here:
+  // the classes that stop the select from widening the dialog grid.
+  expect(dlg.className).toContain("grid-cols-[minmax(0,1fr)]")
+  const from = within(dlg).getByRole("combobox", { name: "Merge from" })
+  expect(from).toHaveAttribute("title", long)
+  expect(from.className).toContain("min-w-0")
+  expect(within(from).getByText(long).className).toContain("truncate")
+})
+
+it("dialog title and description wrap long unbroken strings", async () => {
+  setup()
+  renderAt("/alice/hello")
+  const dlg = await openDialog()
+  for (const el of [within(dlg).getByText("Merge branches"), within(dlg).getByText(/^Fast-forward only/)]) {
+    expect(el.className).toContain("min-w-0")
+    expect(el.className).toContain("[overflow-wrap:anywhere]")
+  }
+})
