@@ -5,7 +5,8 @@ import { Breadcrumbs } from "@/components/Breadcrumbs"
 import { DeleteRepoDialog } from "@/components/DeleteRepoDialog"
 import { FileTree } from "@/components/FileTree"
 import { LatestCommitBar } from "@/components/LatestCommitBar"
-import { ErrorBlock, LoadingBlock, NotFoundBlock } from "@/components/StateViews"
+import { ReadmeCard } from "@/components/ReadmeCard"
+import { ErrorBlock,LoadingBlock, NotFoundBlock } from "@/components/StateViews"
 import { Button } from "@/components/ui/button"
 import { ApiError } from "@/lib/api"
 import { canWrite, readPath, uiPath, type Branch, type CommitSummary, type Tree } from "@/lib/git"
@@ -121,6 +122,9 @@ export function RepoPage() {
       <>
         {commit && <LatestCommitBar owner={owner} repo={name} commit={commit} historyRef={ref} />}
         <FileTree owner={owner} repo={name} ref_={ref} path={path} entries={treeQ.data.entries} />
+        {!path && treeQ.data.entries.some((e) => e.type === "blob" && e.name === "README.md") && (
+          <ReadmeCard owner={owner} repo={name} ref_={ref} />
+        )}
       </>
     )
   }
