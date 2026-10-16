@@ -64,7 +64,7 @@ export function RepoPage() {
         {repo.description && <p className="text-sm text-muted-foreground">{repo.description}</p>}
       </div>
       {owns && (
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
           <RenameRepoDialog
             owner={owner}
             repo={name}

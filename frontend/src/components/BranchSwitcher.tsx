@@ -50,9 +50,9 @@ export function BranchSwitcher(props: Props) {
   const { owner, repo, current, branches, canCreate, onSelect } = props
   const known = branches.some((b) => b.name === current)
   return (
-    <div className="flex items-center gap-2">
+    <div className="flex flex-wrap items-center gap-2">
       <Select value={current} onValueChange={onSelect}>
-        <SelectTrigger aria-label="Branch" className="w-48">
+        <SelectTrigger aria-label="Branch" className="w-full sm:w-48">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>

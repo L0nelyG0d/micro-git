@@ -1,4 +1,5 @@
-import { render, screen, within } from "@testing-library/react"
+import React from "react"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
@@ -201,4 +202,55 @@ it("shows page not found with a link home for unknown URLs", async () => {
   renderAt("/nope/nope/nope/nope/nope/nope")
   expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument()
   expect(await screen.findByRole("link", { name: "Go home" })).toHaveAttribute("href", "/")
+})
+
+it.each([
+  ["/", "micro git"],
+  ["/alice/hello", "alice/hello · micro git"],
+  ["/alice/hello/commits/main", "History · alice/hello · micro git"],
+  ["/alice/hello/commit/1234567abcdef", "Commit 1234567 · alice/hello · micro git"],
+  ["/alice/hello/compare", "Compare · alice/hello · micro git"],
+  ["/alice/hello/blob/main/src/a.txt", "src/a.txt · alice/hello · micro git"],
+  ["/alice/hello/new/main", "New file · alice/hello · micro git"],
+  ["/login", "Log in · micro git"],
+  ["/register", "Register · micro git"],
+  ["/nope/nope/nope/nope/nope/nope", "Page not found · micro git"],
+])("sets the document title for %s", async (path, title) => {
+  routes["GET /api/auth/me"] = loggedOut
+  renderAt(path)
+  await waitFor(() => expect(document.title).toBe(title))
+})
+
+it("has a skip link as the first tab stop that focuses main", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  renderAt("/")
+  await screen.findByRole("link", { name: "Register" })
+  await userEvent.tab()
+  expect(screen.getByRole("link", { name: "Skip to main content" })).toHaveFocus()
+  await userEvent.keyboard("{Enter}")
+  expect(screen.getByRole("main")).toHaveFocus()
+})
+
+it("under StrictMode does not focus main on first load and the skip link is the first tab stop", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  render(
+    <React.StrictMode>
+      <MemoryRouter initialEntries={["/"]}>
+        <App />
+      </MemoryRouter>
+    </React.StrictMode>,
+  )
+  await screen.findByRole("link", { name: "Register" })
+  expect(screen.getByRole("main")).not.toHaveFocus()
+  await userEvent.tab()
+  expect(screen.getByRole("link", { name: "Skip to main content" })).toHaveFocus()
+})
+
+it("moves focus to main after a client-side navigation but not on first load", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  renderAt("/")
+  await screen.findByRole("link", { name: "Register" })
+  expect(screen.getByRole("main")).not.toHaveFocus()
+  await userEvent.click(screen.getByRole("link", { name: "Register" }))
+  await waitFor(() => expect(screen.getByRole("main")).toHaveFocus())
 })
