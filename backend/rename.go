@@ -16,8 +16,8 @@ func (s *Server) renameRepo(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req renameRepoRequest
-	if !decodeJSONQuiet(r, &req) || req.Name == nil {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+	if !decodeJSONQuiet(w, r, &req) || req.Name == nil {
+		badBody(w, r)
 		return
 	}
 	name := *req.Name

@@ -43,7 +43,7 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req createBranchRequest
-	jsonOK := decodeJSONQuiet(r, &req)
+	jsonOK := decodeJSONQuiet(w, r, &req)
 	rs := NewRepoStore(s.DB, repo.ID)
 	// A missing source branch is a 404, which comes before the 403.
 	var tip string
@@ -64,7 +64,7 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !jsonOK {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		badBody(w, r)
 		return
 	}
 	if !validBranchName(req.Name) {

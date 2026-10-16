@@ -63,7 +63,7 @@ func (s *Server) mergeBranches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req mergeRequest
-	jsonOK := decodeJSONQuiet(r, &req)
+	jsonOK := decodeJSONQuiet(w, r, &req)
 	rs := NewRepoStore(s.DB, repo.ID)
 	ctx := r.Context()
 	var baseTip, headTip string
@@ -89,7 +89,7 @@ func (s *Server) mergeBranches(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !jsonOK {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		badBody(w, r)
 		return
 	}
 	if !validBranchName(req.Base) || !validBranchName(req.Head) {

@@ -14,6 +14,11 @@ const ContextLines = 3
 // to MaxLines*MaxLines uint16 cells.
 const MaxLines = 5000
 
+// MaxTotalCells is the budget of LCS table cells for one Trees call, about two
+// worst-case MaxLines x MaxLines files. A file whose trimmed size exceeds
+// what is left is reported as truncated, like an over-long file.
+const MaxTotalCells = 32_000_000
+
 // Line types.
 const (
 	Context = "context"
@@ -59,11 +64,38 @@ type Result struct {
 
 // Diff compares old and new line by line.
 func Diff(old, new string) Result {
+	return diffBudget(old, new, nil)
+}
+
+// diffBudget is Diff that charges the LCS table size (cells left after
+// trimming the common prefix and suffix) to *budget when it is not nil. When
+// the table does not fit in what is left, the result is truncated and nothing
+// is charged.
+func diffBudget(old, new string, budget *int) Result {
 	a, b := SplitLines(old), SplitLines(new)
 	if len(a) > MaxLines || len(b) > MaxLines {
 		return Result{Hunks: []Hunk{}, Truncated: true}
 	}
+	pre, suf := trim(a, b)
+	if budget != nil {
+		cells := (len(a) - pre - suf) * (len(b) - pre - suf)
+		if cells > *budget {
+			return Result{Hunks: []Hunk{}, Truncated: true}
+		}
+		*budget -= cells
+	}
 	return diffLines(a, b)
+}
+
+// trim returns the lengths of the common prefix and suffix of a and b.
+func trim(a, b []string) (pre, suf int) {
+	for pre < len(a) && pre < len(b) && a[pre] == b[pre] {
+		pre++
+	}
+	for suf < len(a)-pre && suf < len(b)-pre && a[len(a)-1-suf] == b[len(b)-1-suf] {
+		suf++
+	}
+	return pre, suf
 }
 
 type op struct {
@@ -88,14 +120,7 @@ func diffLines(a, b []string) Result {
 // script returns the full edit script (every line of both sides) from an LCS.
 func script(a, b []string) []op {
 	// Trim common prefix and suffix to keep the table small.
-	pre := 0
-	for pre < len(a) && pre < len(b) && a[pre] == b[pre] {
-		pre++
-	}
-	suf := 0
-	for suf < len(a)-pre && suf < len(b)-pre && a[len(a)-1-suf] == b[len(b)-1-suf] {
-		suf++
-	}
+	pre, suf := trim(a, b)
 	ma, mb := a[pre:len(a)-suf], b[pre:len(b)-suf]
 
 	ops := make([]op, 0, len(a)+len(b))
