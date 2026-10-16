@@ -38,17 +38,17 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 	store := NewRepoStore(s.DB, repo.ID).Objects(r.Context())
 	bc, err := loadCommit(store, baseOID)
 	if err != nil {
-		internalError(w, err)
+		s.readError(w, r, repo, err)
 		return
 	}
 	hc, err := loadCommit(store, headOID)
 	if err != nil {
-		internalError(w, err)
+		s.readError(w, r, repo, err)
 		return
 	}
 	files, err := linediff.Trees(store, bc.Tree, hc.Tree)
 	if err != nil {
-		internalError(w, err)
+		s.readError(w, r, repo, err)
 		return
 	}
 	if files == nil {

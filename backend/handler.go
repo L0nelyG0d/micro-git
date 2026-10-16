@@ -17,6 +17,16 @@ type Server struct {
 	Now          func() time.Time // injected clock
 	JWTSecret    []byte           // HMAC key for session tokens
 	CookieSecure bool             // Secure attribute on the session cookie
+
+	// hook, if set (tests only), is called at named points of the read
+	// handlers so a test can act between two steps without sleeping.
+	hook func(point string)
+}
+
+func (s *Server) testHook(point string) {
+	if s.hook != nil {
+		s.hook(point)
+	}
 }
 
 // NewServer builds a Server with the real clock.

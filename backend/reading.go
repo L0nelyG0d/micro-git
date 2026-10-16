@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"sort"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/L0nelyG0d/micro-git/backend/gitobj"
 	"github.com/L0nelyG0d/micro-git/backend/treebuild"
+	"github.com/jackc/pgx/v5"
 )
 
 type treeEntryJSON struct {
@@ -41,13 +43,18 @@ var errPathNotFound = errors.New("path not found")
 func (s *Server) resolveRef(w http.ResponseWriter, r *http.Request, repo Repo, ref string) (string, bool) {
 	oid, err := NewRepoStore(s.DB, repo.ID).ResolveCommit(r.Context(), ref)
 	if errors.Is(err, ErrRefNotFound) {
+		if s.repoGone(r, repo) { // deleted meanwhile: its refs went with it
+			writeError(w, http.StatusNotFound, "repository not found")
+			return "", false
+		}
 		writeError(w, http.StatusNotFound, "ref not found")
 		return "", false
 	}
 	if err != nil {
-		internalError(w, err)
+		s.readError(w, r, repo, err)
 		return "", false
 	}
+	s.testHook("ref-resolved")
 	return oid, true
 }
 
@@ -130,7 +137,7 @@ func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, 
 		return repo, "", "", nil, "", false, false
 	}
 	if err != nil {
-		internalError(w, err)
+		s.readError(w, r, repo, err)
 		return repo, "", "", nil, "", false, false
 	}
 	return repo, commit, path, store, oid, isDir, true
@@ -138,7 +145,7 @@ func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, 
 
 // getTree handles GET /repos/{owner}/{repo}/tree/{ref}/{path...}.
 func (s *Server) getTree(w http.ResponseWriter, r *http.Request) {
-	_, commit, path, store, oid, isDir, ok := s.readTarget(w, r)
+	repo, commit, path, store, oid, isDir, ok := s.readTarget(w, r)
 	if !ok {
 		return
 	}
@@ -148,7 +155,7 @@ func (s *Server) getTree(w http.ResponseWriter, r *http.Request) {
 	}
 	entries, err := readTree(store, oid)
 	if err != nil {
-		internalError(w, err)
+		s.readError(w, r, repo, err)
 		return
 	}
 	out := make([]treeEntryJSON, len(entries))
@@ -170,7 +177,7 @@ func (s *Server) getTree(w http.ResponseWriter, r *http.Request) {
 
 // getBlob handles GET /repos/{owner}/{repo}/blob/{ref}/{path...}.
 func (s *Server) getBlob(w http.ResponseWriter, r *http.Request) {
-	_, commit, path, store, oid, isDir, ok := s.readTarget(w, r)
+	repo, commit, path, store, oid, isDir, ok := s.readTarget(w, r)
 	if !ok {
 		return
 	}
@@ -180,10 +187,31 @@ func (s *Server) getBlob(w http.ResponseWriter, r *http.Request) {
 	}
 	_, body, err := store.GetObject(oid)
 	if err != nil {
-		internalError(w, err)
+		s.readError(w, r, repo, err)
 		return
 	}
 	name := path[strings.LastIndexByte(path, '/')+1:]
 	writeJSON(w, http.StatusOK, blobResponse{Ref: r.PathValue("ref"), Commit: commit, Path: path,
 		Name: name, OID: oid, Size: len(body), Content: string(body)})
+}
+
+// repoGone reports whether the repository no longer exists. It ignores a
+// canceled request context so the check still answers.
+func (s *Server) repoGone(r *http.Request, repo Repo) bool {
+	var one int
+	err := s.DB.QueryRow(context.WithoutCancel(r.Context()),
+		`SELECT 1 FROM repos WHERE id = $1`, repo.ID).Scan(&one)
+	return errors.Is(err, pgx.ErrNoRows)
+}
+
+// readError is internalError for the read endpoints. A missing object or a
+// canceled query is a 404 "repository not found" when the repository was
+// deleted while the request ran; for an existing repository a missing object
+// is real corruption and stays a 500. Client aborts are not logged as errors.
+func (s *Server) readError(w http.ResponseWriter, r *http.Request, repo Repo, err error) {
+	if (errors.Is(err, treebuild.ErrNotFound) || errors.Is(err, context.Canceled)) && s.repoGone(r, repo) {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return
+	}
+	internalError(w, err)
 }

@@ -119,7 +119,7 @@ func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 	for i, row := range rows {
 		c, err := gitobj.ParseCommit(row.Data)
 		if err != nil {
-			internalError(w, err)
+			s.readError(w, r, repo, err)
 			return
 		}
 		switch {
@@ -147,25 +147,29 @@ func (s *Server) getCommit(w http.ResponseWriter, r *http.Request) {
 	store := NewRepoStore(s.DB, repo.ID).Objects(r.Context())
 	c, err := loadCommit(store, oid)
 	if errors.Is(err, treebuild.ErrNotFound) {
+		if s.repoGone(r, repo) {
+			writeError(w, http.StatusNotFound, "repository not found")
+			return
+		}
 		writeError(w, http.StatusNotFound, "commit not found")
 		return
 	}
 	if err != nil {
-		internalError(w, err)
+		s.readError(w, r, repo, err)
 		return
 	}
 	oldTree := ""
 	if len(c.Parents) > 0 {
 		p, err := loadCommit(store, c.Parents[0])
 		if err != nil {
-			internalError(w, err)
+			s.readError(w, r, repo, err)
 			return
 		}
 		oldTree = p.Tree
 	}
 	files, err := linediff.Trees(store, oldTree, c.Tree)
 	if err != nil {
-		internalError(w, err)
+		s.readError(w, r, repo, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, commitDetailResponse{commitSummary: summarize(oid, c), Tree: c.Tree, Files: files})
