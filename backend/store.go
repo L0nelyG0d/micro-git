@@ -227,7 +227,7 @@ func (rs *RepoStore) WalkFirstParents(ctx context.Context, tip string, limit int
 	rows, err := rs.db.Query(ctx, `
 WITH RECURSIVE walk(oid, data, parent, depth) AS (
   SELECT o.oid, o.data,
-         substring(encode(substring(o.data from 1 for 100), 'escape') from $4), 1
+         substring(encode(substring(o.data from 1 for 100), 'escape') from $4), 1::bigint
     FROM objects o
    WHERE o.repo_id = $1 AND o.oid = $2 AND o.type = 'commit'
   UNION ALL
@@ -235,7 +235,7 @@ WITH RECURSIVE walk(oid, data, parent, depth) AS (
          substring(encode(substring(o.data from 1 for 100), 'escape') from $4), w.depth + 1
     FROM walk w
     JOIN objects o ON o.repo_id = $1 AND o.oid = w.parent AND o.type = 'commit'
-   WHERE w.depth < $3
+   WHERE w.depth < $3::bigint
 )
 SELECT oid, data, COALESCE(parent, '') FROM walk ORDER BY depth`,
 		rs.repoID, tip, limit, parentRE)

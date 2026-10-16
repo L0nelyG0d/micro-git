@@ -587,6 +587,19 @@ func TestCommitLogStatementCount(t *testing.T) {
 	}
 }
 
+func TestCommitLogHugePage(t *testing.T) {
+	f := newHistFixture(t, true)
+	for _, p := range []string{"50000000", "1099511627776", "1099511627777"} {
+		var l histList
+		if code, msg := f.get(t, f.longBase+"/commits", "?page="+p, &l); code != 200 {
+			t.Fatalf("page %s: %d %s", p, code, msg)
+		}
+		if len(l.Commits) != 0 || l.HasMore || l.Commits == nil {
+			t.Errorf("page %s: %+v", p, l)
+		}
+	}
+}
+
 func TestCommitLogHeaderOnly(t *testing.T) {
 	f := newHistFixture(t, false)
 	name, c := newUserCookie(t, f.s)
