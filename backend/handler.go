@@ -35,7 +35,19 @@ func NewHandler() http.Handler {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.routes(mux)
-	return mux
+	return safeHeaders(mux)
+}
+
+// safeHeaders sets the basic safe response headers before any handler runs, so
+// 404 and 405 answers carry them too.
+func safeHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Content-Type-Options", "nosniff")
+		if strings.HasPrefix(r.URL.Path, "/auth/") {
+			w.Header().Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 // routes is the single place endpoints are registered.

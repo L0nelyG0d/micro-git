@@ -6,6 +6,9 @@ import (
 	"strconv"
 )
 
+// minJWTSecretBytes is the shortest HMAC signing key accepted.
+const minJWTSecretBytes = 32
+
 // Config holds process settings read from the environment.
 type Config struct {
 	Addr        string // listen address, ":" + PORT
@@ -32,6 +35,9 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	secret := getenv("JWT_SECRET")
 	if secret == "" {
 		return Config{}, errors.New("JWT_SECRET is not set")
+	}
+	if len(secret) < minJWTSecretBytes {
+		return Config{}, errors.New("JWT_SECRET must be at least 32 bytes")
 	}
 	return Config{
 		Addr:         ":" + port,

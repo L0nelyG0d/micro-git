@@ -42,7 +42,7 @@ Run these steps in order.
    |---|---|---|
    | `DATABASE_URL` | yes | PostgreSQL connection string for the running backend |
    | `TEST_DATABASE_URL` | for DB tests | Connection string of a separate database or branch used by `go test`; the database tests are skipped when it is unset |
-   | `JWT_SECRET` | yes | Key used to sign the session JWT. Use a long random string |
+   | `JWT_SECRET` | yes | Key used to sign the session JWT. At least 32 bytes; use a long random string |
    | `COOKIE_SECURE` | no | `true` adds the `Secure` attribute to the session cookie (needs HTTPS). Anything else, including unset, means off. Keep it off for local HTTP |
    | `PORT` | no | Backend listen port, 1 to 65535. Defaults to `8080` |
 
