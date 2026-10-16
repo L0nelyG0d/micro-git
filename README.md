@@ -172,22 +172,25 @@ Start the backend and frontend (Setup steps 5 and 6) and open
    credentials. Expect: the nav bar shows your username and a Log out button;
    the repository list is shown.
 3. **Create a repo.** On the home page click New repository; a form appears.
-   Enter the name `hello` and click Create repository. Expect: the repo opens
-   as an empty repository (no branches, no files, a prompt to add the first
-   file) and appears in the home page list.
+   Enter the name `hello` and click Create repository. Expect: you stay on the
+   home page, the form closes, a "created" toast appears and `you/hello` is in
+   the list. Click it in the list. Expect: an empty repository (no branches,
+   no files, a prompt to add the first file).
 4. **First commit on the empty repo.** Click Add file, set path `README.md`,
    content `hello`, a commit message such as `first commit`, and click Commit.
    The branch is not a field to type here: the empty repo offers only its
    default branch `main`, and the commit creates it. Expect: the commit page
-   opens (message, author, `README.md` as added). Go back to the repo through
-   the home page list. Expect: branch `main` exists, `README.md` is in the
+   opens (message, author, `README.md` as added). Go back to the repo by
+   clicking it in the home page list. Expect: branch `main` exists, `README.md` is in the
    file list and the latest-commit bar shows your message.
 5. **Edit a file.** Open `README.md`, click Edit, change the content, add a
    message, click Commit. Expect: the commit page opens with the new commit.
-   Back on the repo page (home page list) the file shows the new content and
-   the latest commit message changes.
+   Back on the repo page (click it in the home page list) the file list shows
+   only names; the new content is visible in the rendered README card under
+   the file tree, or by opening `README.md`. The latest commit message changes.
 6. **History and diff.** On the repo page click History for `main`. Expect:
-   two commits, newest first. Open the newest one. Expect: `README.md` is
+   two commits, newest first. Click the 7-character oid of the newest one (the
+   message itself is not a link). Expect: `README.md` is
    marked modified with removed lines in `-` and added lines in `+`, with
    context.
 7. **Create a branch.** With `main` selected in the branch switcher, click
