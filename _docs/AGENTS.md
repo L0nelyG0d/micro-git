@@ -3,6 +3,7 @@
 - `go mod download` - install dependencies
 - `go test ./...` - the whole suite
 - `go test -race ./...` - the whole suite with the race detector
+- Backend tests hit Neon (~200ms per statement): run `go test -p 1 -race -timeout 30m ./...` (the root package takes ~12 min)
 - `go test ./path/to/pkg` - one package
 - `go test -run TestName ./...` - one test by name
 - `npm test` (in `frontend/`) - frontend tests
