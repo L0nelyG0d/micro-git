@@ -142,6 +142,11 @@ export function RepoPage() {
               navigate(uiPath("tree", owner, name, b, ""))
             }}
             onUnauthorized={expireSession}
+            canDelete={owns}
+            onDeleted={(b) => {
+              branchesQ.reload()
+              if (b === ref) navigate(uiPath("tree", owner, name, repo.default_branch, ""))
+            }}
           />
         ) : (
           <span />

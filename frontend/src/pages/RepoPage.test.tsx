@@ -286,6 +286,69 @@ it("delete repo: cancel sends no request; failure shows the error", async () => 
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
 })
 
+it("delete branch: owner only, default branch excluded", async () => {
+  setupRepo("alice")
+  renderAt("/alice/hello")
+  await userEvent.click(await screen.findByRole("button", { name: "Delete branch" }))
+  const dlg = screen.getByRole("dialog")
+  expect(within(dlg).getByRole("button", { name: "Delete dev" })).toBeInTheDocument()
+  expect(within(dlg).queryByRole("button", { name: "Delete main" })).not.toBeInTheDocument()
+})
+
+it.each([["bob"], [null]] as const)("delete branch: hidden for non-owner (%s)", async (u) => {
+  setupRepo(u)
+  renderAt("/alice/hello")
+  await screen.findByRole("table", { name: "Files" })
+  expect(screen.queryByRole("button", { name: "Delete branch" })).not.toBeInTheDocument()
+})
+
+it("delete branch: confirm calls the API and refreshes the list", async () => {
+  setupRepo("alice")
+  routes["DELETE /api/repos/alice/hello/branches/dev"] = () => json(204)
+  renderAt("/alice/hello")
+  await userEvent.click(await screen.findByRole("button", { name: "Delete branch" }))
+  await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
+  const dlg = screen.getByRole("alertdialog")
+  expect(dlg).toHaveTextContent("dev")
+  routes["GET /api/repos/alice/hello/branches"] = () =>
+    json(200, { branches: [{ name: "main", oid: OID, is_default: true }] })
+  await userEvent.click(within(dlg).getByRole("button", { name: "Delete branch" }))
+  expect(await screen.findByText("Branch dev deleted.")).toBeInTheDocument()
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+  await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Delete branch" })).not.toBeInTheDocument())
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
+})
+
+it("delete branch: deleting the current ref moves to the default branch", async () => {
+  setupRepo("alice")
+  routes["GET /api/repos/alice/hello/tree/dev"] = () => json(200, tree())
+  routes["GET /api/repos/alice/hello/commits?ref=dev&page=1"] = () => json(200, commits)
+  routes["DELETE /api/repos/alice/hello/branches/dev"] = () => json(204)
+  renderAt("/alice/hello/tree/dev")
+  await userEvent.click(await screen.findByRole("button", { name: "Delete branch" }))
+  await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete branch" }))
+  await vi.waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/tree/main"))
+})
+
+it("delete branch: cancel sends nothing; 400 and 404 errors are shown inline", async () => {
+  setupRepo("alice")
+  renderAt("/alice/hello")
+  await userEvent.click(await screen.findByRole("button", { name: "Delete branch" }))
+  await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  expect(calls.some((c) => c.startsWith("DELETE"))).toBe(false)
+
+  for (const [status, msg] of [[400, "cannot delete the default branch"], [404, "branch not found"]] as const) {
+    routes["DELETE /api/repos/alice/hello/branches/dev"] = () => json(status, { error: msg })
+    await userEvent.click(screen.getByRole("button", { name: "Delete branch" }))
+    await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
+    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete branch" }))
+    expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent(msg)
+    await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  }
+})
+
 // File viewer
 
 const blob = (o: Record<string, unknown> = {}) => ({
