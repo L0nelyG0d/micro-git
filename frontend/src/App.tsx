@@ -52,13 +52,13 @@ function titleFor(pathname: string): string {
 /** Sets document.title from the route and moves focus to <main> after navigation. */
 function TitleSync({ mainRef }: { mainRef: RefObject<HTMLElement | null> }) {
   const { pathname } = useLocation()
-  const first = useRef(true)
+  // Compare with the previous pathname (not a boolean flag) so StrictMode's
+  // double-invoked effect does not count as a navigation.
+  const prev = useRef(pathname)
   useEffect(() => {
     document.title = titleFor(pathname)
-    if (first.current) {
-      first.current = false
-      return
-    }
+    if (prev.current === pathname) return
+    prev.current = pathname
     // Do not steal focus from an open dialog.
     if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return
     mainRef.current?.focus()

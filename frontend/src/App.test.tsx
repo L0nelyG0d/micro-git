@@ -1,3 +1,4 @@
+import React from "react"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
@@ -228,6 +229,21 @@ it("has a skip link as the first tab stop that focuses main", async () => {
   expect(screen.getByRole("link", { name: "Skip to main content" })).toHaveFocus()
   await userEvent.keyboard("{Enter}")
   expect(screen.getByRole("main")).toHaveFocus()
+})
+
+it("under StrictMode does not focus main on first load and the skip link is the first tab stop", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  render(
+    <React.StrictMode>
+      <MemoryRouter initialEntries={["/"]}>
+        <App />
+      </MemoryRouter>
+    </React.StrictMode>,
+  )
+  await screen.findByRole("link", { name: "Register" })
+  expect(screen.getByRole("main")).not.toHaveFocus()
+  await userEvent.tab()
+  expect(screen.getByRole("link", { name: "Skip to main content" })).toHaveFocus()
 })
 
 it("moves focus to main after a client-side navigation but not on first load", async () => {
