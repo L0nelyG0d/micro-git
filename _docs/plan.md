@@ -92,14 +92,14 @@ Clarifications (system analyst, resolve gaps in the rules above):
 - `empty` on a repo means it has no refs
 - Order of checks on write endpoints: `401` (no/invalid cookie) → `404` (repo or branch missing) → `403` (not owner) → `400` (validation) → `409` (conflict)
 - Reading from an empty repo (tree, blob, commits) returns `404` "ref not found"; the frontend uses the `empty` flag and does not call these
-- Diff: 3 lines of context; hunks whose context overlaps are merged; the text is split on `\n`; a missing final newline is not shown as a difference (a file that differs only by it is `modified` with no hunks). A file with more than 5000 lines on either side is not diffed: `hunks: []`, `truncated: true`. No rename detection
+- Diff: 3 lines of context; hunks whose context overlaps are merged; the text is split on `\n`; a missing final newline is not shown as a difference (a file that differs only by it is `modified` with no hunks). A file with more than 5000 lines on either side is not diffed: `hunks: []`, `truncated: true`. A response diffs at most 32 million line-pair cells (prefix/suffix-trimmed old lines x new lines, summed over the files in path order); later files that do not fit are `truncated` too. No rename detection
 
 ## API contracts
 
 Conventions (all endpoints):
 
 - JSON in and out, UTF-8, `snake_case`, `Content-Type: application/json`. Exception: `GET /health` returns plain text `OK`. No `/api` prefix on the backend (the Vite proxy adds and strips it)
-- Error body is always `{"error": "<message>"}` with the message exactly as written below. Extra field only on the tip conflict (`current_tip`). Malformed JSON, wrong types or unknown fields: `400` `invalid JSON body`. Unknown route `404` `not found`; wrong method `405` `method not allowed`; unexpected failure `500` `internal error` (no details leaked)
+- Error body is always `{"error": "<message>"}` with the message exactly as written below. Extra field only on the tip conflict (`current_tip`). Malformed JSON, wrong types or unknown fields: `400` `invalid JSON body`. A JSON body over 1 MiB (commits: 64 MiB): `413` `request too large`. Unknown route `404` `not found`; wrong method `405` `method not allowed`; unexpected failure `500` `internal error` (no details leaked)
 - Missing/invalid/expired cookie, or a cookie for a user that no longer exists: `401` `authentication required`. Not the owner: `403` `forbidden`
 - Ids are integers. Times are RFC 3339 UTC strings (`2026-01-02T15:04:05Z`); the frontend formats them. Oids are full 40-character lowercase hex
 - Session cookie: `session=<jwt>; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`, plus `Secure` when env `COOKIE_SECURE=true`. JWT claims: `sub` (user id), `exp`

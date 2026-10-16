@@ -332,3 +332,66 @@ func TestTreesErrors(t *testing.T) {
 		t.Error("blob as tree: want error")
 	}
 }
+
+// lines returns n lines "<prefix> 1".."<prefix> n".
+func lines(prefix string, n int) string {
+	var sb strings.Builder
+	for i := 1; i <= n; i++ {
+		fmt.Fprintf(&sb, "%s %d\n", prefix, i)
+	}
+	return sb.String()
+}
+
+func TestTreesBudget(t *testing.T) {
+	s := treebuild.NewMemStore()
+	// a, b: 5000x5000 with every line different (25M cells each); only one
+	// fits in the 32M budget. c and d are small edits that still fit.
+	bigSame := numbered(linediff.MaxLines)
+	o := build(t, s, tree{"a": lines("old", 5000), "b": lines("old", 5000), "c": bigSame, "d": "1\n2\n"})
+	n := build(t, s, tree{"a": lines("new", 5000), "b": lines("new", 5000), "c": replaceLine(bigSame, 2500, "changed"), "d": "1\n3\n"})
+
+	run := func() []linediff.FileDiff {
+		got, err := linediff.Trees(s, o, n)
+		if err != nil || len(got) != 4 {
+			t.Fatal(got, err)
+		}
+		return got
+	}
+	got := run()
+	if got[0].Truncated || got[0].Additions != 5000 || got[0].Deletions != 5000 {
+		t.Errorf("a should be diffed: truncated=%v +%d -%d", got[0].Truncated, got[0].Additions, got[0].Deletions)
+	}
+	b := got[1]
+	if !b.Truncated || len(b.Hunks) != 0 || b.Hunks == nil || b.Additions != 0 || b.Deletions != 0 || b.Status != linediff.StatusModified {
+		t.Errorf("b should be truncated: %+v", b)
+	}
+	for _, f := range got[2:] {
+		if f.Truncated || f.Additions != 1 || f.Deletions != 1 || len(f.Hunks) != 1 {
+			t.Errorf("%s should be diffed after the budget ran low: %+v", f.Path, f)
+		}
+	}
+	// Same input, same result.
+	if again := run(); !reflect.DeepEqual(got, again) {
+		t.Error("Trees is not deterministic")
+	}
+}
+
+func TestTreesBudgetSmallDiffsNotPenalised(t *testing.T) {
+	t.Parallel()
+	s := treebuild.NewMemStore()
+	files, edited := tree{}, tree{}
+	text := numbered(linediff.MaxLines)
+	for i := 0; i < 20; i++ { // 20 big files, one changed line each
+		p := fmt.Sprintf("f%02d", i)
+		files[p], edited[p] = text, replaceLine(text, 10+i, "x")
+	}
+	got, err := linediff.Trees(s, build(t, s, files), build(t, s, edited))
+	if err != nil || len(got) != 20 {
+		t.Fatal(len(got), err)
+	}
+	for _, f := range got {
+		if f.Truncated || len(f.Hunks) != 1 {
+			t.Errorf("%s: %+v", f.Path, f)
+		}
+	}
+}

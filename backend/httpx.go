@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 )
@@ -23,17 +24,46 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
 }
 
-// decodeJSON reads exactly one JSON value into dst, rejecting unknown fields,
-// wrong types, an empty body and trailing data. On failure it has already
-// written 400 "invalid JSON body" and returns false.
-func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+// maxJSONBody is the largest JSON request body decodeJSON accepts (commits
+// have their own, larger limit).
+const maxJSONBody = 1 << 20
+
+// decodeBody reads exactly one JSON value into dst, rejecting unknown fields,
+// wrong types, an empty body and trailing data. It limits the body to
+// maxJSONBody bytes.
+func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(dst); err != nil || dec.Decode(&struct{}{}) != io.EOF {
-		writeError(w, http.StatusBadRequest, "invalid JSON body")
-		return false
+	return dec.Decode(dst) == nil && dec.Decode(&struct{}{}) == io.EOF
+}
+
+// bodyTooLarge reports whether the body of r, already read by decodeBody,
+// went over maxJSONBody. It reads the rest of the (bounded) body.
+func bodyTooLarge(r *http.Request) bool {
+	_, err := io.Copy(io.Discard, r.Body)
+	var mbe *http.MaxBytesError
+	return errors.As(err, &mbe)
+}
+
+// badBody writes the error for a body decodeBody rejected: 413 "request too
+// large" when it was over the limit, otherwise 400 "invalid JSON body".
+func badBody(w http.ResponseWriter, r *http.Request) {
+	if bodyTooLarge(r) {
+		writeError(w, http.StatusRequestEntityTooLarge, "request too large")
+		return
 	}
-	return true
+	writeError(w, http.StatusBadRequest, "invalid JSON body")
+}
+
+// decodeJSON is decodeBody that also writes the error (see badBody) and
+// returns false on failure.
+func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
+	if decodeBody(w, r, dst) {
+		return true
+	}
+	badBody(w, r)
+	return false
 }
 
 // internalError logs the cause server-side and sends a generic 500.
@@ -43,9 +73,7 @@ func internalError(w http.ResponseWriter, err error) {
 }
 
 // decodeJSONQuiet is decodeJSON without writing the error, for handlers that
-// must run other checks (404, 403) before reporting a bad body.
-func decodeJSONQuiet(r *http.Request, dst any) bool {
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	return dec.Decode(dst) == nil && dec.Decode(&struct{}{}) == io.EOF
+// must run other checks (404, 403) before calling badBody.
+func decodeJSONQuiet(w http.ResponseWriter, r *http.Request, dst any) bool {
+	return decodeBody(w, r, dst)
 }

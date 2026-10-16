@@ -36,17 +36,31 @@ type FileDiff struct {
 // is reported as the file deleted plus the new files added. No rename
 // detection is done.
 func Trees(store treebuild.Store, oldTree, newTree string) ([]FileDiff, error) {
-	d := differ{store: store, out: []FileDiff{}}
+	d := differ{store: store}
 	if err := d.walk("", oldTree, newTree); err != nil {
 		return nil, err
 	}
-	sort.Slice(d.out, func(i, j int) bool { return d.out[i].Path < d.out[j].Path })
-	return d.out, nil
+	// Files are diffed in path order, so the shared budget is spent
+	// deterministically.
+	sort.Slice(d.files, func(i, j int) bool { return d.files[i].path < d.files[j].path })
+	out := make([]FileDiff, 0, len(d.files))
+	budget := MaxTotalCells
+	for _, f := range d.files {
+		fd, err := d.diffFile(f, &budget)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, fd)
+	}
+	return out, nil
 }
+
+// fileJob is a changed file found by walk; an empty oid means absent.
+type fileJob struct{ path, oldOID, newOID string }
 
 type differ struct {
 	store treebuild.Store
-	out   []FileDiff
+	files []fileJob
 }
 
 func (d *differ) entries(oid string) (map[string]gitobj.TreeEntry, error) {
@@ -141,28 +155,32 @@ func (d *differ) walk(prefix, oldOID, newOID string) error {
 	return nil
 }
 
-// file diffs one file; an empty oid means the file is absent on that side.
+// file records one changed file to diff later.
 func (d *differ) file(path, oldOID, newOID string) error {
-	oldText, err := d.blob(oldOID)
+	d.files = append(d.files, fileJob{path, oldOID, newOID})
+	return nil
+}
+
+func (d *differ) diffFile(f fileJob, budget *int) (FileDiff, error) {
+	oldText, err := d.blob(f.oldOID)
 	if err != nil {
-		return err
+		return FileDiff{}, err
 	}
-	newText, err := d.blob(newOID)
+	newText, err := d.blob(f.newOID)
 	if err != nil {
-		return err
+		return FileDiff{}, err
 	}
 	status := StatusModified
 	switch {
-	case oldOID == "":
+	case f.oldOID == "":
 		status = StatusAdded
-	case newOID == "":
+	case f.newOID == "":
 		status = StatusDeleted
 	}
-	r := Diff(oldText, newText)
-	d.out = append(d.out, FileDiff{
-		Path: path, Status: status,
+	r := diffBudget(oldText, newText, budget)
+	return FileDiff{
+		Path: f.path, Status: status,
 		Additions: r.Additions, Deletions: r.Deletions,
 		Truncated: r.Truncated, Hunks: r.Hunks,
-	})
-	return nil
+	}, nil
 }
