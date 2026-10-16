@@ -39,7 +39,7 @@ Out of scope: clone/push/fetch, pack files, real merges and conflict resolution,
 | `users` | `id`, `username` (unique case-insensitively, `[a-z0-9-]{3,32}`), `password_hash`, `created_at` |
 | `repos` | `id`, `owner_id` → users, `name` (unique per owner, case-insensitive), `description`, `default_branch` (default `main`), `created_at` |
 | `objects` | `repo_id` → repos (on delete cascade), `oid` char(40), `type` (`blob`/`tree`/`commit`, CHECK), `data` bytea (raw object body); primary key `(repo_id, oid)` |
-| `refs` | `repo_id` → repos (on delete cascade), `name`, `oid`; primary key `(repo_id, name)` |
+| `refs` | `repo_id` → repos (on delete cascade), `name`, `oid`; primary key `(repo_id, name)`; foreign key `(repo_id, oid)` → objects, so a branch can only point at a stored object (write the commit object before moving the ref) |
 
 Objects are stored as raw serialized bodies (like an uncompressed loose object) and parsed in Go. There are no separate commits or trees tables: the log walks parents, 50 commits per page.
 

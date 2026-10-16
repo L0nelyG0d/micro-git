@@ -7,6 +7,7 @@ import (
 
 	"github.com/L0nelyG0d/micro-git/backend/gitobj"
 	"github.com/L0nelyG0d/micro-git/backend/treebuild"
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 // newRepoStore creates a user and a repo row and returns the repo's store.
@@ -75,7 +76,17 @@ func TestRefStore(t *testing.T) {
 	s := testServer(t)
 	ctx := context.Background()
 	rs := newRepoStore(t, s)
-	a, b, c := gitobj.HashBlob([]byte("a")), gitobj.HashBlob([]byte("b")), gitobj.HashBlob([]byte("c"))
+	// refs have a foreign key to objects, so the targets must exist first
+	objs := rs.Objects(ctx)
+	var oids []string
+	for _, x := range []string{"a", "b", "c"} {
+		oid, err := objs.PutObject(gitobj.TypeBlob, []byte(x))
+		if err != nil {
+			t.Fatal(err)
+		}
+		oids = append(oids, oid)
+	}
+	a, b, c := oids[0], oids[1], oids[2]
 
 	if _, err := rs.GetRef(ctx, "main"); !errors.Is(err, ErrRefNotFound) {
 		t.Errorf("get missing: %v", err)
@@ -179,10 +190,56 @@ func TestResolveCommit(t *testing.T) {
 	}
 
 	// branch name wins over a same-named oid-looking ref
+	if _, err := other.Objects(ctx).PutObject(gitobj.TypeBlob, []byte("x")); err != nil {
+		t.Fatal(err)
+	}
 	if err := other.CreateRef(ctx, commit, blob); err != nil {
 		t.Fatal(err)
 	}
 	if got, err := other.ResolveCommit(ctx, commit); err != nil || got != blob {
 		t.Errorf("branch should win: %q, %v", got, err)
+	}
+}
+
+// A ref cannot point at an oid that is not stored in the same repository
+// (foreign key refs_object_fk, issue #23).
+func TestRefNeedsObject(t *testing.T) {
+	s := testServer(t)
+	ctx := context.Background()
+	rs := newRepoStore(t, s)
+	other := newRepoStore(t, s)
+	missing := "1111111111111111111111111111111111111111"
+	inOther, err := other.Objects(ctx).PutObject(gitobj.TypeBlob, []byte("elsewhere"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	valid, err := rs.Objects(ctx).PutObject(gitobj.TypeBlob, []byte("here"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.CreateRef(ctx, "keep", valid); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		do   func() error
+	}{
+		{"create, missing oid", func() error { return rs.CreateRef(ctx, "x", missing) }},
+		{"create, oid of another repo", func() error { return rs.CreateRef(ctx, "x", inOther) }},
+		{"first update, missing oid", func() error { return rs.UpdateRef(ctx, "x", "", missing) }},
+		{"swap, missing oid", func() error { return rs.UpdateRef(ctx, "keep", valid, missing) }},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.do()
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23503" {
+				t.Errorf("err = %v, want foreign key violation 23503", err)
+			}
+		})
+	}
+	if refs, err := rs.ListRefs(ctx); err != nil || len(refs) != 1 || refs[0] != (Ref{"keep", valid}) {
+		t.Errorf("refs after rejected writes = %v, %v", refs, err)
 	}
 }
