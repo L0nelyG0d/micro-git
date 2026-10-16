@@ -5,6 +5,7 @@ import { Breadcrumbs } from "@/components/Breadcrumbs"
 import { DeleteRepoDialog } from "@/components/DeleteRepoDialog"
 import { FileTree } from "@/components/FileTree"
 import { LatestCommitBar } from "@/components/LatestCommitBar"
+import { MergeDialog } from "@/components/MergeDialog"
 import { ReadmeCard } from "@/components/ReadmeCard"
 import { ErrorBlock,LoadingBlock, NotFoundBlock } from "@/components/StateViews"
 import { Button } from "@/components/ui/button"
@@ -154,6 +155,25 @@ export function RepoPage() {
           />
         ) : (
           <span />
+        )}
+        {owns && branchesQ.data && branchesQ.data.branches.length >= 2 && (
+          <MergeDialog
+            owner={owner}
+            repo={name}
+            branches={branchesQ.data.branches}
+            defaultBranch={repo.default_branch}
+            current={ref}
+            onUnauthorized={expireSession}
+            onReload={retryAll}
+            onMerged={(into) => {
+              branchesQ.reload()
+              if (into !== ref) navigate(uiPath("tree", owner, name, into, ""))
+              else {
+                treeQ.reload()
+                commitsQ.reload()
+              }
+            }}
+          />
         )}
         {writable && (
           <Button asChild size="sm">
