@@ -203,3 +203,62 @@ func (rs *RepoStore) ResolveCommit(ctx context.Context, ref string) (string, err
 	}
 	return ref, nil
 }
+
+// CommitRow is one commit of a first-parent walk: its oid, raw body and the
+// first parent named in its header ("" for a root).
+type CommitRow struct {
+	OID    string
+	Data   []byte
+	Parent string
+}
+
+// WalkFirstParents returns the first-parent chain starting at tip, newest
+// first, at most limit commits, in a single recursive statement. Only the
+// commit header is searched for the parent, never the message. A tip or
+// parent that is missing (or not a commit) gives an error wrapping
+// treebuild.ErrNotFound rather than a shortened chain.
+func (rs *RepoStore) WalkFirstParents(ctx context.Context, tip string, limit int) ([]CommitRow, error) {
+	if limit < 1 {
+		return []CommitRow{}, nil
+	}
+	// encode(..., 'escape') never fails on non-UTF-8 bytes; 100 bytes cover
+	// "tree <40>\nparent <40>\n" (93 bytes), so the message is never searched.
+	const parentRE = `^tree [0-9a-f]{40}\nparent ([0-9a-f]{40})\n`
+	rows, err := rs.db.Query(ctx, `
+WITH RECURSIVE walk(oid, data, parent, depth) AS (
+  SELECT o.oid, o.data,
+         substring(encode(substring(o.data from 1 for 100), 'escape') from $4), 1::bigint
+    FROM objects o
+   WHERE o.repo_id = $1 AND o.oid = $2 AND o.type = 'commit'
+  UNION ALL
+  SELECT o.oid, o.data,
+         substring(encode(substring(o.data from 1 for 100), 'escape') from $4), w.depth + 1
+    FROM walk w
+    JOIN objects o ON o.repo_id = $1 AND o.oid = w.parent AND o.type = 'commit'
+   WHERE w.depth < $3::bigint
+)
+SELECT oid, data, COALESCE(parent, '') FROM walk ORDER BY depth`,
+		rs.repoID, tip, limit, parentRE)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []CommitRow{}
+	for rows.Next() {
+		var r CommitRow
+		if err := rows.Scan(&r.OID, &r.Data, &r.Parent); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: %s", treebuild.ErrNotFound, tip)
+	}
+	if last := out[len(out)-1]; len(out) < limit && last.Parent != "" {
+		return nil, fmt.Errorf("%w: %s", treebuild.ErrNotFound, last.Parent)
+	}
+	return out, nil
+}

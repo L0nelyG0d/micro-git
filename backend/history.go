@@ -109,10 +109,15 @@ func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	skip := (page - 1) * commitsPerPage
-	store := NewRepoStore(s.DB, repo.ID).Objects(r.Context())
-	// First-parent walk; one extra commit past the page tells has_more.
-	for oid, i := tip, 0; oid != "" && i <= skip+commitsPerPage; i++ {
-		c, err := loadCommit(store, oid)
+	// First-parent walk in one statement; one extra commit past the page
+	// tells has_more.
+	rows, err := NewRepoStore(s.DB, repo.ID).WalkFirstParents(r.Context(), tip, skip+commitsPerPage+1)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	for i, row := range rows {
+		c, err := gitobj.ParseCommit(row.Data)
 		if err != nil {
 			internalError(w, err)
 			return
@@ -121,11 +126,7 @@ func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 		case i >= skip+commitsPerPage:
 			resp.HasMore = true
 		case i >= skip:
-			resp.Commits = append(resp.Commits, summarize(oid, c))
-		}
-		oid = ""
-		if len(c.Parents) > 0 {
-			oid = c.Parents[0]
+			resp.Commits = append(resp.Commits, summarize(row.OID, c))
 		}
 	}
 	writeJSON(w, http.StatusOK, resp)
