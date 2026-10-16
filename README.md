@@ -76,9 +76,11 @@ Run these steps in order.
    ```
 
 The Vite dev server on port 5173 proxies `/api/*` to `http://localhost:8080`,
-stripping the `/api` prefix (`/api/repos` reaches the backend as `/repos`). The
-proxy target is hard-coded in `frontend/vite.config.ts`, so if you change
-`PORT`, change the target there too.
+stripping the `/api` prefix (`/api/repos` reaches the backend as `/repos`). If
+the backend listens elsewhere (a different `PORT`), start the frontend with the
+`API_PROXY_TARGET` environment variable, for example
+`API_PROXY_TARGET=http://localhost:9090 npm run dev`. It is read by
+`frontend/vite.config.ts`, is optional and defaults to `http://localhost:8080`.
 
 ## Tests
 
@@ -90,7 +92,9 @@ cd frontend && npm test              # frontend tests (Vitest)
 
 Export `.env` first (step 3) so the database tests run against
 `TEST_DATABASE_URL`; without it they are skipped. Point it at a throwaway
-database: tests write to it.
+database: tests write to it. On a small remote database (for example a
+suspended-on-idle Neon branch) use `go test -p 1 -race -timeout 40m ./...`; the
+database tests are slow there (about 12 minutes).
 
 ## Architecture
 
@@ -167,13 +171,17 @@ Start the backend and frontend (Setup steps 5 and 6) and open
 7. **Create a branch.** In the branch switcher create `feature` from `main`.
    Expect: `feature` is listed and can be selected; its files and history match
    `main`.
-8. **The 409 case (two tabs).** Open the editor for `README.md` on `main` in
+8. **Delete a file and check ownership.** Open a file, delete it with a commit
+   message. Expect: it disappears from the file list. Log in as a second user
+   and open the same repo. Expect: no edit, add, delete or branch controls are
+   offered; the API answers `403` to any write by a non-owner.
+9. **The 409 case (two tabs).** Open the editor for `README.md` on `main` in
    tab A and again in tab B. Commit in tab A (succeeds). Then commit in tab B.
    Expect: tab B shows a conflict error saying the branch changed (HTTP `409`)
    and creates no commit; reload tab B, redo the edit and it commits.
-9. **Delete the repo.** On the repo page choose delete and confirm. Expect:
-   you return to the home page and the repo is gone from the list.
-10. **Log out.** Use the logout control. Expect: the nav bar shows login and
+10. **Delete the repo.** On the repo page choose delete and confirm. Expect:
+    you return to the home page and the repo is gone from the list.
+11. **Log out.** Use the logout control. Expect: the nav bar shows login and
     register again, and write actions are no longer offered.
 
 ## Known limits
