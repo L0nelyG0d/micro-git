@@ -13,3 +13,9 @@ Format: `- [ ] (#issue) question - default used - date`
 - [x] (infra) Neon test branch compute is 0.25 CU (max) and auto-suspends; parallel test suites stall and cold starts fail. Raising max CU or disabling suspend costs more. Default: unchanged, suites run serially (`go test -p 1`). - 2026-10-16
 
 RESOLVED 2026-10-16: questions 3, 4, 5, 6, 7 confirmed as defaults. #19 closed as duplicate of #15/#20.
+
+## Stretch (#24-#27), stashed 2026-10-16
+- [ ] (#27) Should the old repo name redirect to the new one after rename? Default: no, old name 404s (no extra table).
+- [ ] (#24) Merge when already up to date: 400 or 200 no-op? Default: 400 `already up to date`.
+- [ ] (#25) Compare route: query params or `a...b` in path? Default: query params (branch names may contain dots).
+- [ ] (#26) Real markdown renderer with links/images (needs a package, none approved)? Default: safe in-repo subset renderer, no links/images.
