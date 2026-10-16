@@ -177,3 +177,26 @@ it("400 already up to date is shown inline", async () => {
   await userEvent.click(within(dlg).getByRole("button", { name: "Merge" }))
   expect(await within(dlg).findByRole("alert")).toHaveTextContent("already up to date")
 })
+
+const EXPIRED = "Your session has expired. Log in again."
+function expectToast() {
+  expect(document.querySelector("[data-sonner-toast]")).toHaveTextContent(EXPIRED)
+}
+function expectLoggedOut() {
+  expectToast()
+  expect(screen.getByRole("link", { name: "Log in" })).toBeInTheDocument()
+}
+
+it("401 expires the session with a toast and hides owner actions", async () => {
+  setup()
+  routes["POST /api/repos/alice/hello/merge"] = () => json(401, { error: "authentication required" })
+  renderAt("/alice/hello")
+  const dlg = await openDialog()
+  await userEvent.click(within(dlg).getByRole("button", { name: "Merge" }))
+  await vi.waitFor(() => expectToast())
+  expect(calls).toContain("POST /api/repos/alice/hello/merge")
+  expectLoggedOut()
+  expect(screen.queryByRole("button", { name: "Merge" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "Delete repository" })).not.toBeInTheDocument()
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
+})

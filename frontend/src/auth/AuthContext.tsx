@@ -1,5 +1,6 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react"
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import type { ReactNode } from "react"
+import { toast } from "sonner"
 import { api, ApiError } from "@/lib/api"
 
 export type User = { id: number; username: string }
@@ -20,7 +21,13 @@ type AuthState = {
 const AuthContext = createContext<AuthState | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null)
+  const [user, setUserState] = useState<User | null>(null)
+  // Mirrors `user` synchronously so expireSession can tell, even when called twice in a row, whether a user was still logged in.
+  const userRef = useRef<User | null>(null)
+  const setUser = useCallback((u: User | null) => {
+    userRef.current = u
+    setUserState(u)
+  }, [])
   const [loading, setLoading] = useState(true)
   const [sessionError, setSessionError] = useState(false)
 
@@ -36,21 +43,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       active = false
     }
-  }, [])
+  }, [setUser])
 
   const login = useCallback(async (username: string, password: string) => {
     const u = await api<User>("/auth/login", { method: "POST", body: { username, password } })
     setUser(u)
     setSessionError(false)
     return u
-  }, [])
+  }, [setUser])
 
   const logout = useCallback(async () => {
     await api("/auth/logout", { method: "POST" })
     setUser(null)
-  }, [])
+  }, [setUser])
 
-  const expireSession = useCallback(() => setUser(null), [])
+  const expireSession = useCallback(() => {
+    if (!userRef.current) return
+    setUser(null)
+    toast.error("Your session has expired. Log in again.")
+  }, [setUser])
 
   const value = useMemo(
     () => ({ user, loading, sessionError, login, logout, expireSession }),
