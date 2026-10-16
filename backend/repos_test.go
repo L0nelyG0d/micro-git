@@ -204,7 +204,10 @@ func TestEmptyFlag(t *testing.T) {
 	owner, c := newUserCookie(t, s)
 	r := createRepo(t, s, c, `{"name":"e"}`)
 	rs := NewRepoStore(s.DB, r.ID)
-	oid := "1111111111111111111111111111111111111111"
+	oid, err := rs.Objects(context.Background()).PutObject("blob", []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := rs.UpdateRef(context.Background(), "main", "", oid); err != nil {
 		t.Fatal(err)
@@ -233,10 +236,11 @@ func TestDeleteRepo(t *testing.T) {
 	r := createRepo(t, s, c, `{"name":"doomed"}`)
 	rs := NewRepoStore(s.DB, r.ID)
 	ctx := context.Background()
-	if _, err := rs.Objects(ctx).PutObject("blob", []byte("x")); err != nil {
+	oid, err := rs.Objects(ctx).PutObject("blob", []byte("x"))
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := rs.CreateRef(ctx, "main", "1111111111111111111111111111111111111111"); err != nil {
+	if err := rs.CreateRef(ctx, "main", oid); err != nil {
 		t.Fatal(err)
 	}
 	path := "/repos/" + owner + "/doomed"
