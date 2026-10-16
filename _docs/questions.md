@@ -10,3 +10,4 @@ Format: `- [ ] (#issue) question - default used - date`
 - [ ] (#15/#19/#20) Branch create and repo delete UI placed inside #15; branch delete UI deferred to #20; #19 overlaps #15. Default: as groomed. - 2026-10-15
 - [ ] (#21) Stretch features (merge, compare, README render, rename) have an issue but are not part of the 18 tasks. Default: skipped unless time remains. - 2026-10-15
 - [ ] (#13) `react-hook-form` (shadcn `Form`) is not in the approved packages list. Default: plain controlled inputs with `Label`/`Input`; swap to `Form` if approved. - 2026-10-15
+- [ ] (infra) Neon test branch compute is 0.25 CU (max) and auto-suspends; parallel test suites stall and cold starts fail. Raising max CU or disabling suspend costs more. Default: unchanged, suites run serially (`go test -p 1`). - 2026-10-16

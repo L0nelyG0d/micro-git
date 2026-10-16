@@ -103,7 +103,7 @@ Conventions (all endpoints):
 - Missing/invalid/expired cookie, or a cookie for a user that no longer exists: `401` `authentication required`. Not the owner: `403` `forbidden`
 - Ids are integers. Times are RFC 3339 UTC strings (`2026-01-02T15:04:05Z`); the frontend formats them. Oids are full 40-character lowercase hex
 - Session cookie: `session=<jwt>; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`, plus `Secure` when env `COOKIE_SECURE=true`. JWT claims: `sub` (user id), `exp`
-- `{path...}` may be empty (repo root) and may have a trailing slash; register the pattern with and without the trailing part. Path segments are percent-decoded and then validated by the path rules
+- `{path...}` may be empty (repo root) and may have a trailing slash; register the pattern with and without the trailing part. Path segments are percent-decoded and then validated by the path rules. Literal `.`, `..` and empty segments in a request URL are redirected (`307`) by ServeMux to the cleaned path and never reach the handler
 - Lists are wrapped in an object, never a bare array
 
 Shared shapes:
@@ -179,6 +179,7 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 ```
   `path` is `""` for the root. `commit` is the resolved commit (the editor uses it as `expected_tip` when `ref` is a branch). Entries: directories first, then files, each sorted by name (bytewise). No size or last-commit info per entry
 - `400` `invalid path` · `not a directory` (path is a file)
+- Unclean URL paths: net/http's ServeMux cleans literal `.`, `..` and empty (`//`) segments and answers `307` to the cleaned path before any handler runs, so those never produce 400. The handler returns `400 invalid path` only for what reaches it: a `.git` segment, over 255 characters, percent-encoded dot segments (`%2e%2e`, `%2F..%2F`)
 - `404` `repository not found` · `ref not found` · `path not found`
 
 `GET /repos/{owner}/{repo}/blob/{ref}/{path...}`
@@ -188,7 +189,7 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
  "oid": "<40 hex>", "size": 12, "content": "package main\n"}
 ```
   `size` is bytes; `content` is the UTF-8 text (only text is ever stored)
-- `400` `invalid path` · `not a file` (path is a directory or the root)
+- `400` `invalid path` (same rules and the same 307 for unclean paths as tree) · `not a file` (path is a directory or the root)
 - `404` `repository not found` · `ref not found` · `path not found`
 
 `GET /repos/{owner}/{repo}/commits?ref=main&page=1`
