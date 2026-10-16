@@ -113,7 +113,7 @@ func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 	// tells has_more.
 	rows, err := NewRepoStore(s.DB, repo.ID).WalkFirstParents(r.Context(), tip, skip+commitsPerPage+1)
 	if err != nil {
-		internalError(w, err)
+		s.readError(w, r, repo, err)
 		return
 	}
 	for i, row := range rows {
