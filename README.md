@@ -181,7 +181,13 @@ Start the backend and frontend (Setup steps 5 and 6) and open
    and creates no commit; reload tab B, redo the edit and it commits.
 10. **Delete the repo.** On the repo page choose delete and confirm. Expect:
     you return to the home page and the repo is gone from the list.
-11. **Log out.** Use the logout control. Expect: the nav bar shows login and
+11. **Stretch features.** On a repo with two branches where `feature` is ahead
+    of `main`: use Compare to see the file diff between them; use Merge to
+    fast-forward `main` to `feature` (the branch tip moves, no new commit;
+    merging again answers `400 already up to date`); a repo with a root
+    `README.md` shows it rendered under the file tree; as owner, Rename the
+    repo and confirm the old URL shows not found and the new one works.
+12. **Log out.** Use the logout control. Expect: the nav bar shows login and
     register again, and write actions are no longer offered.
 
 ## Known limits
@@ -189,11 +195,13 @@ Start the backend and frontend (Setup steps 5 and 6) and open
 - **Local only.** The app runs on your machine: the browser talks to the Vite
   dev server, which proxies `/api` to the backend and strips the prefix. The
   backend itself serves no `/api` prefix and no frontend files, and nothing
-  here describes production hosting. How `/api` should be served in production
-  is an open decision: see issue #22
-  (<https://github.com/L0nelyG0d/micro-git/issues/22>).
+  here describes production hosting. Local-only is the accepted scope for this
+  project (issue #22 closed as not planned).
 - Text files only (UTF-8, at most 1 MiB), at most 50 changes per commit; no
   clone/push/fetch, tags, forks, pull requests or private repositories (see
   "Out of scope" in `_docs/plan.md`).
-- Stretch features (merge, compare, README rendering, repo rename) are not
-  implemented (issue #21).
+- README rendering supports a safe subset only (headings, paragraphs, lists,
+  fenced and inline code, bold, italic); links, images, tables and HTML are
+  shown as plain text.
+- Renaming a repository does not redirect: the old name answers `404`.
+- Merging is fast-forward only; there are no real merges or conflict handling.
