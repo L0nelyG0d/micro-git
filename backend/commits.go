@@ -22,6 +22,11 @@ const (
 	commitEmailTLD = "micro-git.local"
 )
 
+// beforeCommitTx is a test hook run after the repository lookup and before
+// the transaction opens, so a test can delete the repository deterministically.
+// Nil in production.
+var beforeCommitTx func()
+
 var branchNameRE = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 // validBranchName: [A-Za-z0-9._-]+, not "." or "..", at most 100 characters,
@@ -127,6 +132,18 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 
 	u, _ := UserFromContext(r.Context())
 	ctx := r.Context()
+	if beforeCommitTx != nil {
+		beforeCommitTx()
+	}
+	// A repository deleted since the lookup shows up as a foreign-key violation
+	// on the objects/refs inserts: answer 404 instead of 500.
+	fail := func(err error) {
+		if isForeignKeyViolation(err) {
+			writeError(w, http.StatusNotFound, "repository not found")
+			return
+		}
+		internalError(w, err)
+	}
 	// One transaction: objects and the ref move commit together or not at all.
 	tx, err := s.DB.Begin(ctx)
 	if err != nil {
@@ -159,7 +176,7 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		internalError(w, err)
+		fail(err)
 		return
 	}
 	if req.ExpectedTip != tip {
@@ -179,7 +196,7 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 	}
 	oid, err := objs.PutObject(gitobj.TypeCommit, body)
 	if err != nil {
-		internalError(w, err)
+		fail(err)
 		return
 	}
 	err = ts.UpdateRef(ctx, req.Branch, tip, oid)
@@ -194,7 +211,7 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
-		internalError(w, err)
+		fail(err)
 		return
 	}
 	if err := tx.Commit(ctx); err != nil {
