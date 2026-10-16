@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -67,8 +68,12 @@ func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
 }
 
 // internalError logs the cause server-side and sends a generic 500.
+// A client abort (context canceled) is not a server error, so it is not
+// logged as one.
 func internalError(w http.ResponseWriter, err error) {
-	logError(err)
+	if !errors.Is(err, context.Canceled) {
+		logError(err)
+	}
 	writeError(w, http.StatusInternalServerError, "internal error")
 }
 

@@ -66,6 +66,7 @@ func (s *Server) repoFromPath(w http.ResponseWriter, r *http.Request) (Repo, boo
 		internalError(w, err)
 		return Repo{}, false
 	}
+	s.testHook("repo-loaded")
 	return repo, true
 }
 
