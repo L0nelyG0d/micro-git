@@ -41,3 +41,11 @@ func internalError(w http.ResponseWriter, err error) {
 	logError(err)
 	writeError(w, http.StatusInternalServerError, "internal error")
 }
+
+// decodeJSONQuiet is decodeJSON without writing the error, for handlers that
+// must run other checks (404, 403) before reporting a bad body.
+func decodeJSONQuiet(r *http.Request, dst any) bool {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(dst) == nil && dec.Decode(&struct{}{}) == io.EOF
+}

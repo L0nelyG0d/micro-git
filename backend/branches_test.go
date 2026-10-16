@@ -1,0 +1,168 @@
+package main
+
+import (
+	"encoding/json"
+	"net/http"
+	"strings"
+	"testing"
+)
+
+func branchesURL(owner string, r Repo) string {
+	return "/repos/" + owner + "/" + r.Name + "/branches"
+}
+
+func errMsg(rec interface{ String() string }) string {
+	var e struct {
+		Error string `json:"error"`
+	}
+	_ = json.Unmarshal([]byte(rec.String()), &e)
+	return e.Error
+}
+
+type branchList struct {
+	Branches []Branch `json:"branches"`
+}
+
+func listBranchesT(t *testing.T, s *Server, owner string, r Repo) []Branch {
+	t.Helper()
+	rec := do(s, http.MethodGet, branchesURL(owner, r), "", nil)
+	if rec.Code != 200 {
+		t.Fatalf("list: %d %s", rec.Code, rec.Body)
+	}
+	var out branchList
+	if err := json.Unmarshal(rec.Body.Bytes(), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Branches
+}
+
+func TestBranchesLifecycle(t *testing.T) {
+	s := testServer(t)
+	owner, c := newUserCookie(t, s)
+	repo := createRepo(t, s, c, `{"name":"r"}`)
+
+	// empty repo
+	rec := do(s, http.MethodGet, branchesURL(owner, repo), "", nil)
+	if rec.Code != 200 || strings.TrimSpace(rec.Body.String()) != `{"branches":[]}` {
+		t.Fatalf("empty list: %d %s", rec.Code, rec.Body)
+	}
+	// any from on an empty repo is 404
+	rec = do(s, http.MethodPost, branchesURL(owner, repo), `{"name":"x","from":"main"}`, c)
+	if rec.Code != 404 || errMsg(rec.Body) != "branch not found" {
+		t.Errorf("from on empty: %d %s", rec.Code, rec.Body)
+	}
+
+	first := mustCommit(t, s, owner, c, repo, commitJSON("main", "", "m", up("a.txt", "a")))
+	rec = do(s, http.MethodPost, branchesURL(owner, repo), `{"name":"zeta","from":"main"}`, c)
+	var b Branch
+	_ = json.Unmarshal(rec.Body.Bytes(), &b)
+	if rec.Code != 201 || b.Name != "zeta" || b.OID != first.OID || b.IsDefault {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	if rec := do(s, http.MethodPost, branchesURL(owner, repo), `{"name":"alpha","from":"zeta"}`, c); rec.Code != 201 {
+		t.Fatalf("create alpha: %d %s", rec.Code, rec.Body)
+	}
+	got := listBranchesT(t, s, owner, repo)
+	if len(got) != 3 || got[0].Name != "alpha" || got[1].Name != "main" || !got[1].IsDefault || got[2].Name != "zeta" {
+		t.Errorf("list = %+v", got)
+	}
+
+	// 409 and 404 from
+	rec = do(s, http.MethodPost, branchesURL(owner, repo), `{"name":"zeta","from":"main"}`, c)
+	if rec.Code != 409 || errMsg(rec.Body) != "branch already exists" {
+		t.Errorf("dup: %d %s", rec.Code, rec.Body)
+	}
+	rec = do(s, http.MethodPost, branchesURL(owner, repo), `{"name":"n","from":"nope"}`, c)
+	if rec.Code != 404 || errMsg(rec.Body) != "branch not found" {
+		t.Errorf("missing from: %d %s", rec.Code, rec.Body)
+	}
+
+	// delete keeps objects
+	n := countObjects(t, s, repo.ID)
+	rec = do(s, http.MethodDelete, branchesURL(owner, repo)+"/zeta", "", c)
+	if rec.Code != 204 {
+		t.Fatalf("delete: %d %s", rec.Code, rec.Body)
+	}
+	for _, b := range listBranchesT(t, s, owner, repo) {
+		if b.Name == "zeta" {
+			t.Error("zeta still listed")
+		}
+	}
+	if countObjects(t, s, repo.ID) != n {
+		t.Error("objects changed by delete")
+	}
+	rec = do(s, http.MethodGet, "/repos/"+owner+"/r/blob/"+first.OID+"/a.txt", "", nil)
+	if rec.Code != 200 {
+		t.Errorf("commit unreadable after delete: %d %s", rec.Code, rec.Body)
+	}
+	rec = do(s, http.MethodDelete, branchesURL(owner, repo)+"/zeta", "", c)
+	if rec.Code != 404 || errMsg(rec.Body) != "branch not found" {
+		t.Errorf("delete missing: %d %s", rec.Code, rec.Body)
+	}
+	rec = do(s, http.MethodDelete, branchesURL(owner, repo)+"/main", "", c)
+	if rec.Code != 400 || errMsg(rec.Body) != "cannot delete the default branch" {
+		t.Errorf("delete default: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestBranchInvalidNames(t *testing.T) {
+	s := testServer(t)
+	owner, c := newUserCookie(t, s)
+	repo := createRepo(t, s, c, `{"name":"r"}`)
+	mustCommit(t, s, owner, c, repo, commitJSON("main", "", "m", up("a", "a")))
+	for _, name := range []string{"", ".", "..", "a/b", "a b", "é", strings.Repeat("a", 101), strings.Repeat("a", 40)} {
+		body, _ := json.Marshal(map[string]string{"name": name, "from": "main"})
+		rec := do(s, http.MethodPost, branchesURL(owner, repo), string(body), c)
+		if rec.Code != 400 || errMsg(rec.Body) != "invalid branch name" {
+			t.Errorf("name %q: %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	rec := do(s, http.MethodPost, branchesURL(owner, repo), `{"name":"x","from":"main","extra":1}`, c)
+	if rec.Code != 400 || errMsg(rec.Body) != "invalid JSON body" {
+		t.Errorf("unknown field: %d %s", rec.Code, rec.Body)
+	}
+	// 100 chars is fine
+	body, _ := json.Marshal(map[string]string{"name": strings.Repeat("a", 100), "from": "main"})
+	if rec := do(s, http.MethodPost, branchesURL(owner, repo), string(body), c); rec.Code != 201 {
+		t.Errorf("100 chars: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestBranchWriteAuth(t *testing.T) {
+	s := testServer(t)
+	owner, c := newUserCookie(t, s)
+	_, other := newUserCookie(t, s)
+	repo := createRepo(t, s, c, `{"name":"r"}`)
+	mustCommit(t, s, owner, c, repo, commitJSON("main", "", "m", up("a", "a")))
+	do(s, http.MethodPost, branchesURL(owner, repo), `{"name":"f","from":"main"}`, c)
+	u := branchesURL(owner, repo)
+
+	tests := []struct {
+		name, method, url, body string
+		cookie                  *http.Cookie
+		code                    int
+	}{
+		{"create no cookie", "POST", u, `{"name":"x","from":"main"}`, nil, 401},
+		{"delete no cookie", "DELETE", u + "/f", "", nil, 401},
+		{"create non-owner", "POST", u, `{"name":"x","from":"main"}`, other, 403},
+		{"create non-owner bad name", "POST", u, `{"name":"a/b","from":"main"}`, other, 403},
+		{"create non-owner bad json", "POST", u, `nope`, other, 403},
+		{"create non-owner missing from", "POST", u, `{"name":"x","from":"zz"}`, other, 404},
+		{"delete non-owner", "DELETE", u + "/f", "", other, 403},
+		{"delete non-owner default", "DELETE", u + "/main", "", other, 403},
+		{"delete non-owner missing", "DELETE", u + "/zz", "", other, 404},
+		{"create bad json owner", "POST", u, `nope`, c, 400},
+		{"create unknown repo", "POST", "/repos/" + owner + "/zz/branches", `{}`, c, 404},
+		{"delete unknown repo", "DELETE", "/repos/" + owner + "/zz/branches/a", "", c, 404},
+		{"list unknown repo", "GET", "/repos/" + owner + "/zz/branches", "", nil, 404},
+	}
+	for _, tc := range tests {
+		rec := do(s, tc.method, tc.url, tc.body, tc.cookie)
+		if rec.Code != tc.code {
+			t.Errorf("%s: %d %s, want %d", tc.name, rec.Code, rec.Body, tc.code)
+		}
+	}
+	if len(listBranchesT(t, s, owner, repo)) != 2 {
+		t.Error("non-owner writes changed branches")
+	}
+}

@@ -56,6 +56,22 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/repos/{owner}/{repo}/commits", methods{
 		http.MethodPost: s.requireAuth(s.createCommit),
 	}.serve)
+	mux.HandleFunc("/repos/{owner}/{repo}/branches", methods{
+		http.MethodGet:  s.listBranches,
+		http.MethodPost: s.requireAuth(s.createBranch),
+	}.serve)
+	mux.HandleFunc("/repos/{owner}/{repo}/branches/{branch}", methods{
+		http.MethodDelete: s.requireAuth(s.deleteBranch),
+	}.serve)
+	for _, kind := range []struct {
+		name string
+		get  http.HandlerFunc
+	}{{"tree", s.getTree}, {"blob", s.getBlob}} {
+		h := methods{http.MethodGet: kind.get}.serve
+		base := "/repos/{owner}/{repo}/" + kind.name + "/{ref}"
+		mux.HandleFunc(base, h)
+		mux.HandleFunc(base+"/{path...}", h)
+	}
 	mux.HandleFunc("/", notFound)
 }
 
