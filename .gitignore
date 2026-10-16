@@ -7,3 +7,4 @@ dist/
 coverage/
 backend/backend
 *.log
+.claude/
