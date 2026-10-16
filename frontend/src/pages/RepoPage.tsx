@@ -6,6 +6,7 @@ import { DeleteRepoDialog } from "@/components/DeleteRepoDialog"
 import { FileTree } from "@/components/FileTree"
 import { LatestCommitBar } from "@/components/LatestCommitBar"
 import { ReadmeCard } from "@/components/ReadmeCard"
+import { RenameRepoDialog } from "@/components/RenameRepoDialog"
 import { ErrorBlock,LoadingBlock, NotFoundBlock } from "@/components/StateViews"
 import { Button } from "@/components/ui/button"
 import { ApiError } from "@/lib/api"
@@ -62,12 +63,20 @@ export function RepoPage() {
         {repo.description && <p className="text-sm text-muted-foreground">{repo.description}</p>}
       </div>
       {owns && (
-        <DeleteRepoDialog
-          owner={owner}
-          repo={name}
-          onUnauthorized={expireSession}
-          onDeleted={() => navigate("/")}
-        />
+        <div className="flex gap-2">
+          <RenameRepoDialog
+            owner={owner}
+            repo={name}
+            onUnauthorized={expireSession}
+            onRenamed={(n) => navigate(`/${encodeURIComponent(owner)}/${encodeURIComponent(n)}`, { replace: true })}
+          />
+          <DeleteRepoDialog
+            owner={owner}
+            repo={name}
+            onUnauthorized={expireSession}
+            onDeleted={() => navigate("/")}
+          />
+        </div>
       )}
     </div>
   )

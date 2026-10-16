@@ -191,7 +191,7 @@ func TestGetRepo(t *testing.T) {
 	for _, path := range []string{"/repos/" + owner + "/missing", "/repos/nobody-here/MixedCase"} {
 		wantError(t, do(s, http.MethodGet, path, "", nil), 404, "repository not found")
 	}
-	if rec := do(s, http.MethodPut, "/repos/"+owner+"/MixedCase", "", c); rec.Code != 405 || rec.Header().Get("Allow") != "DELETE, GET" {
+	if rec := do(s, http.MethodPut, "/repos/"+owner+"/MixedCase", "", c); rec.Code != 405 || rec.Header().Get("Allow") != "DELETE, GET, PATCH" {
 		t.Errorf("PUT: %d allow %q", rec.Code, rec.Header().Get("Allow"))
 	}
 	if rec := do(s, http.MethodDelete, "/repos", "", c); rec.Code != 405 {

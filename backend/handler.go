@@ -51,6 +51,7 @@ func (s *Server) routes(mux *http.ServeMux) {
 	}.serve)
 	mux.HandleFunc("/repos/{owner}/{repo}", methods{
 		http.MethodGet:    s.getRepo,
+		http.MethodPatch:  s.requireAuth(s.renameRepo),
 		http.MethodDelete: s.requireAuth(s.deleteRepo),
 	}.serve)
 	mux.HandleFunc("/repos/{owner}/{repo}/commits", methods{
