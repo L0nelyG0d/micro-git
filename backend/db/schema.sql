@@ -34,3 +34,12 @@ CREATE TABLE IF NOT EXISTS refs (
     oid     char(40) NOT NULL,
     PRIMARY KEY (repo_id, name)
 );
+
+-- A ref can only point at an object that exists in the same repo.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'refs_object_fk') THEN
+        ALTER TABLE refs ADD CONSTRAINT refs_object_fk
+            FOREIGN KEY (repo_id, oid) REFERENCES objects (repo_id, oid);
+    END IF;
+END $$;
