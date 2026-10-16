@@ -21,3 +21,13 @@ RESOLVED 2026-10-16: questions 3, 4, 5, 6, 7 confirmed as defaults. #19 closed a
 - [x] (#26) Real markdown renderer with links/images (needs a package, none approved)? Default: safe in-repo subset renderer, no links/images.
 
 RESOLVED 2026-10-16: user approved all four stretch defaults (no rename redirect, 400 already up to date, query-param compare, safe-subset README).
+
+## Next-round analysis (#29-#36), stashed 2026-10-16 - all default "no, keep as is"
+- [ ] Logout does not revoke the JWT (valid 7 days). Revoking needs a token_version column or sessions table. Default: no; documented as a known limit (#36).
+- [ ] Rate limiting login/register. Default: no (bcrypt makes floods costly); add an in-memory limiter only if the demo is public.
+- [ ] Denormalize parents into a commits table/column. Default: no; the recursive CTE in #29 is enough.
+- [ ] Paginate GET /repos or add per_page to the commit list (contract change). Default: no.
+- [ ] Garbage-collect objects after branch/repo delete. Default: no; documented.
+- [ ] Add CI (GitHub Actions) for go test / npm test (needs a DB secret). Default: no.
+- [ ] Default COOKIE_SECURE to true / require TLS. Default: no (local-only).
+- [ ] Real merges, tags, abbreviated-oid refs. Default: stay out of scope.
