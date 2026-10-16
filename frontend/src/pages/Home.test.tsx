@@ -95,7 +95,7 @@ it("shows the empty state pointing at New repository when logged in", async () =
   routes["GET /api/repos"] = () => json(200, { repos: [] })
   renderHome()
   expect(await screen.findByText(/no repositories yet.*new repository/i)).toBeInTheDocument()
-  expect(screen.getByRole("button", { name: "New repository" })).toBeInTheDocument()
+  expect(await screen.findByRole("button", { name: "New repository" })).toBeInTheDocument()
 })
 
 it("shows an error with Retry for a 500 and reloads on retry", async () => {
@@ -114,7 +114,7 @@ it("shows an error with Retry for a network error", async () => {
   routes["GET /api/repos"] = () => new TypeError("Failed to fetch")
   renderHome()
   expect(await screen.findByRole("alert")).toHaveTextContent(/could not reach the server/i)
-  expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+  expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument()
 })
 
 it("creates a repo: toast, form closed, list updated without reload", async () => {
