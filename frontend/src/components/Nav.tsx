@@ -48,8 +48,10 @@ export function Nav() {
             <Skeleton aria-label="Loading session" role="status" className="h-6 w-28" />
           ) : user ? (
             <>
-              <span className="text-muted-foreground">{user.username}</span>
-              <Button variant="outline" size="sm" onClick={onLogout} disabled={busy}>
+              <span title={user.username} className="max-w-24 truncate text-muted-foreground">
+                {user.username}
+              </span>
+              <Button variant="outline" size="sm" className="shrink-0" onClick={onLogout} disabled={busy}>
                 Log out
               </Button>
             </>
