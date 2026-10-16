@@ -4,10 +4,12 @@ Decisions that need the user and were not made while they were away. Work contin
 
 Format: `- [ ] (#issue) question - default used - date`
 
-- [ ] (#3/#9) Should `refs(repo_id, oid)` get a foreign key to `objects`? Data-model change. Default: no FK, integrity enforced in the app (#9). - 2026-10-15
-- [ ] (#18/#22) How is `/api` served outside the Vite dev proxy (deployment)? Stack decision. Default: local-only, documented in the README; tracked in #22. - 2026-10-15
-- [ ] (#12) A commit that only adds or removes a final newline: `modified` with no hunks acceptable? Default: yes. - 2026-10-15
-- [ ] (#15/#19/#20) Branch create and repo delete UI placed inside #15; branch delete UI deferred to #20; #19 overlaps #15. Default: as groomed. - 2026-10-15
-- [ ] (#21) Stretch features (merge, compare, README render, rename) have an issue but are not part of the 18 tasks. Default: skipped unless time remains. - 2026-10-15
-- [ ] (#13) `react-hook-form` (shadcn `Form`) is not in the approved packages list. Default: plain controlled inputs with `Label`/`Input`; swap to `Form` if approved. - 2026-10-15
-- [ ] (infra) Neon test branch compute is 0.25 CU (max) and auto-suspends; parallel test suites stall and cold starts fail. Raising max CU or disabling suspend costs more. Default: unchanged, suites run serially (`go test -p 1`). - 2026-10-16
+- [x] (#3/#9) Should `refs(repo_id, oid)` get a foreign key to `objects`? Data-model change. RESOLVED 2026-10-16: user says use the FK if it fits; done in issue #23. - 2026-10-15
+- [x] (#18/#22) How is `/api` served outside the Vite dev proxy (deployment)? Stack decision. RESOLVED 2026-10-16: local-only is fine; #22 closed as not planned. - 2026-10-15
+- [x] (#12) A commit that only adds or removes a final newline: `modified` with no hunks acceptable? Default: yes. - 2026-10-15
+- [x] (#15/#19/#20) Branch create and repo delete UI placed inside #15; branch delete UI deferred to #20; #19 overlaps #15. Default: as groomed. - 2026-10-15
+- [x] (#21) Stretch features (merge, compare, README render, rename) have an issue but are not part of the 18 tasks. Default: skipped unless time remains. - 2026-10-15
+- [x] (#13) `react-hook-form` (shadcn `Form`) is not in the approved packages list. Default: plain controlled inputs with `Label`/`Input`; swap to `Form` if approved. - 2026-10-15
+- [x] (infra) Neon test branch compute is 0.25 CU (max) and auto-suspends; parallel test suites stall and cold starts fail. Raising max CU or disabling suspend costs more. Default: unchanged, suites run serially (`go test -p 1`). - 2026-10-16
+
+RESOLVED 2026-10-16: questions 3, 4, 5, 6, 7 confirmed as defaults. #19 closed as duplicate of #15/#20.

@@ -17,10 +17,10 @@ Rules
 
 Git
 
-- Work directly on `main`; no branch or pull request per issue
+- One branch per issue: `issue-<N>-<short-slug>`, created from an up-to-date `main`. The engineer commits only on that branch; QA checks that same branch; the orchestrator merges it into `main` only after QA PASS (see `_docs/process.md`). Nobody commits to `main` directly except the orchestrator's merges and doc-only housekeeping
 - Small, regular commits that each leave the tests passing
 - Short imperative messages that reference the issue (`Refs #4`); `Closes #4` on the last commit of the issue
-- Push only when the user asks
+- Push only when the user asks (the user allowed pushing `main` after the 2026-10-16 review; ask again for later pushes unless they say otherwise)
 
 Documents - look these up when relevant, don't load them all up front
 
