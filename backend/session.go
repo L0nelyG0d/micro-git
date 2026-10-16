@@ -115,7 +115,7 @@ func (s *Server) setSessionCookie(w http.ResponseWriter, value string, maxAge in
 }
 
 // dummyHash makes an unknown user cost the same bcrypt time as a wrong password.
-var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy password"), bcrypt.DefaultCost)
+var dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy password"), bcryptCost)
 
 // login handles POST /auth/login.
 func (s *Server) login(w http.ResponseWriter, r *http.Request) {

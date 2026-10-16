@@ -20,6 +20,10 @@ type userResponse struct {
 	Username string `json:"username"`
 }
 
+// bcryptCost is the work factor for password hashes. It stays at
+// bcrypt.DefaultCost; only the tests' TestMain lowers it.
+var bcryptCost = bcrypt.DefaultCost
+
 // register handles POST /auth/register. See plan.md "API contracts > Auth".
 func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 	var req credentials
@@ -39,7 +43,7 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcrypt.DefaultCost)
+	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), bcryptCost)
 	if err != nil {
 		internalError(w, err)
 		return

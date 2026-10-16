@@ -166,6 +166,7 @@ func newHistFixture(t *testing.T, withLong bool) *histFixture {
 		t.Fatal(err)
 	}
 	parent := ""
+	var bodies [][]byte
 	for i := 1; i <= 120; i++ {
 		com := gitobj.Commit{Tree: treeOID, Message: fmt.Sprintf("commit %d", i),
 			Author:    gitobj.Signature{Name: owner, Email: owner + "@micro-git.local", Unix: t0.Unix() + int64(i)},
@@ -177,15 +178,20 @@ func newHistFixture(t *testing.T, withLong bool) *histFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if parent, err = st.PutObject(gitobj.TypeCommit, body); err != nil {
-			t.Fatal(err)
-		}
+		parent = gitobj.Hash(gitobj.TypeCommit, body)
 		f.long = append(f.long, parent)
-		if i == 50 {
-			if err := rs.CreateRef(t.Context(), "fifty", parent); err != nil {
-				t.Fatal(err)
-			}
-		}
+		bodies = append(bodies, body)
+	}
+	// One round trip for all 120 commits instead of 120 PutObject calls.
+	_, err = s.DB.Exec(t.Context(),
+		`INSERT INTO objects (repo_id, oid, type, data)
+		 SELECT $1, o, 'commit', d FROM unnest($2::text[], $3::bytea[]) AS u(o, d)
+		 ON CONFLICT (repo_id, oid) DO NOTHING`, lr.ID, f.long, bodies)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rs.CreateRef(t.Context(), "fifty", f.long[49]); err != nil {
+		t.Fatal(err)
 	}
 	if err := rs.CreateRef(t.Context(), "main", parent); err != nil {
 		t.Fatal(err)
