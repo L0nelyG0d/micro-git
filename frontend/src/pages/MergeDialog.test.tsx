@@ -219,3 +219,13 @@ it("long branch names are clipped inside the dialog and keep the full name as a 
   expect(from.className).toContain("min-w-0")
   expect(within(from).getByText(long).className).toContain("truncate")
 })
+
+it("dialog title and description wrap long unbroken strings", async () => {
+  setup()
+  renderAt("/alice/hello")
+  const dlg = await openDialog()
+  for (const el of [within(dlg).getByText("Merge branches"), within(dlg).getByText(/^Fast-forward only/)]) {
+    expect(el.className).toContain("min-w-0")
+    expect(el.className).toContain("[overflow-wrap:anywhere]")
+  }
+})
