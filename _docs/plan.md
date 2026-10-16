@@ -231,6 +231,32 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 - `409` `branch tip has moved` with the extra field `"current_tip": "<40 hex or empty string if the branch does not exist>"`
 - `413` `request too large`
 
+### Stretch endpoints (issues #24, #25, #27; #26 has no API)
+
+`POST /repos/{owner}/{repo}/merge` (owner) - fast-forward only (#24)
+- Request: `{"base": "main", "head": "feature"}`; both are branch names. `base` is moved to `head`'s tip
+- `200` `{"branch": "main", "oid": "<new tip = head tip>", "previous_oid": "<old base tip>"}`. Only the `base` ref changes, no objects are written
+- `400` `invalid branch name` · `cannot merge a branch into itself` · `already up to date` (head tip equals or is an ancestor of base tip) · `invalid JSON body`
+- `401` · `403` · `404` `repository not found` · `branch not found` (either branch)
+- `409` `not a fast-forward` (base tip is not an ancestor of head tip) · `branch tip has moved` (compare-and-swap on the base ref lost a race; extra field `"current_tip"` as in commits)
+
+`GET /repos/{owner}/{repo}/compare?base=main&head=feature` - no auth (#25)
+- `base` and `head` are a branch name or a full commit oid, resolved like `ref`
+- `200`
+```
+{"base": "main", "head": "feature", "base_commit": "<40 hex>", "head_commit": "<40 hex>",
+ "files": [<same File shape as in commit detail>]}
+```
+  The diff is the `base` tip tree against the `head` tip tree (two tips, no merge base), same rules as commit detail (status, hunks, 3 lines of context, `truncated`, sorted by path). Identical tips give `files: []`
+- `400` `base and head are required` · `404` `repository not found` · `ref not found` (either ref, includes an empty repo)
+
+`PATCH /repos/{owner}/{repo}` (owner) - rename (#27)
+- Request: `{"name": "new-name"}` (the only accepted field)
+- `200` Repo with the new `name` (same `id`); the old name stops resolving (`404 repository not found`), no redirect
+- `400` `invalid repository name` · `invalid JSON body`
+- `401` · `403` · `404` `repository not found`
+- `409` `repository already exists` (another repo of this owner has the name, case-insensitive). A case-only change of the repo's own name, or the same name, is `200`
+
 ## Frontend
 
 Styling follows `_docs/design-system.md`.

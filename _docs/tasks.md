@@ -73,3 +73,6 @@ Description: Editor page with a textarea, path field for new files, commit messa
 ## 18. README and end-to-end check
 Goal: Someone can run the project from the README and follow a demo script.
 Description: Root `README.md` with setup (env vars, schema, run backend and frontend), a short architecture note on the git object model, and a demo script. Run the whole flow once against the test branch and record results.
+
+## 21. Stretch features (split)
+Split into #24 fast-forward merge, #25 compare two branches, #26 render README.md, #27 rename repository. API contracts: `plan.md` > API contracts > "Stretch endpoints".
