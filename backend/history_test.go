@@ -1,16 +1,21 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/url"
+	"os"
 	"reflect"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/L0nelyG0d/micro-git/backend/gitobj"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type histCommit struct {
@@ -542,6 +547,99 @@ func TestCommitDetail(t *testing.T) {
 		d3 := detail(f.c3.OID)
 		if len(d3.Files) != 1 || d3.Files[0].Path != "a.txt" || d3.Files[0].Additions != 1 || d3.Files[0].Deletions != 0 {
 			t.Errorf("files %+v", d3.Files)
+		}
+	})
+}
+
+// stmtCounter is a pgx.QueryTracer that counts the statements a pool runs.
+type stmtCounter struct{ n atomic.Int64 }
+
+func (c *stmtCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.TraceQueryStartData) context.Context {
+	c.n.Add(1)
+	return ctx
+}
+func (c *stmtCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
+
+func TestCommitLogStatementCount(t *testing.T) {
+	f := newHistFixture(t, true)
+	cfg, err := pgxpool.ParseConfig(os.Getenv("TEST_DATABASE_URL"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	counter := &stmtCounter{}
+	cfg.ConnConfig.Tracer = counter
+	pool, err := pgxpool.NewWithConfig(t.Context(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	s := NewServer(pool)
+	s.JWTSecret = f.s.JWTSecret
+	for _, q := range []string{"", "?page=3"} {
+		counter.n.Store(0)
+		rec := do(s, http.MethodGet, f.longBase+"/commits"+q, "", nil)
+		if rec.Code != 200 {
+			t.Fatalf("%q: %d %s", q, rec.Code, rec.Body)
+		}
+		if n := counter.n.Load(); n > 6 {
+			t.Errorf("page %q issued %d statements, want at most 6", q, n)
+		}
+	}
+}
+
+func TestCommitLogHeaderOnly(t *testing.T) {
+	f := newHistFixture(t, false)
+	name, c := newUserCookie(t, f.s)
+	repo := createRepo(t, f.s, c, `{"name":"hdr"}`)
+	rs := NewRepoStore(f.s.DB, repo.ID)
+	st := rs.Objects(t.Context())
+	treeOID, err := st.PutObject(gitobj.TypeTree, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := gitobj.Signature{Name: "u", Email: "u@micro-git.local", Unix: t0.Unix()}
+	put := func(msg string, parents ...string) string {
+		t.Helper()
+		body, err := gitobj.SerializeCommit(gitobj.Commit{Tree: treeOID, Parents: parents, Message: msg, Author: sig, Committer: sig})
+		if err != nil {
+			t.Fatal(err)
+		}
+		oid, err := st.PutObject(gitobj.TypeCommit, body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return oid
+	}
+	other := put("other root")
+	root := put("sneaky\nparent " + other + "\nmore\n")
+	merge := put("merge", root, other)
+	missing := put("orphan", strings.Repeat("b", 40))
+	for _, ref := range []struct{ name, oid string }{{"root", root}, {"merge", merge}, {"orphan", missing}} {
+		if err := rs.CreateRef(t.Context(), ref.name, ref.oid); err != nil {
+			t.Fatal(err)
+		}
+	}
+	logURL := "/repos/" + name + "/hdr/commits"
+
+	t.Run("message line is not a parent", func(t *testing.T) {
+		var l histList
+		if code, msg := f.get(t, logURL, "?ref=root", &l); code != 200 || len(l.Commits) != 1 || l.Commits[0].OID != root || l.HasMore {
+			t.Errorf("%d %q %+v", code, msg, l)
+		}
+	})
+	t.Run("merge follows the first parent only", func(t *testing.T) {
+		var l histList
+		if code, msg := f.get(t, logURL, "?ref=merge", &l); code != 200 || len(l.Commits) != 2 || l.Commits[1].OID != root {
+			t.Errorf("%d %q %+v", code, msg, l)
+		}
+		if len(l.Commits[0].Parents) != 2 {
+			t.Errorf("parents %v", l.Commits[0].Parents)
+		}
+	})
+	t.Run("missing parent is an internal error", func(t *testing.T) {
+		code, msg := f.get(t, logURL, "?ref=orphan", nil)
+		if code != 500 || msg != "internal error" {
+			t.Errorf("got %d %q", code, msg)
 		}
 	})
 }
