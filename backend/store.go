@@ -35,7 +35,7 @@ type Ref struct {
 	OID  string
 }
 
-// RepoStore gives access to one repository's objects and refs. Issues #10-#12
+// RepoStore gives access to one repository's objects and refs. Handlers
 // build it with NewRepoStore(s.DB, repo.ID) (or a pgx.Tx). It holds no state
 // besides the connection and the repo id, so it is cheap to create per request.
 type RepoStore struct {

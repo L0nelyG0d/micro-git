@@ -65,6 +65,9 @@ Routing uses `net/http` patterns. Errors are JSON `{"error": "..."}`.
 | `GET /repos/{owner}/{repo}/commits/{oid}` | none | changed files + diff hunks against the first parent |
 | `GET /repos/{owner}/{repo}/tree/{ref}/{path...}` | none | directory entries; `ref` is a branch name or a commit oid |
 | `GET /repos/{owner}/{repo}/blob/{ref}/{path...}` | none | file content and size |
+| `PATCH /repos/{owner}/{repo}` | owner | `{name}`: rename, no redirect from the old name (see "Stretch endpoints") |
+| `POST /repos/{owner}/{repo}/merge` | owner | `{base, head}`: fast-forward only (see "Stretch endpoints") |
+| `GET /repos/{owner}/{repo}/compare?base=&head=` | none | file diff of two branch tips (see "Stretch endpoints") |
 | `POST /repos/{owner}/{repo}/commits` | owner | `{branch, expected_tip, message, changes: [{path, content} or {path, delete: true}]}`; `409` if the tip moved |
 
 ## Rules
@@ -257,6 +260,20 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 - `401` · `403` · `404` `repository not found`
 - `409` `repository already exists` (another repo of this owner has the name, case-insensitive). A case-only change of the repo's own name, or the same name, is `200`
 
+## Configuration and limits
+
+| env variable | required | notes |
+|---|---|---|
+| `DATABASE_URL` | yes | PostgreSQL connection string |
+| `JWT_SECRET` | yes | HMAC key for the session JWT; at least 32 bytes, otherwise the process refuses to start |
+| `COOKIE_SECURE` | no | exactly `true` adds `Secure` to the session cookie |
+| `PORT` | no | 1 to 65535, default `8080` |
+| `TEST_DATABASE_URL` | for tests | separate database; DB tests are skipped without it |
+
+Process: `http.Server` with read-header, read, write and idle timeouts, graceful shutdown on SIGINT / SIGTERM, `X-Content-Type-Options: nosniff` on every response and `Cache-Control: no-store` on `/auth/*`.
+
+Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid for its 7 days; objects of deleted branches are never garbage-collected (they go with the repository); no rate limiting; `GET /repos` is not paginated; local only (Vite dev server proxies `/api`, no production hosting, issue #22 closed as not planned).
+
 ## Frontend
 
 Styling follows `_docs/design-system.md`.
@@ -265,14 +282,17 @@ Styling follows `_docs/design-system.md`.
 |---|---|
 | `/login`, `/register` | auth forms |
 | `/` | repository list and "New repository" |
-| `/:owner/:repo` | file tree, branch switcher, latest commit bar |
+| `/:owner/:repo` | file tree, branch switcher, latest commit bar, rendered root `README.md`, Compare link |
+| `/:owner/:repo/tree/:ref/*` | the same repository page for a branch or commit `ref` and a subdirectory path |
 | `/:owner/:repo/blob/:ref/*` | file viewer; "Edit" for the owner |
 | `/:owner/:repo/edit/:ref/*` | editor and commit message form for an existing file |
 | `/:owner/:repo/new/:ref` | editor for a new file (path field); linked from an "Add file" button on the repo page (owner only) |
 | `/:owner/:repo/commits/:ref` | history |
 | `/:owner/:repo/commit/:oid` | commit detail with diff |
+| `/:owner/:repo/compare?base=&head=` | compare two branches (file diff of the two tips), readable by anyone |
+| `*` | not found page |
 
-"Edit", "Add file" and "Delete file" are shown only to the owner and only when `ref` is a branch name (a commit oid is read-only). The owner is detected by comparing `GET /auth/me` `username` with the `:owner` route param. Every page has loading, empty and error states. Oids show as 7 characters. Dates are `DD.MM.YYYY HH:mm`.
+"Edit", "Add file" and "Delete file" are shown only to the owner and only when `ref` is a branch name (a commit oid is read-only). The owner is detected by comparing `GET /auth/me` `username` with the `:owner` route param. Owner-only controls on the repository page: Rename repository, Delete repository, Create branch, Delete branch and Merge (Merge only with at least two branches); Compare is available to everyone. After a commit the editor opens the commit page of the new commit (not the repository page). Every page has loading, empty and error states. Oids show as 7 characters. Dates are `DD.MM.YYYY HH:mm`.
 
 ## One-week schedule
 
