@@ -55,7 +55,7 @@ it("shows Log in and Register when logged out, and /auth/me 401 is not an error"
   routes["GET /api/auth/me"] = loggedOut
   renderAt("/")
   expect(await screen.findByRole("link", { name: "Log in" })).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "Register" })).toBeInTheDocument()
+  expect(await screen.findByRole("link", { name: "Register" })).toBeInTheDocument()
   expect(screen.queryByText(/session unavailable/i)).not.toBeInTheDocument()
   expect(localStorage.length + sessionStorage.length).toBe(0)
 })
@@ -66,14 +66,14 @@ it("shows a loading state, then the username and Log out when logged in", async 
   expect(screen.getByRole("status", { name: "Loading session" })).toBeInTheDocument()
   expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument()
   expect(await screen.findByText("alice")).toBeInTheDocument()
-  expect(screen.getByRole("button", { name: "Log out" })).toBeInTheDocument()
+  expect(await screen.findByRole("button", { name: "Log out" })).toBeInTheDocument()
 })
 
 it("shows a non-blocking indication on a 500 from /auth/me", async () => {
   routes["GET /api/auth/me"] = () => json(500, { error: "internal error" })
   renderAt("/")
   expect(await screen.findByText(/session unavailable/i)).toBeInTheDocument()
-  expect(screen.getByRole("heading", { name: "Repositories" })).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
 })
 
 it("shows the indication on a network error", async () => {
@@ -95,7 +95,7 @@ it("logs in and goes back to the page the user came from", async () => {
   await userEvent.type(screen.getByLabelText("Password"), "secret123")
   await userEvent.click(screen.getByRole("button", { name: "Log in" }))
   expect(await screen.findByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
-  expect(within(screen.getByRole("navigation")).getByText("alice")).toBeInTheDocument()
+  expect(await within(screen.getByRole("navigation")).findByText("alice")).toBeInTheDocument()
 })
 
 it("shows the login error inline, clears the password and re-enables submit", async () => {
@@ -107,8 +107,8 @@ it("shows the login error inline, clears the password and re-enables submit", as
   await userEvent.type(screen.getByLabelText("Password"), "wrongpass")
   await userEvent.click(screen.getByRole("button", { name: "Log in" }))
   expect(await screen.findByRole("alert")).toHaveTextContent("invalid username or password")
-  expect(screen.getByLabelText("Password")).toHaveValue("")
-  expect(screen.getByRole("button", { name: "Log in" })).toBeEnabled()
+  expect(await screen.findByLabelText("Password")).toHaveValue("")
+  expect(await screen.findByRole("button", { name: "Log in" })).toBeEnabled()
 })
 
 it("disables submit while the request is in flight", async () => {
@@ -142,7 +142,7 @@ it("registers then logs in, in that order", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Register" }))
   expect(await screen.findByText("alice")).toBeInTheDocument()
   expect(calls.filter((c) => c.startsWith("POST"))).toEqual(["POST /api/auth/register", "POST /api/auth/login"])
-  expect(screen.getByRole("heading", { name: "Repositories" })).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
 })
 
 it("shows a 409 on register inline", async () => {
@@ -166,7 +166,7 @@ it("sends the user to /login with a message if login after register fails", asyn
   await userEvent.type(screen.getByLabelText("Password"), "secret123")
   await userEvent.click(screen.getByRole("button", { name: "Register" }))
   expect(await screen.findByRole("heading", { name: "Log in" })).toBeInTheDocument()
-  expect(screen.getByRole("status", { name: "" })).toHaveTextContent(/account was created/i)
+  expect(await screen.findByRole("status", { name: "" })).toHaveTextContent(/account was created/i)
 })
 
 it("redirects a logged-in user from /login and /register to /", async () => {
@@ -182,7 +182,7 @@ it("logs out, clears the session and goes to /", async () => {
   renderAt("/alice/hello")
   await userEvent.click(await screen.findByRole("button", { name: "Log out" }))
   expect(await screen.findByRole("link", { name: "Log in" })).toBeInTheDocument()
-  expect(screen.getByRole("heading", { name: "Repositories" })).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
 })
 
 it("stays logged in and shows an error when logout fails", async () => {
@@ -192,13 +192,13 @@ it("stays logged in and shows an error when logout fails", async () => {
   renderAt("/alice/hello")
   await userEvent.click(await screen.findByRole("button", { name: "Log out" }))
   expect(await screen.findByText(/could not log out/i)).toBeInTheDocument()
-  expect(within(screen.getByRole("navigation")).getByText("alice")).toBeInTheDocument()
-  expect(screen.getByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
+  expect(await within(screen.getByRole("navigation")).findByText("alice")).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
 })
 
 it("shows page not found with a link home for unknown URLs", async () => {
   routes["GET /api/auth/me"] = loggedOut
   renderAt("/nope/nope/nope/nope/nope/nope")
   expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "Go home" })).toHaveAttribute("href", "/")
+  expect(await screen.findByRole("link", { name: "Go home" })).toHaveAttribute("href", "/")
 })

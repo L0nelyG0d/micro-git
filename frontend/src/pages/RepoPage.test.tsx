@@ -177,8 +177,8 @@ it("owner on a branch sees Add file, Create branch and Delete repository", async
     "href",
     "/alice/hello/new/main",
   )
-  expect(screen.getByRole("button", { name: "Create branch" })).toBeInTheDocument()
-  expect(screen.getByRole("button", { name: "Delete repository" })).toBeInTheDocument()
+  expect(await screen.findByRole("button", { name: "Create branch" })).toBeInTheDocument()
+  expect(await screen.findByRole("button", { name: "Delete repository" })).toBeInTheDocument()
 })
 
 it.each([["bob"], [null]] as const)("non-owner (%s) sees no write actions", async (u) => {

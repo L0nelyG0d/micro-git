@@ -79,7 +79,7 @@ it("shows the README rendered below the file tree, markup as text", async () => 
   expect(await within(card).findByRole("heading", { name: "Hello" })).toBeInTheDocument()
   expect(card).toHaveTextContent("<script>alert(1)</script>")
   expect(card.querySelector("script")).toBeNull()
-  expect(screen.getByRole("table", { name: "Files" }).compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+  expect((await screen.findByRole("table", { name: "Files" })).compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })
 
 it("shows a skeleton while the README loads", async () => {
@@ -113,7 +113,7 @@ it("failed README fetch shows a note with retry and keeps the tree", async () =>
   renderAt("/alice/hello")
   const card = await screen.findByTestId("readme")
   expect(await within(card).findByRole("alert")).toHaveTextContent("Could not load the README")
-  expect(screen.getByRole("table", { name: "Files" })).toBeInTheDocument()
+  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
   fail = false
   await userEvent.click(within(card).getByRole("button", { name: "Retry" }))
   expect(await within(card).findByText("back")).toBeInTheDocument()
