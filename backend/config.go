@@ -19,7 +19,7 @@ type Config struct {
 }
 
 // LoadConfig reads settings through getenv (os.Getenv in production) so tests
-// can pass a fake. Later tasks add their own fields (JWT_SECRET, COOKIE_SECURE).
+// can pass a fake.
 func LoadConfig(getenv func(string) string) (Config, error) {
 	port := getenv("PORT")
 	if port == "" {

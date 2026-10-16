@@ -10,8 +10,8 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// Server holds the dependencies handlers share. Later tasks add fields here
-// (JWT secret, cookie settings) and register routes in routes().
+// Server holds the dependencies handlers share. Routes are registered in
+// routes().
 type Server struct {
 	DB           *pgxpool.Pool
 	Now          func() time.Time // injected clock
