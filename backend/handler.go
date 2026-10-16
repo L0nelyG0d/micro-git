@@ -54,7 +54,11 @@ func (s *Server) routes(mux *http.ServeMux) {
 		http.MethodDelete: s.requireAuth(s.deleteRepo),
 	}.serve)
 	mux.HandleFunc("/repos/{owner}/{repo}/commits", methods{
+		http.MethodGet:  s.listCommits,
 		http.MethodPost: s.requireAuth(s.createCommit),
+	}.serve)
+	mux.HandleFunc("/repos/{owner}/{repo}/commits/{oid}", methods{
+		http.MethodGet: s.getCommit,
 	}.serve)
 	mux.HandleFunc("/repos/{owner}/{repo}/branches", methods{
 		http.MethodGet:  s.listBranches,
