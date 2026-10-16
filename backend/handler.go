@@ -60,6 +60,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/repos/{owner}/{repo}/commits/{oid}", methods{
 		http.MethodGet: s.getCommit,
 	}.serve)
+	mux.HandleFunc("/repos/{owner}/{repo}/compare", methods{
+		http.MethodGet: s.compare,
+	}.serve)
 	mux.HandleFunc("/repos/{owner}/{repo}/branches", methods{
 		http.MethodGet:  s.listBranches,
 		http.MethodPost: s.requireAuth(s.createBranch),

@@ -3,6 +3,7 @@ import { Toaster } from "sonner"
 import { AuthProvider } from "@/auth/AuthContext"
 import { Nav } from "@/components/Nav"
 import { BlobPage } from "@/pages/BlobPage"
+import { ComparePage } from "@/pages/ComparePage"
 import { EditorPage } from "@/pages/EditorPage"
 import { CommitPage } from "@/pages/CommitPage"
 import { HistoryPage } from "@/pages/HistoryPage"
@@ -29,7 +30,8 @@ export default function App() {
           <Route path="/:owner/:repo/new/:ref" element={<EditorPage mode="new" />} />
           <Route path="/:owner/:repo/commits/:ref" element={<HistoryPage />} />
           <Route path="/:owner/:repo/commit/:oid" element={<CommitPage />} />
-          <Route path="*" element={<NotFound />} />
+          <Route path="/:owner/:repo/compare" element={<ComparePage />} />
+          <Route path="*"element={<NotFound />} />
         </Routes>
       </main>
       <Toaster theme="system" />
