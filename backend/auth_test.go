@@ -20,18 +20,35 @@ import (
 // TEST_DATABASE_URL is unset.
 var userSeq atomic.Int64
 
+// One pool per test binary, created on first use and closed after m.Run.
+var (
+	poolOnce sync.Once
+	testPool *pgxpool.Pool
+	poolErr  error
+)
+
+// TestMain makes bcrypt cheap for the whole test binary and closes the shared
+// pool at the end. bcryptCost is only ever lowered here, never in production.
+func TestMain(m *testing.M) {
+	bcryptCost = bcrypt.MinCost
+	code := m.Run()
+	if testPool != nil {
+		testPool.Close()
+	}
+	os.Exit(code)
+}
+
 func testServer(t *testing.T) *Server {
 	t.Helper()
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL is not set; skipping database test")
 	}
-	pool, err := NewPool(context.Background(), url)
-	if err != nil {
-		t.Fatalf("connect: %v", err)
+	poolOnce.Do(func() { testPool, poolErr = NewPool(context.Background(), url) })
+	if poolErr != nil {
+		t.Fatalf("connect: %v", poolErr)
 	}
-	t.Cleanup(pool.Close)
-	srv := NewServer(pool)
+	srv := NewServer(testPool)
 	srv.JWTSecret = []byte("test-secret")
 	return srv
 }
