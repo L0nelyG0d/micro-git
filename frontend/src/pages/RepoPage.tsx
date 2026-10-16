@@ -155,13 +155,18 @@ export function RepoPage() {
         ) : (
           <span />
         )}
-        {writable && (
-          <Button asChild size="sm">
-            <Link to={`/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/new/${encodeURIComponent(ref)}`}>
-              Add file
-            </Link>
+        <div className="flex items-center gap-2">
+          <Button asChild size="sm" variant="outline">
+            <Link to={`/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/compare`}>Compare</Link>
           </Button>
-        )}
+          {writable && (
+            <Button asChild size="sm">
+              <Link to={`/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/new/${encodeURIComponent(ref)}`}>
+                Add file
+              </Link>
+            </Button>
+          )}
+        </div>
       </div>
       <Breadcrumbs owner={owner} repo={name} ref_={ref} path={path} />
       {body}
