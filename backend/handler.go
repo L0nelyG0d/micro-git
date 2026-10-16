@@ -67,6 +67,9 @@ func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/repos/{owner}/{repo}/branches/{branch}", methods{
 		http.MethodDelete: s.requireAuth(s.deleteBranch),
 	}.serve)
+	mux.HandleFunc("/repos/{owner}/{repo}/merge", methods{
+		http.MethodPost: s.requireAuth(s.mergeBranches),
+	}.serve)
 	for _, kind := range []struct {
 		name string
 		get  http.HandlerFunc
