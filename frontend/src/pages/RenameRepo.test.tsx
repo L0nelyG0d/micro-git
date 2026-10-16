@@ -120,3 +120,27 @@ it("old URL after a rename shows the repository not found state", async () => {
   renderAt("/alice/hello")
   expect(await screen.findByText("Repository not found")).toBeInTheDocument()
 })
+
+const EXPIRED = "Your session has expired. Log in again."
+function expectToast() {
+  expect(document.querySelector("[data-sonner-toast]")).toHaveTextContent(EXPIRED)
+}
+function expectLoggedOut() {
+  expectToast()
+  expect(screen.getByRole("link", { name: "Log in" })).toBeInTheDocument()
+}
+
+it("rename: 401 expires the session with a toast and hides owner actions", async () => {
+  setup()
+  routes["PATCH /api/repos/alice/hello"] = () => json(401, { error: "authentication required" })
+  renderAt("/alice/hello")
+  const dlg = await openDialog()
+  await userEvent.type(within(dlg).getByLabelText("Repository name"), "2")
+  await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
+  await vi.waitFor(() => expectToast())
+  expect(calls.some((c) => c.startsWith("PATCH /api/repos/alice/hello"))).toBe(true)
+  expectLoggedOut()
+  expect(screen.queryByRole("button", { name: "Rename" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "Delete repository" })).not.toBeInTheDocument()
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
+})

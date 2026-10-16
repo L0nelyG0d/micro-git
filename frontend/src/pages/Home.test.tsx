@@ -201,7 +201,8 @@ it("on 401 shows a message and the nav goes to the logged-out state", async () =
   await openForm()
   await userEvent.type(screen.getByLabelText("Name"), "hello")
   await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
-  expect(await screen.findByText(/session has expired/i)).toBeInTheDocument()
+  // Inline message and toast both appear.
+  expect((await screen.findAllByText(/session has expired/i)).length).toBeGreaterThanOrEqual(1)
   expect(await screen.findByRole("link", { name: "Register" })).toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "Log out" })).not.toBeInTheDocument()
 })

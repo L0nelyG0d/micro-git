@@ -349,6 +349,57 @@ it("delete branch: cancel sends nothing; 400 and 404 errors are shown inline", a
   }
 })
 
+
+const EXPIRED = "Your session has expired. Log in again."
+function expectToast() {
+  expect(document.querySelector("[data-sonner-toast]")).toHaveTextContent(EXPIRED)
+}
+function expectLoggedOut() {
+  expectToast()
+  expect(screen.getByRole("link", { name: "Log in" })).toBeInTheDocument()
+}
+
+it("delete branch: 401 expires the session with a toast and hides owner actions", async () => {
+  setupRepo("alice")
+  routes["DELETE /api/repos/alice/hello/branches/dev"] = () => loggedOut()
+  renderAt("/alice/hello")
+  await userEvent.click(await screen.findByRole("button", { name: "Delete branch" }))
+  await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete branch" }))
+  await vi.waitFor(() => expectToast())
+  expect(calls).toContain("DELETE /api/repos/alice/hello/branches/dev")
+  expectLoggedOut()
+  expect(screen.queryByRole("button", { name: "Delete branch" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "Create branch" })).not.toBeInTheDocument()
+})
+
+it("create branch: 401 expires the session with a toast and hides owner actions", async () => {
+  setupRepo("alice")
+  routes["POST /api/repos/alice/hello/branches"] = () => loggedOut()
+  renderAt("/alice/hello")
+  await userEvent.type(await openCreate(), "feature")
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create branch" }))
+  await vi.waitFor(() => expectToast())
+  expect(calls).toContain("POST /api/repos/alice/hello/branches")
+  expectLoggedOut()
+  expect(screen.queryByRole("button", { name: "Delete branch" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "Create branch" })).not.toBeInTheDocument()
+})
+
+it("delete repo: 401 expires the session with a toast and stays on the page", async () => {
+  setupRepo("alice")
+  routes["DELETE /api/repos/alice/hello"] = () => loggedOut()
+  renderAt("/alice/hello")
+  await userEvent.click(await screen.findByRole("button", { name: "Delete repository" }))
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete repository" }))
+  await vi.waitFor(() => expectToast())
+  expect(calls).toContain("DELETE /api/repos/alice/hello")
+  expectLoggedOut()
+  expect(screen.queryByRole("button", { name: "Delete repository" })).not.toBeInTheDocument()
+  expect(screen.queryByRole("button", { name: "Create branch" })).not.toBeInTheDocument()
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
+})
+
 // File viewer
 
 const blob = (o: Record<string, unknown> = {}) => ({
