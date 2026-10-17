@@ -15,7 +15,7 @@ function json(status: number, body?: unknown) {
 
 beforeEach(() => {
   calls.length = 0
-  routes = { "GET /api/repos": () => json(200, { repos: [] }) }
+  routes = { "GET /api/repos?page=1": () => json(200, { repos: [], page: 1, per_page: 50, has_more: false }) }
   vi.stubGlobal(
     "fetch",
     vi.fn(async (url: string, init?: RequestInit) => {

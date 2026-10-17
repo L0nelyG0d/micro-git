@@ -42,9 +42,9 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
-function renderHome() {
+function renderHome(entry = "/") {
   return render(
-    <MemoryRouter initialEntries={["/"]}>
+    <MemoryRouter initialEntries={[entry]}>
       <App />
     </MemoryRouter>,
   )
@@ -56,7 +56,7 @@ async function openForm() {
 
 it("lists repos in API order with links, description and formatted date", async () => {
   routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos"] = () =>
+  routes["GET /api/repos?page=1"] = () =>
     json(200, {
       repos: [
         repo({ id: 2, name: "second", description: "" }),
@@ -75,14 +75,14 @@ it("lists repos in API order with links, description and formatted date", async 
 
 it("shows a loading state while the request is pending", async () => {
   routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos"] = () => new Promise<Res>(() => {})
+  routes["GET /api/repos?page=1"] = () => new Promise<Res>(() => {})
   renderHome()
   expect(await screen.findByRole("status", { name: "Loading repositories" })).toBeInTheDocument()
 })
 
 it("shows the empty state pointing at login when logged out", async () => {
   routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos"] = () => json(200, { repos: [] })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
   renderHome()
   expect(await screen.findByText(/no repositories yet/i)).toBeInTheDocument()
   const main = screen.getByRole("main")
@@ -92,7 +92,7 @@ it("shows the empty state pointing at login when logged out", async () => {
 
 it("shows the empty state pointing at New repository when logged in", async () => {
   routes["GET /api/auth/me"] = me
-  routes["GET /api/repos"] = () => json(200, { repos: [] })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
   renderHome()
   expect(await screen.findByText(/no repositories yet.*new repository/i)).toBeInTheDocument()
   expect(await screen.findByRole("button", { name: "New repository" })).toBeInTheDocument()
@@ -100,10 +100,10 @@ it("shows the empty state pointing at New repository when logged in", async () =
 
 it("shows an error with Retry for a 500 and reloads on retry", async () => {
   routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos"] = () => json(500, { error: "internal error" })
+  routes["GET /api/repos?page=1"] = () => json(500, { error: "internal error" })
   renderHome()
   expect(await screen.findByRole("alert")).toHaveTextContent("internal error")
-  routes["GET /api/repos"] = () => json(200, { repos: [repo()] })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo()] })
   await userEvent.click(screen.getByRole("button", { name: "Retry" }))
   expect(await screen.findByRole("link", { name: "alice/hello" })).toBeInTheDocument()
   expect(screen.queryByRole("alert")).not.toBeInTheDocument()
@@ -111,7 +111,7 @@ it("shows an error with Retry for a 500 and reloads on retry", async () => {
 
 it("shows an error with Retry for a network error", async () => {
   routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos"] = () => new TypeError("Failed to fetch")
+  routes["GET /api/repos?page=1"] = () => new TypeError("Failed to fetch")
   renderHome()
   expect(await screen.findByRole("alert")).toHaveTextContent(/could not reach the server/i)
   expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument()
@@ -119,7 +119,7 @@ it("shows an error with Retry for a network error", async () => {
 
 it("creates a repo: toast, form closed, list updated without reload", async () => {
   routes["GET /api/auth/me"] = me
-  routes["GET /api/repos"] = () => json(200, { repos: [repo({ id: 1, name: "old" })] })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo({ id: 1, name: "old" })] })
   routes["POST /api/repos"] = (b) => {
     expect(b).toEqual({ name: "new-one", description: "Hi" })
     return json(201, repo({ id: 2, name: "new-one", description: "Hi" }))
@@ -133,7 +133,7 @@ it("creates a repo: toast, form closed, list updated without reload", async () =
   expect(screen.queryByRole("form", { name: "New repository" })).not.toBeInTheDocument()
   const links = screen.getAllByRole("link", { name: /^alice\// })
   expect(links.map((l) => l.textContent)).toEqual(["alice/new-one", "alice/old"])
-  expect(calls.filter((c) => c === "GET /api/repos")).toHaveLength(1)
+  expect(calls.filter((c) => c === "GET /api/repos?page=1")).toHaveLength(1)
   // reopening gives a fresh form
   await openForm()
   expect(screen.getByLabelText("Name")).toHaveValue("")
@@ -141,7 +141,7 @@ it("creates a repo: toast, form closed, list updated without reload", async () =
 
 it("validates client-side without calling the server", async () => {
   routes["GET /api/auth/me"] = me
-  routes["GET /api/repos"] = () => json(200, { repos: [] })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
   renderHome()
   await openForm()
   const submit = screen.getByRole("button", { name: "Create repository" })
@@ -165,7 +165,7 @@ it("validates client-side without calling the server", async () => {
 
 it("shows 409 inline exactly as returned and keeps the input", async () => {
   routes["GET /api/auth/me"] = me
-  routes["GET /api/repos"] = () => json(200, { repos: [] })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
   routes["POST /api/repos"] = () => json(409, { error: "repository already exists" })
   renderHome()
   await openForm()
@@ -178,7 +178,7 @@ it("shows 409 inline exactly as returned and keeps the input", async () => {
 
 it("shows server 400 messages inline", async () => {
   routes["GET /api/auth/me"] = me
-  routes["GET /api/repos"] = () => json(200, { repos: [] })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
   routes["POST /api/repos"] = () => json(400, { error: "invalid repository name" })
   renderHome()
   await openForm()
@@ -195,7 +195,7 @@ it("shows server 400 messages inline", async () => {
 
 it("on 401 shows a message and the nav goes to the logged-out state", async () => {
   routes["GET /api/auth/me"] = me
-  routes["GET /api/repos"] = () => json(200, { repos: [] })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
   routes["POST /api/repos"] = () => json(401, { error: "authentication required" })
   renderHome()
   await openForm()
@@ -209,7 +209,7 @@ it("on 401 shows a message and the nav goes to the logged-out state", async () =
 
 it("disables submit in flight and discards input on cancel", async () => {
   routes["GET /api/auth/me"] = me
-  routes["GET /api/repos"] = () => json(200, { repos: [] })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
   routes["POST /api/repos"] = () => new Promise<Res>(() => {})
   renderHome()
   await openForm()
@@ -219,4 +219,69 @@ it("disables submit in flight and discards input on cancel", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
   await openForm()
   expect(screen.getByLabelText("Name")).toHaveValue("")
+})
+
+const pageOf = (page: number, hasMore: boolean, repos: unknown[] = [repo()]) =>
+  json(200, { repos, page, per_page: 50, has_more: hasMore })
+
+it("page 1 with more shows a disabled Previous and a Next linking to page 2", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["GET /api/repos?page=1"] = () => pageOf(1, true)
+  renderHome()
+  const nav = await screen.findByRole("navigation", { name: "Pagination" })
+  expect(within(nav).getByRole("button", { name: "Previous" })).toBeDisabled()
+  expect(within(nav).getByText("Page 1")).toBeInTheDocument()
+  expect(within(nav).getByRole("link", { name: "Next" })).toHaveAttribute("href", "/?page=2")
+})
+
+it("a single page shows no pagination controls", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["GET /api/repos?page=1"] = () => pageOf(1, false)
+  renderHome()
+  await screen.findByRole("link", { name: "alice/hello" })
+  expect(screen.queryByRole("navigation", { name: "Pagination" })).not.toBeInTheDocument()
+})
+
+it("page 2 requests ?page=2 and enables Previous back to the first page", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["GET /api/repos?page=2"] = () => pageOf(2, true)
+  renderHome("/?page=2")
+  const nav = await screen.findByRole("navigation", { name: "Pagination" })
+  expect(within(nav).getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/")
+  expect(within(nav).getByRole("link", { name: "Next" })).toHaveAttribute("href", "/?page=3")
+  expect(within(nav).getByText("Page 2")).toBeInTheDocument()
+})
+
+it("page 3 links Previous to page 2", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["GET /api/repos?page=3"] = () => pageOf(3, false)
+  renderHome("/?page=3")
+  const nav = await screen.findByRole("navigation", { name: "Pagination" })
+  expect(within(nav).getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/?page=2")
+})
+
+it("the last page has Next disabled", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["GET /api/repos?page=2"] = () => pageOf(2, false)
+  renderHome("/?page=2")
+  const nav = await screen.findByRole("navigation", { name: "Pagination" })
+  expect(within(nav).getByRole("button", { name: "Next" })).toBeDisabled()
+  expect(within(nav).getByRole("link", { name: "Previous" })).toBeInTheDocument()
+})
+
+it("an empty page past the end links to the first page", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["GET /api/repos?page=9"] = () => pageOf(9, false, [])
+  renderHome("/?page=9")
+  const link = await screen.findByRole("link", { name: "Go to the first page" })
+  expect(link).toHaveAttribute("href", "/")
+  expect(screen.queryByText("No repositories yet.", { exact: false })).not.toBeInTheDocument()
+})
+
+it("an invalid ?page= falls back to page 1", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["GET /api/repos?page=1"] = () => pageOf(1, false)
+  renderHome("/?page=abc")
+  await screen.findByRole("link", { name: "alice/hello" })
+  expect(calls).toContain("GET /api/repos?page=1")
 })

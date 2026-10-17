@@ -1,31 +1,37 @@
 import { useCallback, useEffect, useState } from "react"
-import { Link } from "react-router-dom"
+import { Link, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useAuth } from "@/auth/AuthContext"
 import { NewRepoForm } from "@/components/NewRepoForm"
+import { Pagination } from "@/components/Pagination"
 import { RepoTable } from "@/components/RepoTable"
 import { api, ApiError } from "@/lib/api"
-import type { Repo } from "@/lib/repos"
+import { parsePage } from "@/lib/pagination"
+import type { RepoList } from "@/lib/repos"
 
 export function Home() {
   const { user, loading: sessionLoading, expireSession } = useAuth()
-  const [repos, setRepos] = useState<Repo[] | null>(null)
+  const [search] = useSearchParams()
+  const page = parsePage(search.get("page"))
+  const [list, setList] = useState<RepoList | null>(null)
   const [error, setError] = useState("")
   const [formOpen, setFormOpen] = useState(false)
   const [attempt, setAttempt] = useState(0)
 
   const load = useCallback(() => {
-    setRepos(null)
+    setList(null)
     setError("")
     setAttempt((n) => n + 1)
   }, [])
 
   useEffect(() => {
     let active = true
-    api<{ repos: Repo[] }>("/repos")
-      .then((d) => active && setRepos(d.repos))
+    setList(null)
+    setError("")
+    api<RepoList>(`/repos?page=${page}`)
+      .then((d) => active && setList(d))
       .catch((e) => {
         if (!active) return
         setError(
@@ -37,7 +43,7 @@ export function Home() {
     return () => {
       active = false
     }
-  }, [attempt])
+  }, [attempt, page])
 
   // Stays open after a 401 so the expiry message remains visible.
   const showForm = formOpen
@@ -60,7 +66,8 @@ export function Home() {
           onCancel={() => setFormOpen(false)}
           onUnauthorized={expireSession}
           onCreated={(repo) => {
-            setRepos((r) => [repo, ...(r ?? [])])
+            // A new repo is the newest, so it belongs on page 1 only.
+            if (page === 1) setList((l) => (l ? { ...l, repos: [repo, ...l.repos] } : l))
             setFormOpen(false)
             toast.success(`Repository ${repo.owner}/${repo.name} created.`)
           }}
@@ -74,13 +81,20 @@ export function Home() {
             Retry
           </Button>
         </div>
-      ) : repos === null ? (
+      ) : list === null ? (
         <div role="status" aria-label="Loading repositories" className="flex flex-col gap-2">
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
         </div>
-      ) : repos.length === 0 ? (
+      ) : list.repos.length === 0 && page > 1 ? (
+        <div className="flex flex-col items-start gap-2 text-sm">
+          <p className="text-muted-foreground">There are no more repositories on this page.</p>
+          <Link to="/" className="text-primary underline underline-offset-2">
+            Go to the first page
+          </Link>
+        </div>
+      ) : list.repos.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No repositories yet.{" "}
           {user ? (
@@ -95,7 +109,16 @@ export function Home() {
           )}
         </p>
       ) : (
-        <RepoTable repos={repos} />
+        <RepoTable repos={list.repos} />
+      )}
+
+      {list && (page > 1 || list.has_more) && (
+        <Pagination
+          page={page}
+          hasMore={list.has_more}
+          prevTo={page - 1 > 1 ? `/?page=${page - 1}` : "/"}
+          nextTo={`/?page=${page + 1}`}
+        />
       )}
     </div>
   )
