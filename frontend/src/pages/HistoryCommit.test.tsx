@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
+import { nextTask } from "@/test-utils"
 import { formatDate } from "@/lib/format"
 
 type Res = { status: number; body?: unknown }
@@ -36,6 +37,7 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const key = `${init?.method ?? "GET"} ${url}`
     calls.push(key)
+    await nextTask()
     const h = routes[key]
     if (!h) throw new Error(`unexpected fetch ${key}`)
     const r = h()
