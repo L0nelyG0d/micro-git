@@ -35,3 +35,7 @@ The orchestrator is a controller: it assigns issues to branches, launches engine
 - If an issue is unclear or conflicts with `_docs/plan.md`, ask the user before building
 - If a decision needs the user (architecture, data model, stack, endpoint set) and they are away, do not wait: append the question to `_docs/questions.md` with the default you used, take the simplest reversible default, comment on the issue, and keep going. The user reviews that file on return
 - When a user decision is pending and the user is present, ask and wait about one minute. No answer: stash the question as above and keep working. Never stop the pipeline to wait
+
+## CI and QA
+
+`.github/workflows/ci.yml` runs the repeatable mechanical gates on every push to `main`, every pull request and on demand: gofmt, `go vet`, the backend suite (`go test -p 1 -race ./...` against a throwaway Postgres service container, never Neon), the frontend tests and build, `openapi.yaml` lint, and a secret scan. It needs no repository secrets. QA owns what CI cannot: acceptance criteria, exploratory and adversarial testing, browser and visual checks, and review of the tests. QA no longer re-runs gofmt, vet and the unit suites as its main evidence; it may rely on a green CI run plus its own targeted checks.
