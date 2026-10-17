@@ -55,7 +55,10 @@ type objectStore struct {
 	rs  *RepoStore
 }
 
-var _ treebuild.Store = (*objectStore)(nil)
+var (
+	_ treebuild.Store      = (*objectStore)(nil)
+	_ treebuild.BatchStore = (*objectStore)(nil)
+)
 
 // Objects returns the repository's object store as a treebuild.Store. Objects
 // of other repositories are never visible through it.
@@ -94,6 +97,103 @@ func (o *objectStore) PutObject(t gitobj.Type, body []byte) (string, error) {
 		return "", err
 	}
 	return oid, nil
+}
+
+// objectArrays splits objects into the column arrays the batch insert unnests.
+func objectArrays(objs []treebuild.Object) (oids, types []string, data [][]byte) {
+	oids = make([]string, len(objs))
+	types = make([]string, len(objs))
+	data = make([][]byte, len(objs))
+	for i, ob := range objs {
+		oids[i] = gitobj.Hash(ob.Type, ob.Body)
+		types[i] = string(ob.Type)
+		data[i] = ob.Body
+		if data[i] == nil {
+			data[i] = []byte{} // an empty blob is valid, not NULL
+		}
+	}
+	return
+}
+
+const insertObjectsSQL = `INSERT INTO objects (repo_id, oid, type, data)
+	SELECT $1, t.oid, t.type, t.data FROM unnest($2::text[], $3::text[], $4::bytea[]) AS t(oid, type, data)
+	ON CONFLICT (repo_id, oid) DO NOTHING`
+
+// PutObjects stores all objects (insert-if-absent) in one statement.
+func (o *objectStore) PutObjects(objs []treebuild.Object) error {
+	if len(objs) == 0 {
+		return nil
+	}
+	oids, types, data := objectArrays(objs)
+	_, err := o.rs.db.Exec(o.ctx, insertObjectsSQL, o.rs.repoID, oids, types, data)
+	return err
+}
+
+// GetObjects returns the existing objects among oids in one statement.
+func (o *objectStore) GetObjects(oids []string) (map[string]treebuild.Object, error) {
+	rows, err := o.rs.db.Query(o.ctx,
+		`SELECT oid, type, data FROM objects WHERE repo_id = $1 AND oid = ANY($2::text[])`,
+		o.rs.repoID, oids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := make(map[string]treebuild.Object, len(oids))
+	for rows.Next() {
+		var oid, t string
+		var body []byte
+		if err := rows.Scan(&oid, &t, &body); err != nil {
+			return nil, err
+		}
+		out[oid] = treebuild.Object{Type: gitobj.Type(t), Body: body}
+	}
+	return out, rows.Err()
+}
+
+// GetRefCommit returns the oid a branch points at together with that commit
+// object's body, in one statement. ErrRefNotFound if there is no such branch.
+func (rs *RepoStore) GetRefCommit(ctx context.Context, name string) (string, []byte, error) {
+	var oid string
+	var body []byte
+	err := rs.db.QueryRow(ctx,
+		`SELECT r.oid, o.data FROM refs r
+		 JOIN objects o ON o.repo_id = r.repo_id AND o.oid = r.oid
+		 WHERE r.repo_id = $1 AND r.name = $2`, rs.repoID, name).Scan(&oid, &body)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil, ErrRefNotFound
+	}
+	return oid, body, err
+}
+
+// PutObjectsMoveRef stores objs and moves the branch like UpdateRef (a
+// compare-and-swap from oldOID to newOID, empty oldOID = create) in one
+// statement. It returns ErrRefMoved when the swap lost; the caller must then
+// roll back its transaction so the objects are not kept.
+func (rs *RepoStore) PutObjectsMoveRef(ctx context.Context, objs []treebuild.Object, name, oldOID, newOID string) error {
+	oids, types, data := objectArrays(objs)
+	var moved int
+	var err error
+	if oldOID == "" {
+		err = rs.db.QueryRow(ctx,
+			`WITH ins AS (`+insertObjectsSQL+`),
+			 mv AS (INSERT INTO refs (repo_id, name, oid) VALUES ($1, $5, $6)
+			        ON CONFLICT (repo_id, name) DO NOTHING RETURNING 1)
+			 SELECT count(*) FROM mv`,
+			rs.repoID, oids, types, data, name, newOID).Scan(&moved)
+	} else {
+		err = rs.db.QueryRow(ctx,
+			`WITH ins AS (`+insertObjectsSQL+`),
+			 mv AS (UPDATE refs SET oid = $6 WHERE repo_id = $1 AND name = $5 AND oid = $7 RETURNING 1)
+			 SELECT count(*) FROM mv`,
+			rs.repoID, oids, types, data, name, newOID, oldOID).Scan(&moved)
+	}
+	if err != nil {
+		return err
+	}
+	if moved == 0 {
+		return ErrRefMoved
+	}
+	return nil
 }
 
 // GetRef returns the oid of a branch, or ErrRefNotFound.
