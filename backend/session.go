@@ -128,6 +128,14 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	username := strings.ToLower(req.Username)
+	ip := clientIP(r)
+	known := s.isKnownDevice(r, username)
+	// Throttled: answer before any database or bcrypt work, even if the
+	// password is right, and say nothing about whether the user exists.
+	if wait := s.limiter.loginWait(ip, username, known); wait > 0 {
+		tooMany(w, wait)
+		return
+	}
 	var id int64
 	var hash string
 	err := s.DB.QueryRow(r.Context(),
@@ -141,6 +149,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		hash = string(dummyHash)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil || !found {
+		s.limiter.loginFailed(ip, username, known)
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
@@ -149,13 +158,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
+	s.limiter.loginSucceeded(ip, username)
 	s.setSessionCookie(w, token, int(sessionTTL/time.Second))
+	s.setKnownDeviceCookie(w, s.knownDeviceValue(username), int(knownDeviceTTL/time.Second))
 	writeJSON(w, http.StatusOK, userResponse{ID: id, Username: username})
 }
 
 // logout handles POST /auth/logout; idempotent, never 401.
 func (s *Server) logout(w http.ResponseWriter, _ *http.Request) {
 	s.setSessionCookie(w, "", -1)
+	s.setKnownDeviceCookie(w, "", -1)
 	w.WriteHeader(http.StatusNoContent)
 }
 

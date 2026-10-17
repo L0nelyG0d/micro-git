@@ -17,6 +17,7 @@ type Server struct {
 	Now          func() time.Time // injected clock
 	JWTSecret    []byte           // HMAC key for session tokens
 	CookieSecure bool             // Secure attribute on the session cookie
+	limiter      *limiter         // login/register rate limiter
 
 	// hook, if set (tests only), is called at named points of the read
 	// handlers so a test can act between two steps without sleeping.
@@ -31,7 +32,10 @@ func (s *Server) testHook(point string) {
 
 // NewServer builds a Server with the real clock.
 func NewServer(db *pgxpool.Pool) *Server {
-	return &Server{DB: db, Now: time.Now}
+	s := &Server{DB: db, Now: time.Now}
+	// The limiter reads s.Now at call time so a test can swap the clock.
+	s.limiter = newLimiter(func() time.Time { return s.Now() })
+	return s
 }
 
 // NewHandler returns the routes for a Server without a database (health only
@@ -63,7 +67,7 @@ func safeHeaders(next http.Handler) http.Handler {
 // routes is the single place endpoints are registered.
 func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", health)
-	mux.HandleFunc("/auth/register", allow(http.MethodPost, s.register))
+	mux.HandleFunc("/auth/register", allow(http.MethodPost, s.limitRegister(s.register)))
 	mux.HandleFunc("/auth/login", allow(http.MethodPost, s.login))
 	mux.HandleFunc("/auth/logout", allow(http.MethodPost, s.logout))
 	mux.HandleFunc("/auth/me", allow(http.MethodGet, s.requireAuth(s.me)))
