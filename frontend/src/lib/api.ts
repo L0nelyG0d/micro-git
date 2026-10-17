@@ -1,3 +1,5 @@
+import { invalidateAfterWrite } from "@/lib/fetchCache"
+
 export class ApiError extends Error {
   status: number
   /** Whole seconds from the Retry-After header (429 answers), if present. */
@@ -18,17 +20,24 @@ export class ApiError extends Error {
  */
 export async function api<T = unknown>(
   path: string,
-  options: { method?: string; body?: unknown } = {},
+  options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
 ): Promise<T> {
   const init: RequestInit = {
     method: options.method ?? "GET",
     credentials: "include",
   }
+  if (options.signal) init.signal = options.signal
   if (options.body !== undefined) {
     init.headers = { "Content-Type": "application/json" }
     init.body = JSON.stringify(options.body)
   }
-  const res = await fetch(`/api${path}`, init)
+  let res: Response
+  try {
+    res = await fetch(`/api${path}`, init)
+  } finally {
+    // Dropped once the answer is in, success or not: a failed write may still have changed the repo.
+    if (init.method !== "GET") invalidateAfterWrite(path)
+  }
   if (res.status === 204) return undefined as T
   let data: unknown
   try {
