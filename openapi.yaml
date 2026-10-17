@@ -102,6 +102,8 @@ paths:
                 $ref: '#/components/schemas/Error'
         '413':
           $ref: '#/components/responses/RequestTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
   /auth/login:
@@ -123,7 +125,10 @@ paths:
             Set-Cookie:
               description: >-
                 `session=<jwt>; Path=/; HttpOnly; SameSite=Lax; Max-Age=10800`, plus `Secure` when the server runs
-                with `COOKIE_SECURE=true`. The lifetime is 3 hours.
+                with `COOKIE_SECURE=true`. The lifetime is 3 hours. A second cookie,
+                `known_device=<payload>.<sig>; Path=/; HttpOnly; SameSite=Lax; Max-Age=10800` (same `Secure` rule),
+                is set too: an HMAC-signed marker bound to the username that gives later logins from this browser
+                the lenient rate-limit tier.
               schema:
                 type: string
           content:
@@ -146,6 +151,8 @@ paths:
           $ref: '#/components/responses/MethodNotAllowed'
         '413':
           $ref: '#/components/responses/RequestTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '500':
           $ref: '#/components/responses/InternalError'
   /auth/logout:
@@ -160,7 +167,7 @@ paths:
           description: Logged out.
           headers:
             Set-Cookie:
-              description: The `session` cookie with an empty value and `Max-Age=0`.
+              description: The `session` and `known_device` cookies with an empty value and `Max-Age=0`.
               schema:
                 type: string
         '405':
@@ -854,6 +861,20 @@ components:
       schema:
         type: string
   responses:
+    TooManyRequests:
+      description: >-
+        `too many attempts, try again later`. Login: failures are counted per client IP and username (and per IP
+        overall), with a growing delay; register: more than 10 attempts per IP per 15 minutes.
+      headers:
+        Retry-After:
+          description: Whole seconds to wait, at least 1.
+          schema:
+            type: integer
+            minimum: 1
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
     Unauthorized:
       description: '`authentication required` (no cookie, an invalid or expired one, or the user no longer exists).'
       content:
