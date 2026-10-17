@@ -261,7 +261,7 @@ it.each([
 it("delete repo: dialog names the repo, confirm deletes and redirects with a toast", async () => {
   setupRepo("alice")
   routes["DELETE /api/repos/alice/hello"] = () => json(204)
-  routes["GET /api/repos"] = () => json(200, { repos: [] })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [], page: 1, per_page: 50, has_more: false })
   renderAt("/alice/hello")
   await userEvent.click(await screen.findByRole("button", { name: "Delete repository" }))
   const dlg = screen.getByRole("alertdialog")

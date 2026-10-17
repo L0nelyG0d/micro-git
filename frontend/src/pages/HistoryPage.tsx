@@ -1,18 +1,14 @@
 import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ErrorBlock, LoadingBlock, NotFoundBlock } from "@/components/StateViews"
 import { OidLink } from "@/components/OidLink"
-import { Button } from "@/components/ui/button"
+import { Pagination } from "@/components/Pagination"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
 import { ApiError } from "@/lib/api"
 import { firstLine, formatDate } from "@/lib/format"
 import { commitPath, historyPath, isOidRef, uiPath, type CommitsPage } from "@/lib/git"
 import type { Repo } from "@/lib/repos"
+import { parsePage } from "@/lib/pagination"
 import { useFetch } from "@/lib/useFetch"
-
-function parsePage(raw: string | null): number {
-  const n = Number(raw)
-  return Number.isInteger(n) && n >= 1 ? n : 1
-}
 
 /** `/:owner/:repo/commits/:ref?page=N` */
 export function HistoryPage() {
@@ -131,27 +127,12 @@ export function HistoryPage() {
       {heading}
       {back}
       {body}
-      <nav aria-label="Pagination" className="flex items-center justify-between gap-3">
-        {page > 1 ? (
-          <Button asChild variant="outline" size="sm">
-            <Link to={historyPath(owner, name, ref, page - 1)}>Previous</Link>
-          </Button>
-        ) : (
-          <Button variant="outline" size="sm" disabled>
-            Previous
-          </Button>
-        )}
-        <span className="text-xs text-muted-foreground">Page {page}</span>
-        {hasMore ? (
-          <Button asChild variant="outline" size="sm">
-            <Link to={historyPath(owner, name, ref, page + 1)}>Next</Link>
-          </Button>
-        ) : (
-          <Button variant="outline" size="sm" disabled>
-            Next
-          </Button>
-        )}
-      </nav>
+      <Pagination
+        page={page}
+        hasMore={hasMore}
+        prevTo={historyPath(owner, name, ref, page - 1)}
+        nextTo={historyPath(owner, name, ref, page + 1)}
+      />
     </div>
   )
 }

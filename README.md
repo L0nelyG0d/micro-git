@@ -153,7 +153,7 @@ and SHA-1, so an object's oid equals what `git hash-object` would print.
   the branch ref with a compare-and-swap on the `expected_tip` the client saw.
   If the tip moved meanwhile the API answers `409` and nothing changes. The
   first commit on an empty repo has no parent and creates the branch.
-- **History and diffs**: the log walks first parents, 50 commits per page; a
+- **History and diffs**: the log walks first parents, 50 commits per page by default (`per_page` up to 100); a
   commit's diff is a line-based (LCS) diff against its first parent.
 
 Details: `_docs/plan.md` ("Core model", "Tables", "Rules").
@@ -289,7 +289,6 @@ Start the backend and frontend (Setup steps 5 and 6) and open
   deleted branch stay in the database (they are removed only when the whole
   repository is deleted).
 - No rate limiting on any endpoint (login included).
-- `GET /repos` is not paginated.
 - Request limits: JSON bodies over 1 MiB answer `413` (commits: 64 MiB); one
   diff response does at most 32 million line-pair cells, later files come back
   `truncated`; a file with more than 5000 lines on either side is not diffed.

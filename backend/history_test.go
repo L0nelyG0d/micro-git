@@ -277,6 +277,52 @@ func TestCommitLog(t *testing.T) {
 		}
 	})
 
+	t.Run("invalid per_page", func(t *testing.T) {
+		for _, p := range []string{"0", "101", "-1", "abc", "", "1.5", "+1", "99999999999999999999999"} {
+			code, msg := f.get(t, f.base+"/commits", "?per_page="+url.QueryEscape(p), nil)
+			if code != 400 || msg != "invalid per_page" {
+				t.Errorf("per_page=%q: got %d %q", p, code, msg)
+			}
+		}
+		for _, p := range []string{"1", "100"} {
+			var l histList
+			if code, msg := f.get(t, f.base+"/commits", "?per_page="+p, &l); code != 200 {
+				t.Errorf("per_page=%s: %d %s", p, code, msg)
+			}
+		}
+	})
+
+	t.Run("per_page validation order", func(t *testing.T) {
+		// Unknown repo wins over a bad per_page; bad page wins over bad per_page.
+		code, msg := f.get(t, "/repos/"+f.owner+"/nope", "/commits?per_page=0", nil)
+		if code != 404 || msg != "repository not found" {
+			t.Errorf("unknown repo: %d %q", code, msg)
+		}
+		code, msg = f.get(t, f.base+"/commits", "?page=0&per_page=0", nil)
+		if code != 400 || msg != "invalid page" {
+			t.Errorf("bad page and per_page: %d %q", code, msg)
+		}
+		code, msg = f.get(t, f.base+"/commits", "?per_page=0&ref=nope", nil)
+		if code != 400 || msg != "invalid per_page" {
+			t.Errorf("bad per_page and ref: %d %q", code, msg)
+		}
+	})
+
+	t.Run("per_page sizes", func(t *testing.T) {
+		var l histList
+		if code, msg := f.get(t, f.longBase+"/commits", "?per_page=100", &l); code != 200 || len(l.Commits) != 100 || !l.HasMore || l.PerPage != 100 {
+			t.Errorf("per_page=100: %d %s %+v", code, msg, l.PerPage)
+		}
+		l = histList{}
+		if code, msg := f.get(t, f.longBase+"/commits", "?per_page=100&page=2", &l); code != 200 || len(l.Commits) != 20 || l.HasMore || l.Page != 2 || l.Commits[0].OID != f.long[19] {
+			t.Errorf("per_page=100&page=2: %d %s len %d", code, msg, len(l.Commits))
+		}
+		l = histList{}
+		if code, msg := f.get(t, f.longBase+"/commits", "?per_page=7&page=3", &l); code != 200 || len(l.Commits) != 7 || !l.HasMore || l.PerPage != 7 || l.Commits[0].OID != f.long[119-14] {
+			t.Errorf("per_page=7&page=3: %d %s len %d", code, msg, len(l.Commits))
+		}
+	})
+
 	t.Run("pagination of 120 commits", func(t *testing.T) {
 		cases := []struct {
 			q       string
@@ -581,7 +627,7 @@ func TestCommitLogStatementCount(t *testing.T) {
 	t.Cleanup(pool.Close)
 	s := NewServer(pool)
 	s.JWTSecret = f.s.JWTSecret
-	for _, q := range []string{"", "?page=3"} {
+	for _, q := range []string{"", "?page=3", "?page=2&per_page=100"} {
 		counter.n.Store(0)
 		rec := do(s, http.MethodGet, f.longBase+"/commits"+q, "", nil)
 		if rec.Code != 200 {

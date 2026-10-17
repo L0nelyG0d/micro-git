@@ -8,6 +8,14 @@ export type Repo = {
   created_at: string
 }
 
+/** Response of `GET /repos`. */
+export type RepoList = {
+  repos: Repo[]
+  page: number
+  per_page: number
+  has_more: boolean
+}
+
 export const REPO_NAME_RE = /^[A-Za-z0-9._-]{1,100}$/
 export const DESCRIPTION_MAX = 500
 

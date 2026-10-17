@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"regexp"
 	"time"
@@ -84,34 +85,62 @@ func (s *Server) ownedRepoFromPath(w http.ResponseWriter, r *http.Request) (Repo
 	return repo, true
 }
 
-// listRepos handles GET /repos.
+type repoListResponse struct {
+	Repos   []Repo `json:"repos"`
+	Page    int    `json:"page"`
+	PerPage int    `json:"per_page"`
+	HasMore bool   `json:"has_more"`
+}
+
+// listRepos handles GET /repos?owner=&page=&per_page=.
 func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
+	page, ok := parsePage(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid page")
+		return
+	}
+	perPage, ok := parsePerPage(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid per_page")
+		return
+	}
+	resp := repoListResponse{Repos: []Repo{}, Page: page, PerPage: perPage}
+	if page > 1<<40 { // far past any list; avoids overflow below
+		writeJSON(w, http.StatusOK, resp)
+		return
+	}
 	q := repoSelect
 	var args []any
 	if r.URL.Query().Has("owner") {
 		q += ` WHERE lower(u.username) = lower($1)`
 		args = append(args, r.URL.Query().Get("owner"))
 	}
-	rows, err := s.DB.Query(r.Context(), q+` ORDER BY r.created_at DESC, r.id DESC`, args...)
+	// One extra row past the page tells has_more.
+	q += fmt.Sprintf(` ORDER BY r.created_at DESC, r.id DESC LIMIT %d OFFSET %d`,
+		perPage+1, (page-1)*perPage)
+	rows, err := s.DB.Query(r.Context(), q, args...)
 	if err != nil {
 		internalError(w, err)
 		return
 	}
 	defer rows.Close()
-	repos := []Repo{}
 	for rows.Next() {
 		repo, err := scanRepo(rows)
 		if err != nil {
 			internalError(w, err)
 			return
 		}
-		repos = append(repos, repo)
+		resp.Repos = append(resp.Repos, repo)
 	}
 	if err := rows.Err(); err != nil {
 		internalError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string][]Repo{"repos": repos})
+	if len(resp.Repos) > perPage {
+		resp.Repos = resp.Repos[:perPage]
+		resp.HasMore = true
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 type createRepoRequest struct {

@@ -41,7 +41,9 @@ Out of scope: clone/push/fetch, pack files, real merges and conflict resolution,
 | `objects` | `repo_id` → repos (on delete cascade), `oid` char(40), `type` (`blob`/`tree`/`commit`, CHECK), `data` bytea (raw object body); primary key `(repo_id, oid)` |
 | `refs` | `repo_id` → repos (on delete cascade), `name`, `oid`; primary key `(repo_id, name)`; foreign key `(repo_id, oid)` → objects, so a branch can only point at a stored object (write the commit object before moving the ref) |
 
-Objects are stored as raw serialized bodies (like an uncompressed loose object) and parsed in Go. There are no separate commits or trees tables: the log walks parents, 50 commits per page.
+Objects are stored as raw serialized bodies (like an uncompressed loose object) and parsed in Go. There are no separate commits or trees tables: the log walks parents, 50 commits per page by default (up to 100).
+
+Index `repos_created_idx ON repos (created_at DESC, id DESC)` supports the unfiltered, paginated repo list.
 
 ## Endpoints
 
@@ -54,14 +56,14 @@ Routing uses `net/http` patterns. Errors are JSON `{"error": "..."}`.
 | `POST /auth/login` | none | sets the `session` cookie; token never in the body |
 | `POST /auth/logout` | none | clears the cookie; works without one (never `401`) |
 | `GET /auth/me` | cookie | `{id, username}` |
-| `GET /repos` | none | optional `?owner=` |
+| `GET /repos` | none | optional `?owner=`, `?page=`, `?per_page=` (default 50, max 100) |
 | `POST /repos` | yes | `{name, description}`; `409` duplicate; the repo starts empty with no branches |
 | `GET /repos/{owner}/{repo}` | none | includes `default_branch` and an `empty` flag |
 | `DELETE /repos/{owner}/{repo}` | owner | `403` for anyone else |
 | `GET /repos/{owner}/{repo}/branches` | none | name + tip oid |
 | `POST /repos/{owner}/{repo}/branches` | owner | `{name, from}`; `409` if it exists |
 | `DELETE /repos/{owner}/{repo}/branches/{branch}` | owner | `400` for the default branch |
-| `GET /repos/{owner}/{repo}/commits?ref=&page=` | none | oid, message, author, time |
+| `GET /repos/{owner}/{repo}/commits?ref=&page=&per_page=` | none | oid, message, author, time |
 | `GET /repos/{owner}/{repo}/commits/{oid}` | none | changed files + diff hunks against the first parent |
 | `GET /repos/{owner}/{repo}/tree/{ref}/{path...}` | none | directory entries; `ref` is a branch name or a commit oid |
 | `GET /repos/{owner}/{repo}/blob/{ref}/{path...}` | none | file content and size |
@@ -145,7 +147,8 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 ### Repositories
 
 `GET /repos` and `GET /repos?owner=alice`
-- `200` `{"repos": [Repo, ...]}`, newest first, no pagination. Unknown owner gives `{"repos": []}`
+- `?page=` (default 1) and `?per_page=` (default 50, 1 to 100); invalid values give `400` `invalid page` / `invalid per_page`
+- `200` `{"repos": [Repo, ...], "page": 1, "per_page": 50, "has_more": false}`, newest first. Unknown owner or a page past the end gives `"repos": []`
 
 `POST /repos` (auth)
 - Request: `{"name": "hello", "description": "optional"}` (`description` may be omitted)
@@ -197,8 +200,8 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 - `400` `invalid path` (same rules and the same 307 for unclean paths as tree) · `not a file` (path is a directory or the root)
 - `404` `repository not found` · `ref not found` · `path not found`
 
-`GET /repos/{owner}/{repo}/commits?ref=main&page=1`
-- `ref` defaults to `default_branch`; `page` is 1-based, default 1. First-parent walk from the ref, 50 per page
+`GET /repos/{owner}/{repo}/commits?ref=main&page=1&per_page=50`
+- `ref` defaults to `default_branch`; `page` is 1-based, default 1; `per_page` default 50, 1 to 100 (`400` `invalid per_page`). First-parent walk from the ref
 - `200`
 ```
 {"ref": "main", "page": 1, "per_page": 50, "has_more": true,
@@ -274,7 +277,7 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 
 Process: `http.Server` with read-header, read, write and idle timeouts, graceful shutdown on SIGINT / SIGTERM, `X-Content-Type-Options: nosniff` on every response and `Cache-Control: no-store` on `/auth/*`.
 
-Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid for its 3 hours; objects of deleted branches are never garbage-collected (they go with the repository); no rate limiting; `GET /repos` is not paginated; local only (Vite dev server proxies `/api`, no production hosting, issue #22 closed as not planned).
+Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid for its 3 hours; objects of deleted branches are never garbage-collected (they go with the repository); no rate limiting; local only (Vite dev server proxies `/api`, no production hosting, issue #22 closed as not planned).
 
 ## Frontend
 

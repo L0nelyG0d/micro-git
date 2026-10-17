@@ -12,8 +12,12 @@ import (
 	"github.com/L0nelyG0d/micro-git/backend/treebuild"
 )
 
-// commitsPerPage is the fixed page size of the commit log.
-const commitsPerPage = 50
+// defaultPerPage is the default page size of the commit log and the repo
+// list; maxPerPage is the largest ?per_page= accepted.
+const (
+	defaultPerPage = 50
+	maxPerPage     = 100
+)
 
 type commitSummary struct {
 	OID     string   `json:"oid"`
@@ -84,7 +88,27 @@ func parsePage(r *http.Request) (int, bool) {
 	return n, true
 }
 
-// listCommits handles GET /repos/{owner}/{repo}/commits?ref=&page=.
+// parsePerPage reads the optional ?per_page= value: absent means
+// defaultPerPage; otherwise a decimal integer from 1 to maxPerPage.
+func parsePerPage(r *http.Request) (int, bool) {
+	q := r.URL.Query()
+	if !q.Has("per_page") {
+		return defaultPerPage, true
+	}
+	v := q.Get("per_page")
+	for _, ch := range v {
+		if ch < '0' || ch > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 1 || n > maxPerPage {
+		return 0, false
+	}
+	return n, true
+}
+
+// listCommits handles GET /repos/{owner}/{repo}/commits?ref=&page=&per_page=.
 func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 	repo, ok := s.repoFromPath(w, r)
 	if !ok {
@@ -95,6 +119,11 @@ func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid page")
 		return
 	}
+	perPage, ok := parsePerPage(r)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "invalid per_page")
+		return
+	}
 	ref := repo.DefaultBranch
 	if r.URL.Query().Has("ref") {
 		ref = r.URL.Query().Get("ref")
@@ -103,15 +132,15 @@ func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	resp := commitListResponse{Ref: ref, Page: page, PerPage: commitsPerPage, Commits: []commitSummary{}}
+	resp := commitListResponse{Ref: ref, Page: page, PerPage: perPage, Commits: []commitSummary{}}
 	if page > 1<<40 { // far past any history; avoids overflow below
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	skip := (page - 1) * commitsPerPage
+	skip := (page - 1) * perPage
 	// First-parent walk in one statement; one extra commit past the page
 	// tells has_more.
-	rows, err := NewRepoStore(s.DB, repo.ID).WalkFirstParents(r.Context(), tip, skip+commitsPerPage+1)
+	rows, err := NewRepoStore(s.DB, repo.ID).WalkFirstParents(r.Context(), tip, skip+perPage+1)
 	if err != nil {
 		s.readError(w, r, repo, err)
 		return
@@ -123,7 +152,7 @@ func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		switch {
-		case i >= skip+commitsPerPage:
+		case i >= skip+perPage:
 			resp.HasMore = true
 		case i >= skip:
 			resp.Commits = append(resp.Commits, summarize(row.OID, c))
