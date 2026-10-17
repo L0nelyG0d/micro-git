@@ -64,6 +64,13 @@ Run these steps in order.
    | `JWT_SECRET` | yes | Key used to sign the session JWT. At least 32 bytes (the backend refuses to start with a shorter one); use a long random string, for example `openssl rand -base64 48` |
    | `COOKIE_SECURE` | no | `true` adds the `Secure` attribute to the session cookie (needs HTTPS). Anything else, including unset, means off. Keep it off for local HTTP |
    | `PORT` | no | Backend listen port, 1 to 65535. Defaults to `8080` |
+   | `DB_MAX_CONNS` | no | Maximum size of the database connection pool, 1 to 1000. Defaults to `10`. Keep it below your database's connection limit divided by the number of backend instances |
+
+   The pool also closes connections idle for more than 5 minutes
+   (`MaxConnIdleTime`) and checks idle ones every 30 seconds
+   (`HealthCheckPeriod`); these two are fixed in code. An invalid
+   `DB_MAX_CONNS` stops the backend at startup. Startup errors never include
+   the connection string.
 
 3. Export the variables into your shell (repeat in every new terminal).
 
