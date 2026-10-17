@@ -125,7 +125,7 @@ Status: Done. Page titles, skip link, focus, reduced motion, 320 px layout.
 ## 36. Docs: sync plan and README with the code, remove stale files
 Goal: `plan.md`, `README.md` and comments match the code; four duplicate fixture files are removed.
 Description: Missing routes, package layout, known limits, test duration, stale "later tasks" comments. Run last: it edits files also touched by #30, #31, #32 and #29.
-Status: Done on branch `issue-36-docs-sync` (merge pending): README, `plan.md` and `tasks.md` synced with the code, QA demo-script fixes from #28, stale comments fixed, duplicate fixture files `backend/gitobj/{commit0,commit1,tree}.bin` and `oids.txt` removed (the tests read `testdata/`).
+Status: Done and merged: README, `plan.md` and `tasks.md` synced with the code, QA demo-script fixes from #28, stale comments fixed, duplicate fixture files `backend/gitobj/{commit0,commit1,tree}.bin` and `oids.txt` removed (the tests read `testdata/`).
 
 ## 37. Frontend: repo page overflowed at 390px, latest-commit bar squashed
 Status: Done (bug from #28), merged.
@@ -159,4 +159,4 @@ Conflict map:
 - `_docs/plan.md`: #44 auth rows and "no rate limiting"; #45 repos/commits rows, schema section, "not paginated".
 - `backend/db/schema.sql`: #45 only (idempotent index, applied to both Neon branches by the engineer).
 
-Order: #40, #41, #42 in progress (parallel branches); #44 after #40; #45 after #41; #43 CI after #41 and #42.
+Status: #40-#46 are all done, QA PASS and merged into `main`; all GitHub issues are closed.
