@@ -285,3 +285,20 @@ it("an invalid ?page= falls back to page 1", async () => {
   await screen.findByRole("link", { name: "alice/hello" })
   expect(calls).toContain("GET /api/repos?page=1")
 })
+
+it("creating on a full page 1 keeps the page size and enables Next", async () => {
+  routes["GET /api/auth/me"] = me
+  const full = Array.from({ length: 50 }, (_, i) => repo({ id: 100 - i, name: `r${i}` }))
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: full, page: 1, per_page: 50, has_more: false })
+  routes["POST /api/repos"] = () => json(201, repo({ id: 200, name: "fresh" }))
+  renderHome()
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "fresh")
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  expect(await screen.findByText(/alice\/fresh created/i)).toBeInTheDocument()
+  const links = screen.getAllByRole("link", { name: /^alice\// })
+  expect(links).toHaveLength(50)
+  expect(links[0].textContent).toBe("alice/fresh")
+  expect(screen.queryByRole("link", { name: "alice/r49" })).not.toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "Next" })).toHaveAttribute("href", "/?page=2")
+})

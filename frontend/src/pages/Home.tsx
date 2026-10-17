@@ -67,7 +67,13 @@ export function Home() {
           onUnauthorized={expireSession}
           onCreated={(repo) => {
             // A new repo is the newest, so it belongs on page 1 only.
-            if (page === 1) setList((l) => (l ? { ...l, repos: [repo, ...l.repos] } : l))
+            if (page === 1)
+              setList((l) => {
+                if (!l) return l
+                const all = [repo, ...l.repos]
+                // Keep the page size; the pushed-out repo moves to page 2.
+                return { ...l, repos: all.slice(0, l.per_page), has_more: l.has_more || all.length > l.per_page }
+              })
             setFormOpen(false)
             toast.success(`Repository ${repo.owner}/${repo.name} created.`)
           }}

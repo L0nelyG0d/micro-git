@@ -386,3 +386,41 @@ func TestListReposDefaultPageBoundary(t *testing.T) {
 		t.Fatalf("page 2: %+v", p2)
 	}
 }
+
+func TestListReposTieBreaker(t *testing.T) {
+	s := testServer(t)
+	owner, c := newUserCookie(t, s)
+	for _, n := range []string{"t1", "t2", "t3", "t4", "t5"} {
+		createRepo(t, s, c, `{"name":"`+n+`"}`)
+	}
+	// Identical created_at: only id DESC makes the order (and the pages) stable.
+	if _, err := s.DB.Exec(t.Context(),
+		`UPDATE repos SET created_at = $1 WHERE owner_id = (SELECT id FROM users WHERE username = $2)`, t0, owner); err != nil {
+		t.Fatal(err)
+	}
+	seen := map[int64]bool{}
+	var prev int64
+	for pg := 1; pg <= 3; pg++ {
+		p := getRepoPage(t, s, "?owner="+owner+"&per_page=2&page="+strconv.Itoa(pg))
+		for _, r := range p.Repos {
+			if seen[r.ID] {
+				t.Fatalf("repo %d repeated on page %d", r.ID, pg)
+			}
+			if prev != 0 && r.ID >= prev {
+				t.Fatalf("not id DESC: %d after %d", r.ID, prev)
+			}
+			seen[r.ID], prev = true, r.ID
+		}
+	}
+	if len(seen) != 5 {
+		t.Fatalf("saw %d repos, want 5", len(seen))
+	}
+}
+
+func TestListReposValidationOrder(t *testing.T) {
+	s := testServer(t)
+	rec := do(s, http.MethodGet, "/repos?page=0&per_page=0", "", nil)
+	if rec.Code != 400 || errMsg(rec.Body) != "invalid page" {
+		t.Errorf("%d %s", rec.Code, rec.Body)
+	}
+}
