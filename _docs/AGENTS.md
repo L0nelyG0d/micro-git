@@ -30,3 +30,9 @@ Documents - look these up when relevant, don't load them all up front
 - `_docs/tasks.md` - the backlog, one task per GitHub issue
 - `_docs/testing-guidelines.md` - read before writing tests
 - `_docs/design-system.md` - read before anything touching the UI
+
+Fast local test database (use this instead of Neon when time matters)
+
+- A throwaway local Postgres 16 runs on port 54329 (no password, fsync off): `TEST_DATABASE_URL=postgres://test@localhost:54329/mg?sslmode=disable`. Schema is already applied. Tests there run in minutes instead of ~12-18 min.
+- Start it if it is down: `LC_ALL=en_US.UTF-8 /opt/homebrew/opt/postgresql@16/bin/pg_ctl -D <scratchpad>/pgtest -o "-p 54329 -k /tmp" start`. Re-apply schema with `psql -h localhost -p 54329 -U test mg -f backend/db/schema.sql`.
+- Use unique usernames anyway; Neon remains the final check only if the user asks.
