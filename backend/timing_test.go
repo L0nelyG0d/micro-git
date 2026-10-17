@@ -170,6 +170,18 @@ func TestBaseline(t *testing.T) {
 	}
 	measure("POST commit (1 change)", post(1))
 	measure("POST commit (10 changes)", post(10))
+	measure("POST commit (10 changes, 3 folders)", func(int) *httptest.ResponseRecorder {
+		var ch []string
+		for j := 0; j < 10; j++ {
+			next++
+			ch = append(ch, up(fmt.Sprintf("%c/q%d.txt", 'a'+j%3, next), "p"))
+		}
+		rec := do(s, http.MethodPost, base+"/commits", commitJSON("main", tip, "p", ch...), c)
+		if rec.Code == 201 {
+			tip = mustCommitOID(rec.Body.Bytes())
+		}
+		return rec
+	})
 	fmt.Println("| Request | Statements | Median ms |")
 	fmt.Println("|---|---|---|")
 	for _, r := range rows {
