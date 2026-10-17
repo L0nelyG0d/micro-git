@@ -320,11 +320,13 @@ paths:
           $ref: '#/components/responses/InternalError'
     patch:
       tags: [repos]
-      operationId: renameRepo
-      summary: Rename a repository (owner only)
+      operationId: updateRepo
+      summary: Update a repository's name, description or default branch (owner only)
       description: >-
-        The only accepted field is `name`. The old name stops resolving (no redirect). Renaming to the same
-        name or changing only its case succeeds.
+        Send any of `name`, `description` and `default_branch`; at least one is required and omitted fields
+        stay unchanged. After a rename the old name stops resolving (no redirect); renaming to the same name or
+        changing only its case succeeds. `description` may be empty to clear it. `default_branch` must be an
+        existing branch.
       security:
         - sessionCookie: []
       requestBody:
@@ -332,16 +334,18 @@ paths:
         content:
           application/json:
             schema:
-              $ref: '#/components/schemas/RenameRepoRequest'
+              $ref: '#/components/schemas/UpdateRepoRequest'
       responses:
         '200':
-          description: The repository with its new name (same `id`).
+          description: The updated repository (same `id`).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Repo'
         '400':
-          description: '`invalid repository name` or `invalid JSON body` (including a missing `name`).'
+          description: >-
+            `invalid repository name`, `description must be at most 500 characters`, or `invalid JSON body`
+            (including an empty object or an unknown field).
           content:
             application/json:
               schema:
@@ -351,7 +355,11 @@ paths:
         '403':
           $ref: '#/components/responses/Forbidden'
         '404':
-          $ref: '#/components/responses/RepoNotFound'
+          description: '`repository not found`, or `branch not found` when `default_branch` names no branch.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
         '409':
@@ -1059,14 +1067,19 @@ components:
           type: string
           maxLength: 500
           description: Optional, at most 500 characters.
-    RenameRepoRequest:
+    UpdateRepoRequest:
       type: object
-      required: [name]
+      minProperties: 1
       additionalProperties: false
       properties:
         name:
           type: string
           pattern: '^[A-Za-z0-9._-]{1,100}$'
+        description:
+          type: string
+          maxLength: 500
+        default_branch:
+          type: string
     Branch:
       type: object
       required: [name, oid, is_default]

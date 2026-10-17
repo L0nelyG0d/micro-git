@@ -67,7 +67,7 @@ Routing uses `net/http` patterns. Errors are JSON `{"error": "..."}`.
 | `GET /repos/{owner}/{repo}/commits/{oid}` | none | changed files + diff hunks against the first parent |
 | `GET /repos/{owner}/{repo}/tree/{ref}/{path...}` | none | directory entries; `ref` is a branch name or a commit oid |
 | `GET /repos/{owner}/{repo}/blob/{ref}/{path...}` | none | file content and size |
-| `PATCH /repos/{owner}/{repo}` | owner | `{name}`: rename, no redirect from the old name (see "Stretch endpoints") |
+| `PATCH /repos/{owner}/{repo}` | owner | any of `{name, description, default_branch}`: rename (no redirect from the old name), edit description, switch default branch (see "Stretch endpoints") |
 | `POST /repos/{owner}/{repo}/merge` | owner | `{base, head}`: fast-forward only (see "Stretch endpoints") |
 | `GET /repos/{owner}/{repo}/compare?base=&head=` | none | file diff of two branch tips (see "Stretch endpoints") |
 | `POST /repos/{owner}/{repo}/commits` | owner | `{branch, expected_tip, message, changes: [{path, content} or {path, delete: true}]}`; `409` if the tip moved |

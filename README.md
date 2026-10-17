@@ -165,7 +165,7 @@ backend/                 package main: HTTP server (net/http patterns, no router
   main.go, config.go       startup (server timeouts, graceful shutdown) and env parsing
   handler.go, httpx.go     routes, safe headers, JSON helpers, body limits, error shape
   auth.go, session.go      register/login/logout/me, JWT in an httpOnly cookie
-  repos.go, rename.go      repo endpoints (list, create, get, delete) and rename (PATCH)
+  repos.go, rename.go      repo endpoints (list, create, get, delete) and update (PATCH: name, description, default branch)
   branches.go, merge.go    branch endpoints; fast-forward merge
   commits.go               POST commits (compare-and-swap on the ref)
   reading.go, history.go   tree/blob reads, commit log and commit detail
