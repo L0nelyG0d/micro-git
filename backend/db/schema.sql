@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS repos (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS repos_owner_name_lower_idx ON repos (owner_id, lower(name));
+CREATE INDEX IF NOT EXISTS repos_created_idx ON repos (created_at DESC, id DESC);
 
 CREATE TABLE IF NOT EXISTS objects (
     repo_id bigint   NOT NULL REFERENCES repos (id) ON DELETE CASCADE,

@@ -191,7 +191,9 @@ paths:
       operationId: listRepos
       security: []
       summary: List repositories, newest first
-      description: Public. No pagination. An unknown owner gives an empty list.
+      description: >-
+        Public. Paginated with `page` and `per_page`; `has_more` tells whether a next page exists. An unknown owner
+        or a page past the end gives an empty list.
       parameters:
         - name: owner
           in: query
@@ -199,19 +201,49 @@ paths:
           description: Only repositories of this user (case-insensitive).
           schema:
             type: string
+        - name: page
+          in: query
+          required: false
+          description: 1-based page number.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: per_page
+          in: query
+          required: false
+          description: Page size.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
       responses:
         '200':
-          description: The repositories.
+          description: One page of repositories.
           content:
             application/json:
               schema:
                 type: object
-                required: [repos]
+                required: [repos, page, per_page, has_more]
                 properties:
                   repos:
                     type: array
                     items:
                       $ref: '#/components/schemas/Repo'
+                  page:
+                    type: integer
+                  per_page:
+                    type: integer
+                    example: 50
+                  has_more:
+                    type: boolean
+        '400':
+          description: '`invalid page` or `invalid per_page`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
         '500':
@@ -353,7 +385,7 @@ paths:
       tags: [commits]
       operationId: listCommits
       security: []
-      summary: Commit history (first-parent walk, 50 per page)
+      summary: Commit history (first-parent walk, 50 per page by default)
       parameters:
         - name: ref
           in: query
@@ -369,6 +401,15 @@ paths:
             type: integer
             minimum: 1
             default: 1
+        - name: per_page
+          in: query
+          required: false
+          description: Page size.
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 50
       responses:
         '200':
           description: One page of commits. A page past the end gives `commits` empty and `has_more` false.
@@ -377,7 +418,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CommitList'
         '400':
-          description: '`invalid page`.'
+          description: '`invalid page` or `invalid per_page`.'
           content:
             application/json:
               schema:

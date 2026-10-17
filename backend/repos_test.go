@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -167,10 +168,10 @@ func TestListRepos(t *testing.T) {
 	_ = ownerB
 
 	rec = do(s, http.MethodGet, "/repos?owner=nobody-here", "", nil)
-	if rec.Code != 200 || rec.Body.String() != `{"repos":[]}` {
+	if rec.Code != 200 || rec.Body.String() != `{"repos":[],"page":1,"per_page":50,"has_more":false}` {
 		t.Errorf("unknown owner: %d %s", rec.Code, rec.Body)
 	}
-	if rec := do(s, http.MethodGet, "/repos?owner=", "", nil); rec.Body.String() != `{"repos":[]}` {
+	if rec := do(s, http.MethodGet, "/repos?owner=", "", nil); rec.Body.String() != `{"repos":[],"page":1,"per_page":50,"has_more":false}` {
 		t.Errorf("empty owner: %s", rec.Body)
 	}
 }
@@ -264,5 +265,124 @@ func TestDeleteRepo(t *testing.T) {
 		if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE repo_id = $1`, r.ID).Scan(&n); err != nil || n != 0 {
 			t.Errorf("%s rows after delete = %d, err %v", table, n, err)
 		}
+	}
+}
+
+type repoPage struct {
+	Repos   []Repo `json:"repos"`
+	Page    int    `json:"page"`
+	PerPage int    `json:"per_page"`
+	HasMore bool   `json:"has_more"`
+}
+
+func getRepoPage(t *testing.T, s *Server, q string) repoPage {
+	t.Helper()
+	rec := do(s, http.MethodGet, "/repos"+q, "", nil)
+	if rec.Code != 200 {
+		t.Fatalf("%s: %d %s", q, rec.Code, rec.Body)
+	}
+	var p repoPage
+	if err := json.Unmarshal(rec.Body.Bytes(), &p); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestListReposPagination(t *testing.T) {
+	s := testServer(t)
+	owner, c := newUserCookie(t, s)
+	clock := t0
+	s.Now = func() time.Time { clock = clock.Add(time.Second); return clock }
+	var ids []int64 // newest first
+	for _, n := range []string{"p1", "p2", "p3"} {
+		ids = append([]int64{createRepo(t, s, c, `{"name":"`+n+`"}`).ID}, ids...)
+	}
+	base := "?owner=" + owner
+	p1 := getRepoPage(t, s, base+"&per_page=2")
+	p2 := getRepoPage(t, s, base+"&per_page=2&page=2")
+	if len(p1.Repos) != 2 || !p1.HasMore || p1.Page != 1 || p1.PerPage != 2 {
+		t.Errorf("page 1: %+v", p1)
+	}
+	if len(p2.Repos) != 1 || p2.HasMore || p2.Page != 2 {
+		t.Errorf("page 2: %+v", p2)
+	}
+	got := []int64{p1.Repos[0].ID, p1.Repos[1].ID, p2.Repos[0].ID}
+	for i := range ids {
+		if got[i] != ids[i] {
+			t.Errorf("order: got %v want %v", got, ids)
+		}
+	}
+	past := getRepoPage(t, s, base+"&per_page=2&page=3")
+	if past.Repos == nil || len(past.Repos) != 0 || past.HasMore || past.Page != 3 {
+		t.Errorf("past the end: %+v", past)
+	}
+	rec := do(s, http.MethodGet, "/repos?owner="+owner+"&page=3", "", nil)
+	if !strings.Contains(rec.Body.String(), `"repos":[]`) {
+		t.Errorf("past the end body: %s", rec.Body)
+	}
+	for _, pg := range []string{"99999999999999", "1099511627777", "9223372036854775807"} {
+		huge := getRepoPage(t, s, "?page="+pg)
+		if huge.Repos == nil || len(huge.Repos) != 0 || huge.HasMore {
+			t.Errorf("huge page %s: %+v", pg, huge)
+		}
+	}
+	// Bounds.
+	for _, pp := range []string{"1", "100"} {
+		if p := getRepoPage(t, s, base+"&per_page="+pp); p.PerPage != mustAtoi(t, pp) {
+			t.Errorf("per_page=%s: %+v", pp, p)
+		}
+	}
+	for _, q := range []string{"page=0", "page=-1", "page=abc", "page=", "page=1.5"} {
+		rec := do(s, http.MethodGet, "/repos?"+q, "", nil)
+		if rec.Code != 400 || errMsg(rec.Body) != "invalid page" {
+			t.Errorf("%s: %d %s", q, rec.Code, rec.Body)
+		}
+	}
+	for _, q := range []string{"per_page=0", "per_page=101", "per_page=-1", "per_page=abc", "per_page=", "per_page=2.5"} {
+		rec := do(s, http.MethodGet, "/repos?"+q, "", nil)
+		if rec.Code != 400 || errMsg(rec.Body) != "invalid per_page" {
+			t.Errorf("%s: %d %s", q, rec.Code, rec.Body)
+		}
+	}
+}
+
+func mustAtoi(t *testing.T, s string) int {
+	t.Helper()
+	n, err := strconv.Atoi(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestListReposDefaultPageBoundary(t *testing.T) {
+	s := testServer(t)
+	owner, c := newUserCookie(t, s)
+	createRepo(t, s, c, `{"name":"r0"}`)
+	var ownerID int64
+	if err := s.DB.QueryRow(t.Context(), `SELECT id FROM users WHERE username = $1`, owner).Scan(&ownerID); err != nil {
+		t.Fatal(err)
+	}
+	_, err := s.DB.Exec(t.Context(),
+		`INSERT INTO repos (owner_id, name, created_at)
+		 SELECT $1, 'r' || g, $2::timestamptz + g * interval '1 second' FROM generate_series(1, 49) g`,
+		ownerID, t0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := getRepoPage(t, s, "?owner="+owner)
+	if len(p.Repos) != 50 || p.HasMore || p.PerPage != 50 {
+		t.Fatalf("50 repos: len %d has_more %v per_page %d", len(p.Repos), p.HasMore, p.PerPage)
+	}
+	if _, err := s.DB.Exec(t.Context(),
+		`INSERT INTO repos (owner_id, name, created_at) VALUES ($1, 'r50', $2)`, ownerID, t0); err != nil {
+		t.Fatal(err)
+	}
+	p = getRepoPage(t, s, "?owner="+owner)
+	if len(p.Repos) != 50 || !p.HasMore {
+		t.Fatalf("51 repos: len %d has_more %v", len(p.Repos), p.HasMore)
+	}
+	if p2 := getRepoPage(t, s, "?owner="+owner+"&page=2"); len(p2.Repos) != 1 || p2.HasMore {
+		t.Fatalf("page 2: %+v", p2)
 	}
 }
