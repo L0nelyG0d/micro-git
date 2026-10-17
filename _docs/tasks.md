@@ -20,7 +20,7 @@ Description: Accepts `username` and `password`, bcrypt hash, `201` with id and u
 
 ## 5. Backend: login, logout, current user and JWT middleware
 Goal: Session handling with an httpOnly cookie.
-Description: `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, and a middleware that reads the `session` cookie (JWT, 7 days, `JWT_SECRET`) and puts the user id in the request context. Cookie is `SameSite=Lax`, `Secure` in production; the token is never in the body. Tests: valid login, wrong password, logout, `/auth/me`, protected route without a cookie.
+Description: `POST /auth/login`, `POST /auth/logout`, `GET /auth/me`, and a middleware that reads the `session` cookie (JWT, 3 hours, `JWT_SECRET`) and puts the user id in the request context. Cookie is `SameSite=Lax`, `Secure` in production; the token is never in the body. Tests: valid login, wrong password, logout, `/auth/me`, protected route without a cookie.
 
 ## 6. Backend: git object store (pure Go)
 Goal: Encode, hash and parse blob, tree and commit objects in git's exact format.
