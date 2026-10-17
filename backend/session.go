@@ -128,12 +128,21 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	username := strings.ToLower(req.Username)
+	ip := clientIP(r)
+	known := s.isKnownDevice(r, username)
+	// Throttled: answer before any database or bcrypt work, even if the
+	// password is right, and say nothing about whether the user exists.
+	if wait := s.limiter.loginAttempt(ip, username, known); wait > 0 {
+		tooMany(w, wait)
+		return
+	}
 	var id int64
 	var hash string
 	err := s.DB.QueryRow(r.Context(),
 		`SELECT id, password_hash FROM users WHERE lower(username) = $1`, username).Scan(&id, &hash)
 	found := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		s.limiter.loginAborted(ip, username, known)
 		internalError(w, err)
 		return
 	}
@@ -146,16 +155,20 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	token, err := s.issueToken(id)
 	if err != nil {
+		s.limiter.loginAborted(ip, username, known)
 		internalError(w, err)
 		return
 	}
+	s.limiter.loginSucceeded(ip, username, known)
 	s.setSessionCookie(w, token, int(sessionTTL/time.Second))
+	s.setKnownDeviceCookie(w, s.knownDeviceValue(username), int(knownDeviceTTL/time.Second))
 	writeJSON(w, http.StatusOK, userResponse{ID: id, Username: username})
 }
 
 // logout handles POST /auth/logout; idempotent, never 401.
 func (s *Server) logout(w http.ResponseWriter, _ *http.Request) {
 	s.setSessionCookie(w, "", -1)
+	s.setKnownDeviceCookie(w, "", -1)
 	w.WriteHeader(http.StatusNoContent)
 }
 

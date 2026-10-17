@@ -52,9 +52,9 @@ Routing uses `net/http` patterns. Errors are JSON `{"error": "..."}`.
 | endpoint | auth | notes |
 |---|---|---|
 | `GET /health` | none | `200 OK` (plain text); `HEAD` answers `200` without a body |
-| `POST /auth/register` | none | `201`; `409` username taken; `400` password shorter than 8 or bad username |
-| `POST /auth/login` | none | sets the `session` cookie; token never in the body |
-| `POST /auth/logout` | none | clears the cookie; works without one (never `401`) |
+| `POST /auth/register` | none | `201`; `409` username taken; `400` password shorter than 8 or bad username; `429` more than 10 attempts per IP per 15 min |
+| `POST /auth/login` | none | sets the `session` and `known_device` cookies; token never in the body; `429` while throttled (see "Rate limiting") |
+| `POST /auth/logout` | none | clears the `session` and `known_device` cookies; works without one (never `401`) |
 | `GET /auth/me` | cookie | `{id, username}` |
 | `GET /repos` | none | optional `?owner=`, `?page=`, `?per_page=` (default 50, max 100) |
 | `POST /repos` | yes | `{name, description}`; `409` duplicate; the repo starts empty with no branches |
@@ -121,6 +121,18 @@ Repo   = {"id": 1, "owner": "alice", "name": "hello", "description": "", "defaul
 Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 ```
 
+### Rate limiting (login and register, issue #44)
+
+In-memory, standard library only; constants and their meaning are at the top of `backend/ratelimit.go`.
+- Failed logins are counted per (client IP, lower-cased username). After 5 failures in a 15 minute window the pair gets `429` with `Retry-After`; the wait starts at 1 s and doubles per further failure up to 15 min. It is a delay, never a lockout: the counter is forgotten after 15 minutes without a failure and a successful login clears it. While throttled the answer is `429` even for the right password, before any database or bcrypt work.
+- A separate per-IP counter across usernames: more than 30 failures from one IP throttles every username from that IP.
+- A successful login also sets `known_device=<payload>.<sig>` (`HttpOnly`, `SameSite=Lax`, 3 hours, `Secure` with `COOKIE_SECURE`). It is signed with HMAC-SHA256 under a key derived from `JWT_SECRET` and bound to the username. A login request with a valid one for that username gets the lenient tier (20 free failures, no IP cap), so the real user keeps working while a bot attacks. Forged, expired or foreign cookies are treated as no cookie. Logout clears it.
+- The check and the count are one atomic step: an admitted attempt is counted before the password is checked and the count is taken back when the login succeeds (or fails with a server error); a refused request is not counted. So a burst of simultaneous requests cannot all pass (at most the free count gets through) and cannot inflate the counter beyond what the same number of sequential attempts would. Requests with and without a valid `known_device` cookie use separate pair counters, so a bot bursting on the same IP and username cannot use up the cookie holder's budget. What remains: a real user without the cookie (new browser) who shares the IP and username with a bot shares the strict counter with it and waits like the bot does until the delay passes.
+- Unknown usernames are counted and answered exactly like known ones (no account enumeration).
+- `POST /auth/register`: more than 10 attempts per IP per window gives `429` (every attempt counts).
+- The client IP is `RemoteAddr` only. `X-Forwarded-For` and similar headers are ignored because a client-controlled header would let an attacker pick a fresh IP per request; behind a reverse proxy every client would look like the proxy (local-only project, follow-up if hosted).
+- At most 10,000 counters are kept (oldest evicted); the clock is injectable for tests.
+
 ### Auth
 
 `GET /health` → `200` `OK` (`HEAD /health` → `200`, no body)
@@ -130,15 +142,17 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 - `201` `{"id": 1, "username": "alice"}` (no cookie is set; the client calls login next)
 - `400` `username must be 3-32 characters: a-z, 0-9 and -` · `username is reserved` · `password must be 8-72 bytes` · `invalid JSON body`
 - `409` `username already taken`
+- `429` `too many attempts, try again later` with `Retry-After: <seconds>`: more than 10 attempts (any outcome) per IP per 15 minutes
 
 `POST /auth/login`
 - Request: `{"username": "alice", "password": "correct horse"}`
 - `200` `{"id": 1, "username": "alice"}` and `Set-Cookie: session=...` (token never in the body)
 - `400` `username and password are required`
 - `401` `invalid username or password` (same message for unknown user and wrong password)
+- `429` `too many attempts, try again later` with `Retry-After: <seconds>`; see "Rate limiting"
 
 `POST /auth/logout`
-- No body. `204`, clears the cookie (`Max-Age=0`). Idempotent: works without a cookie too (no `401`)
+- No body. `204`, clears the `session` and `known_device` cookies (`Max-Age=0`). Idempotent: works without a cookie too (no `401`)
 
 `GET /auth/me`
 - `200` `{"id": 1, "username": "alice"}`
@@ -277,7 +291,7 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 
 Process: `http.Server` with read-header, read, write and idle timeouts, graceful shutdown on SIGINT / SIGTERM, `X-Content-Type-Options: nosniff` on every response and `Cache-Control: no-store` on `/auth/*`.
 
-Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid for its 3 hours; objects of deleted branches are never garbage-collected (they go with the repository); no rate limiting; local only (Vite dev server proxies `/api`, no production hosting, issue #22 closed as not planned).
+Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid for its 3 hours; objects of deleted branches are never garbage-collected (they go with the repository); login and register are rate limited in memory only (counters reset on restart, see "Rate limiting"); local only (Vite dev server proxies `/api`, no production hosting, issue #22 closed as not planned).
 
 ## Frontend
 
