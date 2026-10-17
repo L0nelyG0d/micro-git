@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/L0nelyG0d/micro-git/backend/gitobj"
+	"github.com/L0nelyG0d/micro-git/backend/linediff"
 	"github.com/L0nelyG0d/micro-git/backend/treebuild"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -297,4 +299,176 @@ SELECT COALESCE(bool_or(root = 2 AND oid = $2), false),
        COALESCE(bool_or(root = 1 AND oid = $3), false)
   FROM walk`, rs.repoID, a, b).Scan(&r.AFromB, &r.BFromA)
 	return r, err
+}
+
+// GetObjects fetches several objects of the repository in one statement
+// (oid = ANY). Oids that do not exist are simply absent from the result, so
+// the caller can fall back to GetObject for the exact not-found error. It
+// satisfies linediff.Batcher.
+func (o *objectStore) GetObjects(oids []string) (map[string]linediff.Object, error) {
+	out := make(map[string]linediff.Object, len(oids))
+	if len(oids) == 0 {
+		return out, nil
+	}
+	rows, err := o.rs.db.Query(o.ctx,
+		`SELECT oid, type, data FROM objects WHERE repo_id = $1 AND oid = ANY($2)`,
+		o.rs.repoID, oids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var oid, t string
+		var body []byte
+		if err := rows.Scan(&oid, &t, &body); err != nil {
+			return nil, err
+		}
+		out[oid] = linediff.Object{Type: gitobj.Type(t), Body: body}
+	}
+	return out, rows.Err()
+}
+
+// primedStore serves some objects from memory (ones a join already fetched)
+// and everything else from the wrapped store, so code written against
+// treebuild.Store keeps its behaviour and only skips the statements.
+type primedStore struct {
+	treebuild.Store
+	objs map[string]linediff.Object
+}
+
+func (p *primedStore) GetObject(oid string) (gitobj.Type, []byte, error) {
+	if o, ok := p.objs[oid]; ok {
+		return o.Type, o.Body, nil
+	}
+	return p.Store.GetObject(oid)
+}
+
+// GetObjects implements linediff.Batcher: primed objects come from memory, the
+// rest from the wrapped store's batch query when it has one.
+func (p *primedStore) GetObjects(oids []string) (map[string]linediff.Object, error) {
+	out := map[string]linediff.Object{}
+	var rest []string
+	for _, oid := range oids {
+		if o, ok := p.objs[oid]; ok {
+			out[oid] = o
+		} else {
+			rest = append(rest, oid)
+		}
+	}
+	if b, ok := p.Store.(linediff.Batcher); ok && len(rest) > 0 {
+		more, err := b.GetObjects(rest)
+		if err != nil {
+			return nil, err
+		}
+		for k, v := range more {
+			out[k] = v
+		}
+	}
+	return out, nil
+}
+
+// primed wraps a store with objects that are already in memory.
+func primed(s treebuild.Store, objs map[string]linediff.Object) treebuild.Store {
+	return &primedStore{Store: s, objs: objs}
+}
+
+// ReadHead is what the tree and blob endpoints need up front, fetched in one
+// statement: the repository, the branch tip named by the ref (HasRef false if
+// there is no such branch), and the tip commit with its root tree.
+type ReadHead struct {
+	Repo    Repo
+	HasRef  bool
+	Tip     string
+	Objects map[string]linediff.Object // tip commit and its root tree, when found
+}
+
+// Header patterns: a commit body starts "tree <40 hex>\n".
+const (
+	treeHeaderRE   = `^tree ([0-9a-f]{40})\n`
+	parentHeaderRE = `^tree [0-9a-f]{40}\nparent ([0-9a-f]{40})\n`
+)
+
+// FindRepoRef looks the repository up by owner and name (case-insensitive) and
+// in the same statement the branch `ref` of it, the commit it points at and
+// that commit's root tree. The repository is reported first: errRepoNotFound
+// when it does not exist, otherwise HasRef tells whether the branch exists.
+func FindRepoRef(ctx context.Context, db querier, owner, name, ref string) (ReadHead, error) {
+	var h ReadHead
+	var created time.Time
+	var tip, treeOID *string
+	var commitData, treeData []byte
+	err := db.QueryRow(ctx, `
+SELECT r.id, r.owner_id, u.username, r.name, r.description, r.default_branch, r.created_at,
+       NOT EXISTS (SELECT 1 FROM refs WHERE repo_id = r.id),
+       f.oid, c.data, t.oid, t.data
+  FROM repos r
+  JOIN users u ON u.id = r.owner_id
+  LEFT JOIN refs f ON f.repo_id = r.id AND f.name = $3
+  LEFT JOIN objects c ON c.repo_id = r.id AND c.oid = f.oid AND c.type = 'commit'
+  LEFT JOIN objects t ON t.repo_id = r.id AND t.type = 'tree'
+       AND t.oid = substring(encode(substring(c.data from 1 for 100), 'escape') from $4)
+ WHERE lower(u.username) = lower($1) AND lower(r.name) = lower($2)`,
+		owner, name, ref, treeHeaderRE).Scan(
+		&h.Repo.ID, &h.Repo.OwnerID, &h.Repo.Owner, &h.Repo.Name, &h.Repo.Description,
+		&h.Repo.DefaultBranch, &created, &h.Repo.Empty, &tip, &commitData, &treeOID, &treeData)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ReadHead{}, errRepoNotFound
+	}
+	if err != nil {
+		return ReadHead{}, err
+	}
+	h.Repo.CreatedAt = created.UTC().Format(time.RFC3339)
+	if tip != nil {
+		h.HasRef, h.Tip = true, *tip
+		h.Objects = map[string]linediff.Object{}
+		if commitData != nil {
+			h.Objects[*tip] = linediff.Object{Type: gitobj.TypeCommit, Body: commitData}
+		}
+		if treeOID != nil {
+			h.Objects[*treeOID] = linediff.Object{Type: gitobj.TypeTree, Body: treeData}
+		}
+	}
+	return h, nil
+}
+
+// CommitBundle loads a commit, its first parent and both root trees in one
+// statement and returns them as objects keyed by oid (wrap a store with
+// primed()). found is false when oid is not a commit of this repository.
+// Anything the join could not match (a damaged parent, say) is simply missing
+// from the map; the caller's normal GetObject fallback then reports it.
+func (rs *RepoStore) CommitBundle(ctx context.Context, oid string) (objs map[string]linediff.Object, found bool, err error) {
+	rows, err := rs.db.Query(ctx, `
+WITH c AS (
+  SELECT oid, data,
+         substring(encode(substring(data from 1 for 100), 'escape') from $3) AS tree,
+         substring(encode(substring(data from 1 for 100), 'escape') from $4) AS parent
+    FROM objects WHERE repo_id = $1 AND oid = $2 AND type = 'commit'
+), p AS (
+  SELECT o.oid, o.data,
+         substring(encode(substring(o.data from 1 for 100), 'escape') from $3) AS tree
+    FROM objects o, c WHERE o.repo_id = $1 AND o.oid = c.parent AND o.type = 'commit'
+)
+SELECT 'commit', c.oid, c.data FROM c
+UNION ALL SELECT 'commit', p.oid, p.data FROM p
+UNION ALL SELECT 'tree', o.oid, o.data FROM objects o
+  WHERE o.repo_id = $1 AND o.type = 'tree'
+    AND o.oid IN (SELECT tree FROM c UNION SELECT tree FROM p)`,
+		rs.repoID, oid, treeHeaderRE, parentHeaderRE)
+	if err != nil {
+		return nil, false, err
+	}
+	defer rows.Close()
+	objs = map[string]linediff.Object{}
+	for rows.Next() {
+		var t, id string
+		var body []byte
+		if err := rows.Scan(&t, &id, &body); err != nil {
+			return nil, false, err
+		}
+		objs[id] = linediff.Object{Type: gitobj.Type(t), Body: body}
+		if id == oid && t == "commit" {
+			found = true
+		}
+	}
+	return objs, found, rows.Err()
 }
