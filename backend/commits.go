@@ -143,7 +143,10 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 	// A repository deleted since the lookup shows up as a foreign-key violation
 	// on the objects/refs inserts: answer 404 instead of 500.
 	fail := func(err error) {
-		if isForeignKeyViolation(err) {
+		// The tip was read before the transaction, so a repository deleted
+		// since then shows up as missing trees, not only as a foreign key.
+		if isForeignKeyViolation(err) ||
+			errors.Is(err, treebuild.ErrNotFound) && s.repoGone(r, repo) {
 			writeError(w, http.StatusNotFound, "repository not found")
 			return
 		}
