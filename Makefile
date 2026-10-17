@@ -13,6 +13,11 @@ PORT ?= 8080
 # Vite dev server port (fixed in frontend/vite.config.ts).
 VITE_PORT := 5173
 
+# Throwaway local Postgres from _docs/AGENTS.md; `make test` falls back to it.
+# No secrets: the role has no password.
+LOCAL_PG_PORT := 54329
+LOCAL_TEST_DB := postgres://test@localhost:$(LOCAL_PG_PORT)/mg?sslmode=disable
+
 # $(call envval,NAME) -> shell command printing the value of NAME from .env.
 envval = grep '^$(1)=' .env | head -n 1 | cut -d= -f2- | tr -d '\r'
 
@@ -90,10 +95,19 @@ dev: check-env ## Run backend and frontend together; Ctrl-C stops both
 	while kill -0 $$bpid 2>/dev/null && kill -0 $$fpid 2>/dev/null; do sleep 1; done; \
 	echo "dev: a process exited; stopping the other"; exit 1
 
-test: ## Whole suite: backend (uses TEST_DATABASE_URL from .env if present), then frontend
-	@if [ -f .env ]; then \
-		export TEST_DATABASE_URL="$$($(call envval,TEST_DATABASE_URL))" JWT_SECRET="$$($(call envval,JWT_SECRET))"; \
+test: ## Whole suite: backend, then frontend. DB: TEST_DATABASE_URL, else local Postgres :54329, else .env
+	@if [ -z "$$TEST_DATABASE_URL" ] && pg_isready -q -h localhost -p $(LOCAL_PG_PORT) >/dev/null 2>&1; then \
+		export TEST_DATABASE_URL="$(LOCAL_TEST_DB)"; \
+		echo "test: using the local Postgres on localhost:$(LOCAL_PG_PORT) (TEST_DATABASE_URL was unset)"; \
+	elif [ -n "$$TEST_DATABASE_URL" ]; then \
+		echo "test: using TEST_DATABASE_URL from the environment"; \
+	elif [ -f .env ] && [ -n "$$($(call envval,TEST_DATABASE_URL))" ]; then \
+		export TEST_DATABASE_URL="$$($(call envval,TEST_DATABASE_URL))"; \
+		echo "test: using TEST_DATABASE_URL from .env"; \
+	else \
+		echo "test: no test database (TEST_DATABASE_URL unset, local Postgres on :$(LOCAL_PG_PORT) not reachable); database tests will be skipped"; \
 	fi; \
+	if [ -z "$$JWT_SECRET" ] && [ -f .env ]; then export JWT_SECRET="$$($(call envval,JWT_SECRET))"; fi; \
 	cd backend && go test -p 1 -race -timeout 40m ./...
 	cd frontend && npm test -- --run
 

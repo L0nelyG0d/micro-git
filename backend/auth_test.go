@@ -31,6 +31,9 @@ var (
 // pool at the end. bcryptCost is only ever lowered here, never in production.
 func TestMain(m *testing.M) {
 	bcryptCost = bcrypt.MinCost
+	// dummyHash was built at package init with the production cost; rebuild it
+	// so unknown-user logins cost the same (cheap) bcrypt time as real ones.
+	dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy password"), bcryptCost)
 	code := m.Run()
 	if testPool != nil {
 		testPool.Close()
@@ -44,7 +47,7 @@ func testServer(t *testing.T) *Server {
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL is not set; skipping database test")
 	}
-	poolOnce.Do(func() { testPool, poolErr = NewPool(context.Background(), url) })
+	poolOnce.Do(func() { testPool, poolErr = NewPool(context.Background(), url, DefaultPoolConfig()) })
 	if poolErr != nil {
 		t.Fatalf("connect: %v", poolErr)
 	}

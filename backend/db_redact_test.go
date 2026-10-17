@@ -36,7 +36,7 @@ func TestNewPoolDoesNotLeakDSN(t *testing.T) {
 
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			pool, err := NewPool(ctx, tc.dsn)
+			pool, err := NewPool(ctx, tc.dsn, DefaultPoolConfig())
 			if err == nil {
 				pool.Close()
 				t.Fatal("NewPool succeeded on a bad DSN")
