@@ -1,9 +1,12 @@
 export class ApiError extends Error {
   status: number
-  constructor(status: number, message: string) {
+  /** Whole seconds from the Retry-After header (429 answers), if present. */
+  retryAfter?: number
+  constructor(status: number, message: string, retryAfter?: number) {
     super(message)
     this.name = "ApiError"
     this.status = status
+    this.retryAfter = retryAfter
   }
 }
 
@@ -38,7 +41,8 @@ export async function api<T = unknown>(
       data && typeof data === "object" && "error" in data && typeof data.error === "string"
         ? data.error
         : "Something went wrong. Try again."
-    throw new ApiError(res.status, msg)
+    const ra = Number(res.headers?.get?.("Retry-After"))
+    throw new ApiError(res.status, msg, Number.isInteger(ra) && ra > 0 ? ra : undefined)
   }
   return data as T
 }

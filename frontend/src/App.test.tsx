@@ -5,12 +5,12 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "./App"
 
-type Handler = (body: unknown) => { status: number; body?: unknown } | Error
+type Handler = (body: unknown) => { status: number; body?: unknown; headers?: Record<string, string> } | Error
 let routes: Record<string, Handler>
 const calls: string[] = []
 
-function json(status: number, body?: unknown) {
-  return { status, body }
+function json(status: number, body?: unknown, headers: Record<string, string> = {}) {
+  return { status, body, headers }
 }
 
 beforeEach(() => {
@@ -30,6 +30,7 @@ beforeEach(() => {
         status: r.status,
         ok: r.status >= 200 && r.status < 300,
         json: async () => r.body,
+        headers: new Headers(r.headers),
       } as Response
     }),
   )
@@ -109,6 +110,19 @@ it("shows the login error inline, clears the password and re-enables submit", as
   await userEvent.click(screen.getByRole("button", { name: "Log in" }))
   expect(await screen.findByRole("alert")).toHaveTextContent("invalid username or password")
   expect(await screen.findByLabelText("Password")).toHaveValue("")
+  expect(await screen.findByRole("button", { name: "Log in" })).toBeEnabled()
+})
+
+it("shows a friendly wait message when login is rate limited", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["POST /api/auth/login"] = () =>
+    json(429, { error: "too many attempts, try again later" }, { "Retry-After": "90" })
+  renderAt("/login")
+  await screen.findByRole("link", { name: "Register" })
+  await userEvent.type(screen.getByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "wrongpass")
+  await userEvent.click(screen.getByRole("button", { name: "Log in" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent("Too many attempts. Please wait 2 minutes and try again.")
   expect(await screen.findByRole("button", { name: "Log in" })).toBeEnabled()
 })
 

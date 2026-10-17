@@ -1,6 +1,7 @@
 import { useState } from "react"
 import type { FormEvent, ReactNode } from "react"
 import { Link } from "react-router-dom"
+import { ApiError } from "@/lib/api"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -13,6 +14,13 @@ type Props = {
   footer: ReactNode
   /** Resolves on success; throws an Error whose message is shown inline. */
   onSubmit: (username: string, password: string) => Promise<void>
+}
+
+function formatWait(seconds?: number): string {
+  if (!seconds) return "a little"
+  if (seconds < 60) return `${seconds} second${seconds === 1 ? "" : "s"}`
+  const m = Math.ceil(seconds / 60)
+  return `${m} minute${m === 1 ? "" : "s"}`
 }
 
 export function AuthForm({ title, submitLabel, notice, footer, onSubmit }: Props) {
@@ -29,7 +37,13 @@ export function AuthForm({ title, submitLabel, notice, footer, onSubmit }: Props
     try {
       await onSubmit(username, password)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong. Try again.")
+      setError(
+        err instanceof ApiError && err.status === 429
+          ? `Too many attempts. Please wait ${formatWait(err.retryAfter)} and try again.`
+          : err instanceof Error
+            ? err.message
+            : "Something went wrong. Try again.",
+      )
       setPassword("") // the password is always cleared after a failure
       setBusy(false)
     }
