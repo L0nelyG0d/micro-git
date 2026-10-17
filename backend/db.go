@@ -21,6 +21,7 @@ func NewPool(ctx context.Context, url string, pc PoolConfig) (*pgxpool.Pool, err
 	if err != nil {
 		return nil, errors.New("invalid DATABASE_URL: it could not be parsed (details hidden because they contain the connection string)")
 	}
+	pcfg.ConnConfig.Tracer = stmtTracer{} // counts statements per request, see timing.go
 	pcfg.MaxConns = pc.MaxConns
 	pcfg.MaxConnIdleTime = pc.MaxConnIdleTime
 	pcfg.HealthCheckPeriod = pc.HealthCheckPeriod
