@@ -90,7 +90,7 @@ function Editor({
 
   const repoQ = useFetch<Repo>(base)
   const empty = !!repoQ.data?.empty
-  const branchesQ = useFetch<{ branches: Branch[] }>(repoQ.data && !empty ? `${base}/branches` : null)
+  const branchesQ = useFetch<{ branches: Branch[] }>(`${base}/branches`) // parallel with the repo request
   const effectiveBranch = empty ? (repoQ.data?.default_branch ?? ref_) : branch
 
   // The tip comes from the blob (edit) or the tree root (new) of the chosen branch.

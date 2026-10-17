@@ -51,12 +51,14 @@ export function ComparePage() {
   const repoQ = useFetch<Repo>(apiBase)
   const repo = repoQ.data
   const live = repo && !repo.empty ? repo : undefined
-  const branchesQ = useFetch<{ branches: Branch[] }>(live ? `${apiBase}/branches` : null)
+  const branchesQ = useFetch<{ branches: Branch[] }>(`${apiBase}/branches`) // parallel with the repo request
 
   const base = params.get("base") || repo?.default_branch || ""
   const head = params.get("head") || repo?.default_branch || ""
+  // Both branches in the query: no need to wait for the default branch.
+  const needsRepo = !params.get("base") || !params.get("head")
   const compareQ = useFetch<Compare>(
-    live ? `${apiBase}/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}` : null,
+    (needsRepo ? live : true) && base && head ? `${apiBase}/compare?base=${encodeURIComponent(base)}&head=${encodeURIComponent(head)}` : null,
   )
 
   const retryAll = () => {

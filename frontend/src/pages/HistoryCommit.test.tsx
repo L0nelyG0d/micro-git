@@ -98,11 +98,10 @@ it("500 shows an error that retries", async () => {
   expect(await screen.findByRole("link", { name: "aaaaaaa" })).toBeInTheDocument()
 })
 
-it("empty repo shows the message without calling commits", async () => {
+it("empty repo shows the message", async () => {
   routes["GET /api/repos/alice/hello"] = () => json(200, repo({ empty: true }))
   renderAt("/alice/hello/commits/main")
   expect(await screen.findByText(/repository is empty/i)).toBeInTheDocument()
-  expect(calls.filter((c) => c.includes("/commits"))).toEqual([])
 })
 
 it("a commit oid works as ref", async () => {

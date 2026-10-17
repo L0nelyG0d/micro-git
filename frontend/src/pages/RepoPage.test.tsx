@@ -474,3 +474,37 @@ it("file viewer: loading and error with retry", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Retry" }))
   expect(await screen.findByRole("heading", { name: "x" })).toBeInTheDocument()
 })
+
+it("starts branches, tree, commits and README without waiting for the repo", async () => {
+  setupRepo(null)
+  let release: () => void = () => {}
+  const gate = new Promise<void>((r) => (release = r))
+  routes["GET /api/repos/alice/hello"] = async () => {
+    await gate
+    return json(200, repo())
+  }
+  routes["GET /api/repos/alice/hello/blob/main/README.md"] = () => json(404, { error: "file not found" })
+  renderAt("/alice/hello/tree/main")
+  await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(5))
+  for (const k of ["/branches", "/tree/main", "/commits?ref=main&page=1", "/blob/main/README.md"]) {
+    expect(calls.some((c) => c.endsWith(k))).toBe(true)
+  }
+  release()
+  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
+})
+
+it("without a ref in the URL, branches and commits still do not wait for the repo", async () => {
+  setupRepo(null)
+  let release: () => void = () => {}
+  const gate = new Promise<void>((r) => (release = r))
+  routes["GET /api/repos/alice/hello"] = async () => {
+    await gate
+    return json(200, repo())
+  }
+  renderAt("/alice/hello")
+  await vi.waitFor(() => expect(calls.some((c) => c.endsWith("/commits?page=1"))).toBe(true))
+  expect(calls.some((c) => c.endsWith("/branches"))).toBe(true)
+  expect(calls.some((c) => c.includes("/tree/"))).toBe(false) // needs the default branch
+  release()
+  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
+})
