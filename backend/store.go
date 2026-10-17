@@ -262,3 +262,39 @@ SELECT oid, data, COALESCE(parent, '') FROM walk ORDER BY depth`,
 	}
 	return out, nil
 }
+
+// Reachability tells, for two commits a and b, whether each is reachable from
+// the other (a commit is reachable from itself).
+type Reachability struct {
+	AFromB bool // a is reachable from b
+	BFromA bool // b is reachable from a
+}
+
+// CommitReachability walks the parents of a and of b together, following every
+// parent, in a single recursive statement. Only the commit header (up to the
+// first blank line) is searched for `parent` lines, never the message. Rows
+// are (walk, oid) pairs deduplicated by UNION, so each commit is visited once
+// per walk and the recursion ends by itself on the finite commit graph: no
+// per-commit round trip and no count of the repository's commits. A missing or
+// non-commit oid just ends that branch of the walk.
+func (rs *RepoStore) CommitReachability(ctx context.Context, a, b string) (Reachability, error) {
+	var r Reachability
+	err := rs.db.QueryRow(ctx, `
+WITH RECURSIVE walk(root, oid) AS (
+  SELECT s.root, o.oid
+    FROM (VALUES (1, $2::text), (2, $3::text)) AS s(root, oid)
+    JOIN objects o ON o.repo_id = $1 AND o.oid = s.oid AND o.type = 'commit'
+  UNION
+  SELECT w.root, p.oid
+    FROM walk w
+    JOIN objects c ON c.repo_id = $1 AND c.oid = w.oid
+    CROSS JOIN LATERAL regexp_matches(
+      encode(substring(c.data from 1 for COALESCE(NULLIF(position('\x0a0a'::bytea in c.data), 0), length(c.data) + 1)), 'escape'),
+      '^parent ([0-9a-f]{40})$', 'gn') AS m(p)
+    JOIN objects p ON p.repo_id = $1 AND p.oid = m.p[1] AND p.type = 'commit'
+)
+SELECT COALESCE(bool_or(root = 2 AND oid = $2), false),
+       COALESCE(bool_or(root = 1 AND oid = $3), false)
+  FROM walk`, rs.repoID, a, b).Scan(&r.AFromB, &r.BFromA)
+	return r, err
+}
