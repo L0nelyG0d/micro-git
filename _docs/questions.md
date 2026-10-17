@@ -40,3 +40,8 @@ and add OpenApi.yaml so that code knows what frontend expects from the backend a
 - Pagination: user text reads as "do not paginate / no per_page, we are not building a global project" (default kept: no). If they meant the opposite, tell the controller.
 - CI: yes, on merge to main, scoped so it does not repeat QA's work (CI = mechanical gates on an ephemeral Postgres; QA = acceptance criteria, exploratory and browser checks).
 - New asks: openapi.yaml as the API contract, and a Makefile to run everything.
+
+## User answers, 2026-10-17 (second round)
+- Keycloak: user agreed to keep our own JWT (3h lifetime). Closed.
+- Rate limiter: user's concern - a bot making a few requests must not lock the real user out. Revised design (controller default, user may veto before merge): count failures per (client IP + username) pair, not per username alone, so a bot on another IP cannot lock the victim; a separate looser per-IP cap across usernames; throttle with growing delay and 429 + Retry-After instead of a hard lockout; a successful login sets an HMAC-signed "known device" cookie (signed with JWT_SECRET-derived key) and requests carrying a valid one for that username get the lenient tier, so the real user keeps working during an attack; unknown usernames behave identically (no account enumeration); in-memory, resets on restart.
+- Pagination: user confirmed "make it per page": add `page` + `per_page` (default 50, max 100) to GET /repos and `per_page` to the commit list; contract change, updates plan.md and openapi.yaml.
