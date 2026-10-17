@@ -123,6 +123,15 @@ statement). While developing, run one test: `go test -p 1 -run TestName .` in
 parallel commits, first commit, rename, branch create) and delete races
 (`delete_race_test.go`: reads and commits while the repository is deleted).
 
+### Continuous integration
+
+`.github/workflows/ci.yml` (GitHub Actions) runs on every push to `main`, every pull
+request and manually (`workflow_dispatch`). It runs only the mechanical gates: gofmt,
+`go vet`, the backend tests against a temporary Postgres service container (schema from
+`backend/db/schema.sql`, no secrets, no Neon), the frontend tests and build, the
+`openapi.yaml` lint and a secret scan. QA covers the rest: acceptance criteria,
+exploratory and browser checks (see `_docs/process.md`, "CI and QA").
+
 ## Architecture
 
 ### Git object model

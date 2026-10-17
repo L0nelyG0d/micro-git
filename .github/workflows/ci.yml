@@ -1,0 +1,118 @@
+# CI: mechanical gates only (format, vet, unit/integration suites, build,
+# OpenAPI lint, secret scan). Acceptance, exploratory and browser checks stay
+# with QA (see _docs/process.md, "CI and QA"). No repository secrets, no Neon:
+# the backend tests run against a throwaway Postgres service container.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (gofmt, vet, tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: mg
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d mg"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      # Throwaway service container, not a secret. Allow-listed by path in the
+      # secret scan (this file is excluded from it).
+      TEST_DATABASE_URL: postgres://ci:ci@localhost:5432/mg?sslmode=disable
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: gofmt (must print nothing)
+        working-directory: backend
+        run: |
+          out="$(gofmt -l .)"
+          if [ -n "$out" ]; then
+            echo "gofmt: these files need formatting:"
+            echo "$out"
+            exit 1
+          fi
+      - name: go vet
+        working-directory: backend
+        run: go vet ./...
+      - name: Apply schema
+        run: psql -v ON_ERROR_STOP=1 -q "$TEST_DATABASE_URL" -f backend/db/schema.sql
+      - name: Backend tests
+        working-directory: backend
+        run: |
+          JWT_SECRET="$(openssl rand -base64 48)"
+          echo "::add-mask::$JWT_SECRET"
+          export JWT_SECRET
+          go test -p 1 -race -timeout 20m ./...
+
+  frontend:
+    name: Frontend (tests, build)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test -- --run
+      - run: npm run build
+
+  openapi:
+    name: OpenAPI lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
+        with:
+          node-version: 22
+      - run: npx --yes @redocly/cli@2.64.1 lint openapi.yaml
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Scan tracked files for connection strings with passwords and Neon tokens
+        run: |
+          # Allow-list (each with a reason):
+          #  - this workflow file: holds the pattern and the throwaway CI service URL
+          #  - lines containing USER:PASSWORD@HOST: documented placeholders in the README
+          hits="$(git grep -nIE 'postgres(ql)?://[^:/@ ]+:[^@ ]+@|npg_[A-Za-z0-9]+' -- . ':(exclude).github/workflows/ci.yml' | grep -v 'USER:PASSWORD@HOST' || true)"
+          if [ -n "$hits" ]; then
+            echo "Possible secret in tracked files (values hidden; showing file:line only):"
+            echo "$hits" | cut -d: -f1,2
+            exit 1
+          fi
+          echo "secret scan: clean"
