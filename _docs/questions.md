@@ -23,11 +23,20 @@ RESOLVED 2026-10-16: questions 3, 4, 5, 6, 7 confirmed as defaults. #19 closed a
 RESOLVED 2026-10-16: user approved all four stretch defaults (no rename redirect, 400 already up to date, query-param compare, safe-subset README).
 
 ## Next-round analysis (#29-#36), stashed 2026-10-16 - all default "no, keep as is"
-- [ ] Logout does not revoke the JWT (valid 7 days). Revoking needs a token_version column or sessions table. Default: no; documented as a known limit (#36).
-- [ ] Rate limiting login/register. Default: no (bcrypt makes floods costly); add an in-memory limiter only if the demo is public.
-- [ ] Denormalize parents into a commits table/column. Default: no; the recursive CTE in #29 is enough.
-- [ ] Paginate GET /repos or add per_page to the commit list (contract change). Default: no.
+- [ ] Logout does not revoke the JWT (valid 7 days). Revoking needs a token_version column or sessions table. Default: no; documented as a known limit (#36). - for this dont we need a keycloak authorization with a signature that  to not pass the credentials every single time. And lets make the jwt valid only for 3 hours
+- [ ] Rate limiting login/register. Default: no (bcrypt makes floods costly); add an in-memory limiter only if the demo is public. - yes lets make a limiter based on if the user is known and lets make a signature check. Explain to me in details how that would work
+- [ ] Denormalize parents into a commits table/column. Default: no; the recursive CTE in #29 is enough. - ok
+- [ ] Paginate GET /repos or add per_page to the commit list (contract change). Default: no. - lets make it per page paginating makes no sense and indexing as I am not planning on making it a global project
 - [ ] Garbage-collect objects after branch/repo delete. Default: no; documented.
-- [ ] Add CI (GitHub Actions) for go test / npm test (needs a DB secret). Default: no.
-- [ ] Default COOKIE_SECURE to true / require TLS. Default: no (local-only).
-- [ ] Real merges, tags, abbreviated-oid refs. Default: stay out of scope.
+- [ ] Add CI (GitHub Actions) for go test / npm test (needs a DB secret). Default: no. - yes lets make it on merge accepted but other conditions so that the QA s role and CI wont just repeat the same work
+- [ ] Default COOKIE_SECURE to true / require TLS. Default: no (local-only). - its fine
+- [ ] Real merges, tags, abbreviated-oid refs. Default: stay out of scope. - yep
+and add OpenApi.yaml so that code knows what frontend expects from the backend and create a makefile that will run all the programs so that the project can start without any issues
+
+## Controller notes on the answers above (2026-10-17)
+- JWT: lifetime goes from 7 days to 3 hours (decided, issue below). Keycloak: NOT adopted yet. It is an architectural change (external identity server) and the current httpOnly-cookie JWT already avoids sending credentials on every request. Open question for the user, with a recommendation (keep our own JWT) - see the chat reply.
+- Rate limiter: user said yes and asked for a detailed explanation of how "known user" tiers and a "signature check" would work. Design explained in chat; waiting for the user to confirm the design and what "signature check" means before an issue is created.
+- Denormalize parents: ok (no). Garbage collection: no answer, default stays (no). COOKIE_SECURE: fine (no). Real merges/tags/abbreviated oids: out of scope.
+- Pagination: user text reads as "do not paginate / no per_page, we are not building a global project" (default kept: no). If they meant the opposite, tell the controller.
+- CI: yes, on merge to main, scoped so it does not repeat QA's work (CI = mechanical gates on an ephemeral Postgres; QA = acceptance criteria, exploratory and browser checks).
+- New asks: openapi.yaml as the API contract, and a Makefile to run everything.
