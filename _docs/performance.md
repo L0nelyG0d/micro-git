@@ -27,6 +27,8 @@ Local Postgres: Postgres 16 on localhost:54329, fsync off, in-process `httptest`
 
 Neon column is an estimate, not a measurement: statements x 200 ms (the round-trip per statement noted in `_docs/AGENTS.md`). On Neon the time is dominated by round trips, so statement count is the number to reduce. No Neon credentials were used.
 
+Decision (2026-10-18): the Neon column stays an estimate, labelled as such. The #47 criterion "time on Neon" is relaxed to "statement count (exact) plus estimated Neon time"; a real Neon run is not required.
+
 ## Frontend
 
 `npm run build` (`tsc -b && vite build`, vite 8.3.4):
