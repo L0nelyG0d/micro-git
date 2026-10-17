@@ -178,6 +178,21 @@ frontend/                React + TypeScript + Vite + Tailwind + shadcn/ui
   src/lib/                 api client, fetch hook, formatting, git helpers
 ```
 
+### API contract
+
+`openapi.yaml` at the repo root describes every endpoint (OpenAPI 3.0.3): request and
+response schemas, the `session` cookie auth, the `{"error": ...}` shape and every status
+code the handlers return. The backend serves no `/api` prefix; the Vite dev server adds it
+for the browser and strips it again. Lint it with
+
+```
+npx @redocly/cli lint openapi.yaml
+```
+
+(Redocly is run through `npx`, not a project dependency.) Two tests keep the spec in sync:
+`backend/openapi_test.go` compares the routes in `handler.go` with the spec paths, and
+`frontend/src/lib/openapi.test.ts` checks that every path the frontend requests exists in it.
+
 ## Demo script
 
 Start the backend and frontend (Setup steps 5 and 6) and open
