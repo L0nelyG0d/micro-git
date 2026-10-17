@@ -1,20 +1,22 @@
-import { useEffect, useRef } from "react"
+import { lazy, Suspense, useEffect, useRef } from "react"
 import type { RefObject } from "react"
 import { matchPath, Route, Routes, useLocation } from "react-router-dom"
 import { Toaster } from "sonner"
 import { AuthProvider } from "@/auth/AuthContext"
 import { Nav } from "@/components/Nav"
-import { BlobPage } from "@/pages/BlobPage"
-import { ComparePage } from "@/pages/ComparePage"
-import { EditorPage } from "@/pages/EditorPage"
-import { CommitPage } from "@/pages/CommitPage"
-import { HistoryPage } from "@/pages/HistoryPage"
+import { LoadingBlock } from "@/components/StateViews"
 import { Home } from "@/pages/Home"
-import { Login } from "@/pages/Login"
 import { NotFound } from "@/pages/NotFound"
-import { Register } from "@/pages/Register"
-import { RepoPage } from "@/pages/RepoPage"
-import { SettingsPage } from "@/pages/SettingsPage"
+
+const BlobPage = lazy(() => import("@/pages/BlobPage").then((m) => ({ default: m.BlobPage })))
+const ComparePage = lazy(() => import("@/pages/ComparePage").then((m) => ({ default: m.ComparePage })))
+const EditorPage = lazy(() => import("@/pages/EditorPage").then((m) => ({ default: m.EditorPage })))
+const CommitPage = lazy(() => import("@/pages/CommitPage").then((m) => ({ default: m.CommitPage })))
+const HistoryPage = lazy(() => import("@/pages/HistoryPage").then((m) => ({ default: m.HistoryPage })))
+const Login = lazy(() => import("@/pages/Login").then((m) => ({ default: m.Login })))
+const Register = lazy(() => import("@/pages/Register").then((m) => ({ default: m.Register })))
+const RepoPage = lazy(() => import("@/pages/RepoPage").then((m) => ({ default: m.RepoPage })))
+const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })))
 
 const SUFFIX = "micro git"
 const R = "/:owner/:repo"
@@ -87,21 +89,23 @@ export default function App() {
       </a>
       <Nav />
       <main id="main" tabIndex={-1} ref={mainRef} className="mx-auto max-w-4xl p-4 outline-none">
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route path="/register" element={<Register />} />
-          <Route path="/" element={<Home />} />
-          <Route path="/:owner/:repo" element={<RepoPage />} />
-          <Route path="/:owner/:repo/tree/:ref/*" element={<RepoPage />} />
-          <Route path="/:owner/:repo/blob/:ref/*" element={<BlobPage />} />
-          <Route path="/:owner/:repo/edit/:ref/*" element={<EditorPage mode="edit" />} />
-          <Route path="/:owner/:repo/new/:ref" element={<EditorPage mode="new" />} />
-          <Route path="/:owner/:repo/commits/:ref" element={<HistoryPage />} />
-          <Route path="/:owner/:repo/commit/:oid" element={<CommitPage />} />
-          <Route path="/:owner/:repo/settings" element={<SettingsPage />} />
-          <Route path="/:owner/:repo/compare" element={<ComparePage />} />
-          <Route path="*"element={<NotFound />} />
-        </Routes>
+        <Suspense fallback={<LoadingBlock label="Loading page" />}>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/" element={<Home />} />
+            <Route path="/:owner/:repo" element={<RepoPage />} />
+            <Route path="/:owner/:repo/tree/:ref/*" element={<RepoPage />} />
+            <Route path="/:owner/:repo/blob/:ref/*" element={<BlobPage />} />
+            <Route path="/:owner/:repo/edit/:ref/*" element={<EditorPage mode="edit" />} />
+            <Route path="/:owner/:repo/new/:ref" element={<EditorPage mode="new" />} />
+            <Route path="/:owner/:repo/commits/:ref" element={<HistoryPage />} />
+            <Route path="/:owner/:repo/commit/:oid" element={<CommitPage />} />
+            <Route path="/:owner/:repo/settings" element={<SettingsPage />} />
+            <Route path="/:owner/:repo/compare" element={<ComparePage />} />
+            <Route path="*"element={<NotFound />} />
+          </Routes>
+        </Suspense>
       </main>
       <Toaster theme="system" />
     </AuthProvider>

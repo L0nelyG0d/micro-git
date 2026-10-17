@@ -62,7 +62,7 @@ it("renders summary and the shared diff, prefilled selects, truncated note", asy
     file({ path: "big.txt", status: "added", additions: 3, truncated: true }),
   ]))
   renderAt("/alice/hello/compare?base=main&head=dev.1")
-  expect(main().getByRole("status", { name: "Loading repository" })).toBeInTheDocument()
+  expect(await main().findByRole("status", { name: "Loading repository" })).toBeInTheDocument()
   expect(await screen.findByTestId("summary")).toHaveTextContent("2 files changed, +4 -1")
   expect(screen.getByRole("combobox", { name: "Base" })).toHaveTextContent("main")
   expect(screen.getByRole("combobox", { name: "Compare" })).toHaveTextContent("dev.1")

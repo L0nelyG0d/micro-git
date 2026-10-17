@@ -86,7 +86,7 @@ const main = () => within(screen.getByRole("main"))
 it("shows a loading state, then the tree with directories first and links", async () => {
   setupRepo(null)
   renderAt("/alice/hello")
-  expect(screen.getByRole("status", { name: "Loading repository" })).toBeInTheDocument()
+  await screen.findByRole("status", { name: "Loading repository" })
   const files = await screen.findByRole("table", { name: "Files" })
   const links = within(files).getAllByRole("link")
   expect(links.map((l) => l.textContent)).toEqual(["src", "README.md"])
