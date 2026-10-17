@@ -29,6 +29,14 @@ Neon column is an estimate, not a measurement: statements x 200 ms (the round-tr
 
 Decision (2026-10-18): the Neon column stays an estimate, labelled as such. The #47 criterion "time on Neon" is relaxed to "statement count (exact) plus estimated Neon time"; a real Neon run is not required.
 
+## After #50 (merge ancestry in one recursive query)
+
+| Request | Statements before | Statements after | Local ms before | Local ms after | Neon est. after |
+|---|---|---|---|---|---|
+| POST merge (50-commit history) | 56 | 6 | 2.6 | 11.4 | 1200 |
+
+Both ancestry questions (already up to date, fast-forward possible) are answered by one `WITH RECURSIVE` statement (`RepoStore.CommitReachability`); the `count(*)` over commits is gone. The count is constant: a test merges a branch 200 commits ahead and asserts at most 10 statements. Local time rose because the parent lines are parsed in SQL with a regex, but on Neon the round trips dominate (56 -> 6). No index or generated column added: every step is a primary-key lookup on `objects (repo_id, oid)`, so there is no schema change and nothing to apply to Neon.
+
 ## Frontend
 
 `npm run build` (`tsc -b && vite build`, vite 8.3.4):
