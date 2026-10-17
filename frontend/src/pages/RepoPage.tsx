@@ -160,8 +160,8 @@ export function RepoPage() {
       {header}
       <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem]">
         <div className="flex min-w-0 flex-col gap-3">{body}</div>
-        <aside aria-label="Repository details" className="flex min-w-0 flex-col gap-3">
-          <Section title="About">
+        <aside aria-label="Repository details" className="order-first flex min-w-0 flex-col gap-3 md:order-last">
+          <Section title="About" className="hidden md:flex">
             <p className="text-sm break-words text-muted-foreground">
               {repo.description || "No description."}
             </p>
