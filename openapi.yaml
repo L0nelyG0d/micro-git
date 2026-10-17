@@ -122,9 +122,8 @@ paths:
           headers:
             Set-Cookie:
               description: >-
-                `session=<jwt>; Path=/; HttpOnly; SameSite=Lax; Max-Age=<session lifetime in seconds>`, plus
-                `Secure` when the server runs with `COOKIE_SECURE=true`. The lifetime is 3 hours (Max-Age 10800)
-                once issue #40 is merged; until then the code uses 7 days (604800).
+                `session=<jwt>; Path=/; HttpOnly; SameSite=Lax; Max-Age=10800`, plus `Secure` when the server runs
+                with `COOKIE_SECURE=true`. The lifetime is 3 hours.
               schema:
                 type: string
           content:
