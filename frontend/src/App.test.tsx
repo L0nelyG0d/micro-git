@@ -4,6 +4,7 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "./App"
+import { cacheClear } from "@/lib/fetchCache"
 
 type Handler = (body: unknown) => { status: number; body?: unknown; headers?: Record<string, string> } | Error
 let routes: Record<string, Handler>
@@ -14,6 +15,7 @@ function json(status: number, body?: unknown, headers: Record<string, string> = 
 }
 
 beforeEach(() => {
+  cacheClear()
   calls.length = 0
   routes = { "GET /api/repos?page=1": () => json(200, { repos: [], page: 1, per_page: 50, has_more: false }) }
   vi.stubGlobal(

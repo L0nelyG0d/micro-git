@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { nextTask } from "@/test-utils"
+import { cacheClear } from "@/lib/fetchCache"
 
 type Res = { status: number; body?: unknown } | Error
 let routes: Record<string, () => Res>
@@ -30,6 +31,7 @@ const file = (o: Record<string, unknown>) => ({
 const Q = `${API}/compare?base=main&head=dev.1`
 
 beforeEach(() => {
+  cacheClear()
   calls = []
   routes = {
     "GET /api/auth/me": () => json(401, { error: "authentication required" }),

@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { nextTask } from "@/test-utils"
+import { cacheClear } from "@/lib/fetchCache"
 import { formatDate } from "@/lib/format"
 
 type Res = { status: number; body?: unknown }
@@ -32,6 +33,7 @@ const detail = (files: unknown[], o: Record<string, unknown> = {}) => ({
 const H = "GET /api/repos/alice/hello/commits"
 
 beforeEach(() => {
+  cacheClear()
   calls = []
   routes = { "GET /api/auth/me": () => json(401, { error: "authentication required" }), "GET /api/repos/alice/hello": () => json(200, repo()) }
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {

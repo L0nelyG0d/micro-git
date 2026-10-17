@@ -4,6 +4,7 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { nextTask } from "@/test-utils"
+import { cacheClear } from "@/lib/fetchCache"
 
 type Res = { status: number; body?: unknown } | Error
 let routes: Record<string, () => Res>
@@ -46,6 +47,7 @@ function setup(withReadme = true) {
 }
 
 beforeEach(() => {
+  cacheClear()
   calls = []
   routes = {}
   vi.stubGlobal(

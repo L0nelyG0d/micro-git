@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { nextTask } from "@/test-utils"
+import { cacheClear } from "@/lib/fetchCache"
 import { formatDate } from "@/lib/format"
 
 type Res = { status: number; body?: unknown } | Error
@@ -54,6 +55,7 @@ function setupRepo(user: "alice" | "bob" | null = "alice") {
 }
 
 beforeEach(() => {
+  cacheClear()
   calls = []
   routes = {}
   vi.stubGlobal(

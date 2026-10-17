@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
+import { cacheClear } from "@/lib/fetchCache"
 
 type Res = { status: number; body?: unknown }
 let routes: Record<string, (body: unknown) => Res>
@@ -37,6 +38,7 @@ function setup(user: string | null = "alice", list = branches) {
 }
 
 beforeEach(() => {
+  cacheClear()
   calls = []
   routes = {}
   vi.stubGlobal(
