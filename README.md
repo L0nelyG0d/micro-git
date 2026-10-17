@@ -288,7 +288,7 @@ Start the backend and frontend (Setup steps 5 and 6) and open
 - Objects are never garbage-collected: the blobs, trees and commits of a
   deleted branch stay in the database (they are removed only when the whole
   repository is deleted).
-- No rate limiting on any endpoint (login included).
+- Only login and register are rate limited (in memory, so the counters reset on restart; the client IP is the connection address, so behind a reverse proxy all clients look alike). Other endpoints are not limited. A throttled client gets `429` with `Retry-After`.
 - `GET /repos` is not paginated.
 - Request limits: JSON bodies over 1 MiB answer `413` (commits: 64 MiB); one
   diff response does at most 32 million line-pair cells, later files come back

@@ -1,6 +1,6 @@
 # Login / register rate limiter (issue #44)
 
-Status: designed, not implemented yet (starts after #40 merges). Update this file when the code lands.
+Status: implemented on branch `issue-44-rate-limiter` (`backend/ratelimit.go`).
 
 ## What it is
 An in-memory limiter on `POST /auth/login` and `POST /auth/register`. It slows down password guessing and account spam. It must never let a bot lock the real user out, which is the user's main requirement.
