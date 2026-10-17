@@ -14,6 +14,7 @@ import { Login } from "@/pages/Login"
 import { NotFound } from "@/pages/NotFound"
 import { Register } from "@/pages/Register"
 import { RepoPage } from "@/pages/RepoPage"
+import { SettingsPage } from "@/pages/SettingsPage"
 
 const SUFFIX = "micro git"
 const R = "/:owner/:repo"
@@ -40,6 +41,8 @@ function titleFor(pathname: string): string {
   if (hist) return withRepo("History", hist.params)
   const commit = m(`${R}/commit/:oid`)
   if (commit) return withRepo(`Commit ${dec(commit.params.oid ?? "").slice(0, 7)}`, commit.params)
+  const settings = m(`${R}/settings`)
+  if (settings) return withRepo("Settings", settings.params)
   const cmp = m(`${R}/compare`)
   if (cmp) return withRepo("Compare", cmp.params)
   const nw = m(`${R}/new/:ref`)
@@ -95,6 +98,7 @@ export default function App() {
           <Route path="/:owner/:repo/new/:ref" element={<EditorPage mode="new" />} />
           <Route path="/:owner/:repo/commits/:ref" element={<HistoryPage />} />
           <Route path="/:owner/:repo/commit/:oid" element={<CommitPage />} />
+          <Route path="/:owner/:repo/settings" element={<SettingsPage />} />
           <Route path="/:owner/:repo/compare" element={<ComparePage />} />
           <Route path="*"element={<NotFound />} />
         </Routes>

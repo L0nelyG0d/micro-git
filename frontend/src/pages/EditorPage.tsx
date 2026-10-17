@@ -5,6 +5,7 @@ import { toast } from "sonner"
 import { useAuth } from "@/auth/AuthContext"
 import { BranchSwitcher } from "@/components/BranchSwitcher"
 import { Breadcrumbs } from "@/components/Breadcrumbs"
+import { PageToolbar } from "@/components/PageToolbar"
 import { ErrorBlock, LoadingBlock, NotFoundBlock } from "@/components/StateViews"
 import {
   AlertDialog,
@@ -210,7 +211,13 @@ function Editor({
 
   return (
     <form onSubmit={submit} noValidate className="flex flex-col gap-3">
-      {!isNew && <Breadcrumbs owner={owner} repo={name} ref_={ref_} path={initialPath} lastIsFile />}
+      <PageToolbar up={{ to: cancelTo, label: isNew ? "files" : "the file" }}>
+        {isNew ? (
+          <Breadcrumbs owner={owner} repo={name} ref_={ref_} path="" />
+        ) : (
+          <Breadcrumbs owner={owner} repo={name} ref_={ref_} path={initialPath} lastIsFile />
+        )}
+      </PageToolbar>
       <h1 className="text-xl font-semibold break-all">
         {isNew ? "New file" : `Edit ${initialPath}`}
       </h1>

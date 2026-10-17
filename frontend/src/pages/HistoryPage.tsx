@@ -1,5 +1,6 @@
 import { Link, useParams, useSearchParams } from "react-router-dom"
 import { ErrorBlock, LoadingBlock, NotFoundBlock } from "@/components/StateViews"
+import { PageToolbar } from "@/components/PageToolbar"
 import { OidLink } from "@/components/OidLink"
 import { Pagination } from "@/components/Pagination"
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table"
@@ -36,10 +37,10 @@ export function HistoryPage() {
   if (!repoQ.data) return <LoadingBlock label="Loading history" />
 
   const repo = repoQ.data
-  const back = (
-    <Link to={uiPath("tree", owner, name, ref, "")} className="text-sm text-primary hover:underline">
-      Back to files
-    </Link>
+  const toolbar = (
+    <PageToolbar up={{ to: uiPath("tree", owner, name, ref, ""), label: "files" }}>
+      <span className="text-sm font-semibold">History</span>
+    </PageToolbar>
   )
   const heading = (
     <div className="flex flex-col gap-1">
@@ -57,6 +58,7 @@ export function HistoryPage() {
   if (repo.empty) {
     return (
       <div className="flex flex-col gap-3">
+        {toolbar}
         {heading}
         <p className="rounded-xl bg-card p-3 text-sm text-muted-foreground shadow-xs ring-1 ring-border">
           This repository is empty. Nothing has been committed yet.
@@ -124,8 +126,8 @@ export function HistoryPage() {
   const hasMore = q.data?.has_more ?? false
   return (
     <div className="flex flex-col gap-3">
+      {toolbar}
       {heading}
-      {back}
       {body}
       <Pagination
         page={page}

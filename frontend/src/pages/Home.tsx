@@ -6,6 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useAuth } from "@/auth/AuthContext"
 import { NewRepoForm } from "@/components/NewRepoForm"
 import { Pagination } from "@/components/Pagination"
+import { Section } from "@/components/Section"
 import { RepoTable } from "@/components/RepoTable"
 import { api, ApiError } from "@/lib/api"
 import { parsePage } from "@/lib/pagination"
@@ -115,7 +116,9 @@ export function Home() {
           )}
         </p>
       ) : (
-        <RepoTable repos={list.repos} />
+        <Section title="Repository list" className="[&>div]:p-0">
+          <RepoTable repos={list.repos} />
+        </Section>
       )}
 
       {list && (page > 1 || list.has_more) && (
