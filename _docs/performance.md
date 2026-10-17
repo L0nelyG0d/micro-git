@@ -12,16 +12,18 @@ Fixture: `main` has 50 commits; the tree has `README.md`, `a/b/x.txt`, `a/b/c/de
 
 ## Backend
 
-| Request | Statements | Local Postgres, median ms | Neon, estimated ms |
-|---|---|---|---|
-| GET tree (root) | 4 | 0.1 | 800 |
-| GET tree (3 levels deep) | 7 | 0.2 | 1400 |
-| GET blob | 8 | 0.3 | 1600 |
-| GET commits | 3 | 4.0 | 600 |
-| GET commit detail | 6 | 0.4 | 1200 |
-| POST commit (1 change) | 12 | 0.7 | 2400 |
-| POST commit (10 changes) | 21 | 1.0 | 4200 |
-| POST merge (50-commit history) | 56 | 2.6 | 11200 |
+| Request | Statements | Local Postgres, median ms | Neon, estimated ms | After #49: statements | After #49: Neon, estimated ms |
+|---|---|---|---|---|---|
+| GET tree (root) | 4 | 0.1 | 800 | 1 | 200 |
+| GET tree (3 levels deep) | 7 | 0.2 | 1400 | 4 | 800 |
+| GET blob | 8 | 0.3 | 1600 | 5 | 1000 |
+| GET commits | 3 | 4.0 | 600 | 3 (unchanged) | 600 |
+| GET commit detail | 6 | 0.4 | 1200 | 3 | 600 |
+| POST commit (1 change) | 12 | 0.7 | 2400 | - | - |
+| POST commit (10 changes) | 21 | 1.0 | 4200 | - | - |
+| POST merge (50-commit history) | 56 | 2.6 | 11200 | - | - |
+
+#49 (read endpoints, branch `issue-49-fewer-reads`): the repo, the branch tip, the tip commit and its root tree come from one joined statement (`FindRepoRef`); every further path segment is one tree read; `GET commits/{oid}` loads the commit, its first parent and both root trees in one statement (`CommitBundle`); `linediff.Trees` reads each tree level, and each chunk of up to 50 changed files' blobs, with one `oid = ANY($2)` query. The 404 order (repo, then ref) is unchanged. A `-` means #49 does not touch the row. Bodies are byte-identical (`TestReadEndpointsGolden`); the counts are guarded by `TestReadStatementCounts`. Compare still takes 11 statements on that test's fixture (its ancestry work is #50) but already gets the batched diff.
 
 Local Postgres: Postgres 16 on localhost:54329, fsync off, in-process `httptest` (no network hop, no TLS). Times are therefore almost pure server work.
 
