@@ -50,7 +50,7 @@ const main = () => within(screen.getByRole("main"))
 it("lists commits with first line, author, date and full-oid link", async () => {
   routes[`${H}?ref=main&page=1`] = () => json(200, page())
   renderAt("/alice/hello/commits/main")
-  expect(main().getByRole("status", { name: "Loading history" })).toBeInTheDocument()
+  expect(await main().findByRole("status", { name: "Loading history" })).toBeInTheDocument()
   const link = await screen.findByRole("link", { name: "aaaaaaa" })
   expect(link).toHaveAttribute("href", `/alice/hello/commit/${A}`)
   expect(main().getByText("Add readme")).toBeInTheDocument()
