@@ -80,10 +80,13 @@ func TestLoginSuccess(t *testing.T) {
 	if strings.Contains(rec.Body.String(), c.Value) {
 		t.Error("token in body")
 	}
-	if !c.HttpOnly || c.Path != "/" || c.MaxAge != 604800 || c.SameSite != http.SameSiteLaxMode || c.Secure {
+	if !c.HttpOnly || c.Path != "/" || c.MaxAge != 10800 || c.SameSite != http.SameSiteLaxMode || c.Secure {
 		t.Errorf("cookie = %+v", c)
 	}
 	raw := rec.Header().Get("Set-Cookie")
+	if !strings.Contains(raw, "Max-Age=10800") {
+		t.Errorf("Set-Cookie lacks Max-Age=10800: %s", raw)
+	}
 	if strings.Contains(raw, "Secure") {
 		t.Errorf("Secure present: %s", raw)
 	}
@@ -97,7 +100,7 @@ func TestLoginSuccess(t *testing.T) {
 	if claims.Subject != strconv.FormatInt(id, 10) {
 		t.Errorf("sub = %q", claims.Subject)
 	}
-	if !claims.ExpiresAt.Time.Equal(t0.Add(7 * 24 * time.Hour)) {
+	if !claims.ExpiresAt.Time.Equal(t0.Add(3 * time.Hour)) {
 		t.Errorf("exp = %v", claims.ExpiresAt)
 	}
 }
@@ -255,12 +258,14 @@ func TestMeExpiresWithClock(t *testing.T) {
 	newUser(t, s, name, "correct horse")
 	cookie := sessionCookie(t, do(s, http.MethodPost, "/auth/login", loginBody(name, "correct horse"), nil))
 
-	now = t0.Add(7*24*time.Hour - time.Second)
+	now = t0.Add(3*time.Hour - time.Second)
 	if rec := do(s, http.MethodGet, "/auth/me", "", cookie); rec.Code != 200 {
 		t.Errorf("just before expiry: %d", rec.Code)
 	}
-	now = t0.Add(7*24*time.Hour + time.Second)
+	now = t0.Add(3*time.Hour + time.Second)
 	wantError(t, do(s, http.MethodGet, "/auth/me", "", cookie), 401, "authentication required")
+	// an owner action with the expired token is refused too
+	wantError(t, do(s, http.MethodPost, "/repos", `{"name":"`+name+`"}`, cookie), 401, "authentication required")
 }
 
 func TestRequireAndOptionalAuth(t *testing.T) {

@@ -260,7 +260,7 @@ Start the backend and frontend (Setup steps 5 and 6) and open
 - Renaming a repository does not redirect: the old name answers `404`.
 - Merging is fast-forward only; there are no real merges or conflict handling.
 - Logout only clears the cookie. The JWT is not revoked, so a stolen token
-  stays valid until its 7 days run out.
+  stays valid until its 3 hours run out.
 - Objects are never garbage-collected: the blobs, trees and commits of a
   deleted branch stay in the database (they are removed only when the whole
   repository is deleted).

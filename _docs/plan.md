@@ -105,7 +105,7 @@ Conventions (all endpoints):
 - Error body is always `{"error": "<message>"}` with the message exactly as written below. Extra field only on the tip conflict (`current_tip`). Malformed JSON, wrong types or unknown fields: `400` `invalid JSON body`. A JSON body over 1 MiB (commits: 64 MiB): `413` `request too large`. Unknown route `404` `not found`; wrong method `405` `method not allowed`; unexpected failure `500` `internal error` (no details leaked)
 - Missing/invalid/expired cookie, or a cookie for a user that no longer exists: `401` `authentication required`. Not the owner: `403` `forbidden`
 - Ids are integers. Times are RFC 3339 UTC strings (`2026-01-02T15:04:05Z`); the frontend formats them. Oids are full 40-character lowercase hex
-- Session cookie: `session=<jwt>; Path=/; HttpOnly; SameSite=Lax; Max-Age=604800`, plus `Secure` when env `COOKIE_SECURE=true`. JWT claims: `sub` (user id), `exp`
+- Session cookie: `session=<jwt>; Path=/; HttpOnly; SameSite=Lax; Max-Age=10800`, plus `Secure` when env `COOKIE_SECURE=true`. JWT claims: `sub` (user id), `exp`
 - `{path...}` may be empty (repo root) and may have a trailing slash; register the pattern with and without the trailing part. Path segments are percent-decoded and then validated by the path rules. Literal `.`, `..` and empty segments in a request URL are redirected (`307`) by ServeMux to the cleaned path and never reach the handler
 - Lists are wrapped in an object, never a bare array
 
@@ -272,7 +272,7 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 
 Process: `http.Server` with read-header, read, write and idle timeouts, graceful shutdown on SIGINT / SIGTERM, `X-Content-Type-Options: nosniff` on every response and `Cache-Control: no-store` on `/auth/*`.
 
-Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid for its 7 days; objects of deleted branches are never garbage-collected (they go with the repository); no rate limiting; `GET /repos` is not paginated; local only (Vite dev server proxies `/api`, no production hosting, issue #22 closed as not planned).
+Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid for its 3 hours; objects of deleted branches are never garbage-collected (they go with the repository); no rate limiting; `GET /repos` is not paginated; local only (Vite dev server proxies `/api`, no production hosting, issue #22 closed as not planned).
 
 ## Frontend
 

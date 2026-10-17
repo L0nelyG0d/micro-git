@@ -15,7 +15,7 @@ import (
 
 const (
 	cookieName = "session"
-	sessionTTL = 7 * 24 * time.Hour
+	sessionTTL = 3 * time.Hour // cookie Max-Age and JWT exp both derive from this
 )
 
 // User is the authenticated user the middleware puts in the request context.
