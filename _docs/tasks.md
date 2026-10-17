@@ -136,14 +136,16 @@ Status: Done (bug from #28): such reads answer `404`. Merged.
 ## 39. Frontend: Merge dialog overhung its padding at 320px with long branch names
 Status: Done (bug from #28), merged.
 
-## Next round 2 (issues #40-#43)
+## Next round 2 (issues #40-#45)
 
-Groomed by the PM on 2026-10-17 from the user's answers in `questions.md`. Details and acceptance criteria are in the issues. Not included (waiting on the user): rate limiter, Keycloak.
+Groomed by the PM on 2026-10-17 from the user's answers in `questions.md`. Details and acceptance criteria are in the issues. Keycloak was declined by the user (own JWT stays). The rate limiter (#44) and pagination (#45) were added after the user's answers of 2026-10-17.
 
 - #40 Backend: session JWT and cookie last 3 hours instead of 7 days (A)
 - #41 OpenAPI contract: `openapi.yaml` for every endpoint, with Go and frontend sync checks (B)
 - #42 Makefile: set up, run, test and stop the project with make (C)
 - #43 CI: mechanical gates on push to main and pull requests (D)
+- #44 Backend: login/register rate limiter with known-device cookie, stdlib, in memory (E)
+- #45 Pagination: `page`/`per_page` for GET /repos, `per_page` for commits, Previous/Next UI; schema index (F)
 
 Conflict map:
 - `README.md`: #40 owns the Known limits logout bullet, #41 owns a new "API contract" subsection, #42 owns "Quick start with make"; #43 does not edit it.
@@ -152,4 +154,9 @@ Conflict map:
 - `openapi.yaml` cookie `Max-Age`: #41 writes 10800 once #40 has merged.
 - `frontend/package.json`: #41 only (optional script entry).
 
-Suggested order: #40, #41, #42 in parallel (separate branches); #43 after #41 and #42 are merged.
+- `backend/session.go`, `session_test.go`: #40, then #44 (#44 starts after #40 merges).
+- `openapi.yaml`: #41 creates it; #44 adds the `429` responses and #45 the pagination parameters (whichever of #41/#44 merges later updates the `429` rows).
+- `_docs/plan.md`: #44 auth rows and "no rate limiting"; #45 repos/commits rows, schema section, "not paginated".
+- `backend/db/schema.sql`: #45 only (idempotent index, applied to both Neon branches by the engineer).
+
+Order: #40, #41, #42 in progress (parallel branches); #44 after #40; #45 after #41; #43 CI after #41 and #42.
