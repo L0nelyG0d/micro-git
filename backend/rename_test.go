@@ -30,9 +30,9 @@ func TestRenameRepo(t *testing.T) {
 		{"space", `{"name":"a b"}`, "invalid repository name"},
 		{"slash", `{"name":"a/b"}`, "invalid repository name"},
 		{"too long", `{"name":"` + strings.Repeat("a", 101) + `"}`, "invalid repository name"},
-		{"missing name", `{}`, "invalid JSON body"},
+		{"empty object", `{}`, "invalid JSON body"},
 		{"null name", `{"name":null}`, "invalid JSON body"},
-		{"unknown field", `{"name":"new","description":"x"}`, "invalid JSON body"},
+		{"unknown field", `{"name":"new","bogus":"x"}`, "invalid JSON body"},
 		{"wrong type", `{"name":1}`, "invalid JSON body"},
 		{"malformed", `{bad`, "invalid JSON body"},
 	} {
@@ -88,5 +88,49 @@ func TestRenameRepoCaseAndSame(t *testing.T) {
 		if got.ID != r.ID || got.Name != name {
 			t.Errorf("after %s: %+v", name, got)
 		}
+	}
+}
+
+func TestUpdateRepoDescriptionAndDefaultBranch(t *testing.T) {
+	s := testServer(t)
+	owner, c := newUserCookie(t, s)
+	_, other := newUserCookie(t, s)
+	r := createRepo(t, s, c, `{"name":"proj","description":"old"}`)
+	mustCommit(t, s, owner, c, r, commitJSON("main", "", "first", up("a.txt", "hi\n")))
+	base := "/repos/" + owner + "/proj"
+	if rec := do(s, http.MethodPost, base+"/branches", `{"name":"dev","from":"main"}`, c); rec.Code != 201 {
+		t.Fatalf("create branch: %d %s", rec.Code, rec.Body)
+	}
+
+	wantError(t, do(s, http.MethodPatch, base, `{"description":"x"}`, other), 403, "forbidden")
+	wantError(t, do(s, http.MethodPatch, base, `{}`, c), 400, "invalid JSON body")
+	wantError(t, do(s, http.MethodPatch, base, `{"bogus":1}`, c), 400, "invalid JSON body")
+	wantError(t, do(s, http.MethodPatch, base, `{"description":"`+strings.Repeat("a", 501)+`"}`, c), 400,
+		"description must be at most 500 characters")
+	wantError(t, do(s, http.MethodPatch, base, `{"default_branch":"nope"}`, c), 404, "branch not found")
+
+	patch := func(body string) Repo {
+		t.Helper()
+		rec := do(s, http.MethodPatch, base, body, c)
+		if rec.Code != 200 {
+			t.Fatalf("PATCH %s: %d %s", body, rec.Code, rec.Body)
+		}
+		var got Repo
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if got := patch(`{"description":"new text"}`); got.Description != "new text" || got.Name != "proj" || got.DefaultBranch != "main" {
+		t.Errorf("description only: %+v", got)
+	}
+	if got := patch(`{"description":""}`); got.Description != "" {
+		t.Errorf("clearing the description: %+v", got)
+	}
+	if got := patch(`{"default_branch":"dev"}`); got.DefaultBranch != "dev" || got.Name != "proj" {
+		t.Errorf("default branch: %+v", got)
+	}
+	if got := patch(`{"name":"proj2","description":"both","default_branch":"main"}`); got.Name != "proj2" || got.Description != "both" || got.DefaultBranch != "main" || got.ID != r.ID {
+		t.Errorf("all three: %+v", got)
 	}
 }
