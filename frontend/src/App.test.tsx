@@ -151,7 +151,8 @@ it("registers then logs in, in that order", async () => {
   routes["POST /api/auth/register"] = () => json(201, { id: 1, username: "alice" })
   routes["POST /api/auth/login"] = () => me()
   renderAt("/register")
-  await screen.findByRole("link", { name: "Log in" })
+  // Scoped to <main>: the lazy Register page is what we wait for; the nav also has a "Log in" link.
+  await within(screen.getByRole("main")).findByRole("link", { name: "Log in" })
   await userEvent.type(await screen.findByLabelText("Username"), "Alice")
   await userEvent.type(screen.getByLabelText("Password"), "secret123")
   await userEvent.click(screen.getByRole("button", { name: "Register" }))
@@ -164,7 +165,8 @@ it("shows a 409 on register inline", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["POST /api/auth/register"] = () => json(409, { error: "username already taken" })
   renderAt("/register")
-  await screen.findByRole("link", { name: "Log in" })
+  // Scoped to <main>: the lazy Register page is what we wait for; the nav also has a "Log in" link.
+  await within(screen.getByRole("main")).findByRole("link", { name: "Log in" })
   await userEvent.type(await screen.findByLabelText("Username"), "alice")
   await userEvent.type(screen.getByLabelText("Password"), "secret123")
   await userEvent.click(screen.getByRole("button", { name: "Register" }))
@@ -176,7 +178,8 @@ it("sends the user to /login with a message if login after register fails", asyn
   routes["POST /api/auth/register"] = () => json(201, { id: 1, username: "alice" })
   routes["POST /api/auth/login"] = () => json(500, { error: "internal error" })
   renderAt("/register")
-  await screen.findByRole("link", { name: "Log in" })
+  // Scoped to <main>: the lazy Register page is what we wait for; the nav also has a "Log in" link.
+  await within(screen.getByRole("main")).findByRole("link", { name: "Log in" })
   await userEvent.type(await screen.findByLabelText("Username"), "alice")
   await userEvent.type(screen.getByLabelText("Password"), "secret123")
   await userEvent.click(screen.getByRole("button", { name: "Register" }))
