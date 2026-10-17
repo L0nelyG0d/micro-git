@@ -160,3 +160,18 @@ Conflict map:
 - `backend/db/schema.sql`: #45 only (idempotent index, applied to both Neon branches by the engineer).
 
 Status: #40-#46 are all done, QA PASS and merged into `main`; all GitHub issues are closed.
+
+## Optimization round (issues #47-#54)
+
+Analysis on 2026-10-18. Main costs: one SQL statement per object on reads and writes (about 200 ms each on Neon), per-commit statements in merge ancestry, no HTTP caching or compression, one 497 KB JS bundle, no request cancel or cache in `useFetch`, default pool, slow test suite.
+
+- #47 Request timing and statement counts, baseline in `_docs/performance.md` (do first)
+- #48 Batch object writes in POST commit
+- #49 Fewer round trips on tree, blob, commit-detail reads
+- #50 Merge/compare ancestry in one recursive query
+- #51 HTTP caching (immutable oids, ETag) and gzip
+- #52 Frontend code-splitting
+- #53 Frontend abort, cache, no waterfalls
+- #54 Explicit DB pool settings, faster test suite
+
+Order: #47 first; then #48, #49, #50, #54 (backend, mostly separate files) and #51; #52 and #53 (frontend) in parallel. #51 and #53 both touch caching: #51 first.
