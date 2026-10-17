@@ -81,3 +81,35 @@ func TestReadEndpointsGolden(t *testing.T) {
 		})
 	}
 }
+
+// TestReadStatementCounts guards the round-trip reduction of #49.
+func TestReadStatementCounts(t *testing.T) {
+	s := testServer(t)
+	owner, c := newUserCookie(t, s)
+	repo := createRepo(t, s, c, `{"name":"cnt"}`)
+	base := "/repos/" + owner + "/cnt"
+	c1 := mustCommit(t, s, owner, c, repo, commitJSON("main", "", "first",
+		up("README.md", "hi\n"), up("a/b/c/deep.txt", "deep\n"), up("a/b/x.txt", "x\n"))).OID
+	c2 := mustCommit(t, s, owner, c, repo, commitJSON("main", c1, "second",
+		up("a/b/c/deep.txt", "deeper\n"), up("a/b/x.txt", "y\n"), up("k.txt", "k\n"))).OID
+	buf := captureTimingLog(t)
+	cases := []struct {
+		path string
+		max  int
+	}{
+		{"/tree/main", 1},
+		{"/tree/main/a/b/c", 4},
+		{"/blob/main/a/b/c/deep.txt", 5},
+		{"/commits/" + c2, 6},                      // bundle, a, a/b, a/b/c levels, blobs
+		{"/compare?base=" + c1 + "&head=main", 11}, // compare.go itself is untouched here (#50)
+	}
+	for _, tc := range cases {
+		buf.Reset()
+		if rec := do(s, http.MethodGet, base+tc.path, "", nil); rec.Code != http.StatusOK {
+			t.Fatalf("%s: %d %s", tc.path, rec.Code, rec.Body)
+		}
+		if _, n := lastTiming(t, buf); n > tc.max {
+			t.Errorf("%s: %d statements, want <= %d", tc.path, n, tc.max)
+		}
+	}
+}

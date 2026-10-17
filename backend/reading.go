@@ -113,32 +113,52 @@ func readTree(store treebuild.Store, oid string) ([]gitobj.TreeEntry, error) {
 
 // readTarget is the shared front half of the tree and blob handlers: repo,
 // ref, path validation, then the lookup. Order: 404 repo, 404 ref, 400 path,
-// 404 path. It returns the resolved commit, cleaned path and entry.
+// 404 path. It returns the resolved commit, cleaned path and entry. The repo,
+// the branch tip, the tip commit and its root tree come from one statement.
 func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, commit, path string, store treebuild.Store, oid string, isDir, ok bool) {
-	repo, ok = s.repoFromPath(w, r)
-	if !ok {
-		return
+	fail := func() (Repo, string, string, treebuild.Store, string, bool, bool) {
+		return repo, "", "", nil, "", false, false
 	}
-	if commit, ok = s.resolveRef(w, r, repo, r.PathValue("ref")); !ok {
-		return
+	ref := r.PathValue("ref")
+	head, err := FindRepoRef(r.Context(), s.DB, r.PathValue("owner"), r.PathValue("repo"), ref)
+	if errors.Is(err, errRepoNotFound) {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return fail()
+	}
+	if err != nil {
+		internalError(w, err)
+		return fail()
+	}
+	repo = head.Repo
+	s.testHook("repo-loaded")
+	objs := head.Objects
+	if head.HasRef {
+		commit = head.Tip
+		s.testHook("ref-resolved")
+	} else {
+		// not a branch: maybe a full commit oid (one more statement)
+		if commit, ok = s.resolveRef(w, r, repo, ref); !ok {
+			return fail()
+		}
+		objs = nil
 	}
 	var valid bool
 	if path, valid = cleanReadPath(r.PathValue("path")); !valid {
 		writeError(w, http.StatusBadRequest, "invalid path")
-		return repo, "", "", nil, "", false, false
+		return fail()
 	}
-	store = NewRepoStore(s.DB, repo.ID).Objects(r.Context())
+	store = primed(NewRepoStore(s.DB, repo.ID).Objects(r.Context()), objs)
 	root, err := commitTree(store, commit)
 	if err == nil {
 		oid, isDir, err = walkPath(store, root, path)
 	}
 	if errors.Is(err, errPathNotFound) {
 		writeError(w, http.StatusNotFound, "path not found")
-		return repo, "", "", nil, "", false, false
+		return fail()
 	}
 	if err != nil {
 		s.readError(w, r, repo, err)
-		return repo, "", "", nil, "", false, false
+		return fail()
 	}
 	return repo, commit, path, store, oid, isDir, true
 }
