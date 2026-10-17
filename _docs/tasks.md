@@ -135,3 +135,21 @@ Status: Done (bug from #28): such reads answer `404`. Merged.
 
 ## 39. Frontend: Merge dialog overhung its padding at 320px with long branch names
 Status: Done (bug from #28), merged.
+
+## Next round 2 (issues #40-#43)
+
+Groomed by the PM on 2026-10-17 from the user's answers in `questions.md`. Details and acceptance criteria are in the issues. Not included (waiting on the user): rate limiter, Keycloak.
+
+- #40 Backend: session JWT and cookie last 3 hours instead of 7 days (A)
+- #41 OpenAPI contract: `openapi.yaml` for every endpoint, with Go and frontend sync checks (B)
+- #42 Makefile: set up, run, test and stop the project with make (C)
+- #43 CI: mechanical gates on push to main and pull requests (D)
+
+Conflict map:
+- `README.md`: #40 owns the Known limits logout bullet, #41 owns a new "API contract" subsection, #42 owns "Quick start with make"; #43 does not edit it.
+- `_docs/plan.md`: #40 cookie line and known limits; #41 API-contract sections and discrepancy fixes.
+- `_docs/process.md`: #43 only (the "CI and QA" paragraph).
+- `openapi.yaml` cookie `Max-Age`: #41 writes 10800 once #40 has merged.
+- `frontend/package.json`: #41 only (optional script entry).
+
+Suggested order: #40, #41, #42 in parallel (separate branches); #43 after #41 and #42 are merged.
