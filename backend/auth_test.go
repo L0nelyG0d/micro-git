@@ -44,7 +44,7 @@ func testServer(t *testing.T) *Server {
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL is not set; skipping database test")
 	}
-	poolOnce.Do(func() { testPool, poolErr = NewPool(context.Background(), url) })
+	poolOnce.Do(func() { testPool, poolErr = NewPool(context.Background(), url, DefaultPoolConfig()) })
 	if poolErr != nil {
 		t.Fatalf("connect: %v", poolErr)
 	}

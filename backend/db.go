@@ -16,8 +16,15 @@ import (
 // pgx errors embed the connection string (user, host, database), so they are
 // never returned or wrapped: the caller gets a fixed message plus the error
 // class from dbErrorClass.
-func NewPool(ctx context.Context, url string) (*pgxpool.Pool, error) {
-	pool, err := pgxpool.New(ctx, url)
+func NewPool(ctx context.Context, url string, pc PoolConfig) (*pgxpool.Pool, error) {
+	pcfg, err := pgxpool.ParseConfig(url)
+	if err != nil {
+		return nil, errors.New("invalid DATABASE_URL: it could not be parsed (details hidden because they contain the connection string)")
+	}
+	pcfg.MaxConns = pc.MaxConns
+	pcfg.MaxConnIdleTime = pc.MaxConnIdleTime
+	pcfg.HealthCheckPeriod = pc.HealthCheckPeriod
+	pool, err := pgxpool.NewWithConfig(ctx, pcfg)
 	if err != nil {
 		return nil, errors.New("invalid DATABASE_URL: it could not be parsed (details hidden because they contain the connection string)")
 	}

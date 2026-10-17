@@ -24,7 +24,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	pool, err := NewPool(context.Background(), cfg.DatabaseURL)
+	pool, err := NewPool(context.Background(), cfg.DatabaseURL, cfg.Pool)
 	if err != nil {
 		log.Fatalf("database: %v", err)
 	}
