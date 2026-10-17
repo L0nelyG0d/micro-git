@@ -1,5 +1,6 @@
 import { Link, useParams, useSearchParams } from "react-router-dom"
 import { FileView } from "@/components/DiffView"
+import { PageToolbar } from "@/components/PageToolbar"
 import { ErrorBlock, LoadingBlock, NotFoundBlock } from "@/components/StateViews"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { ApiError } from "@/lib/api"
@@ -83,9 +84,11 @@ export function ComparePage() {
   if (!repo) return <LoadingBlock label="Loading repository" />
 
   const back = (
-    <Link to={uiPath("tree", owner, name, repo.default_branch, "")} className="text-sm text-primary hover:underline">
-      {owner}/{name}
-    </Link>
+    <PageToolbar up={{ to: uiPath("tree", owner, name, repo.default_branch, ""), label: "files" }}>
+      <Link to={uiPath("tree", owner, name, repo.default_branch, "")} className="text-sm text-primary hover:underline">
+        {owner}/{name}
+      </Link>
+    </PageToolbar>
   )
   if (repo.empty) {
     return (

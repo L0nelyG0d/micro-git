@@ -9,8 +9,12 @@ import { MergeDialog } from "@/components/MergeDialog"
 import { ReadmeCard } from "@/components/ReadmeCard"
 import { RenameRepoDialog } from "@/components/RenameRepoDialog"
 import { ErrorBlock,LoadingBlock, NotFoundBlock } from "@/components/StateViews"
+import { PageToolbar } from "@/components/PageToolbar"
+import { Section } from "@/components/Section"
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { ApiError } from "@/lib/api"
+import { formatDate } from "@/lib/format"
 import { canWrite, readPath, uiPath, type Branch, type CommitSummary, type Tree } from "@/lib/git"
 import type { Repo } from "@/lib/repos"
 import { useFetch } from "@/lib/useFetch"
@@ -85,6 +89,7 @@ export function RepoPage() {
   if (repo.empty) {
     return (
       <div className="flex flex-col gap-3">
+        <PageToolbar up={{ to: "/", label: "all repositories" }} />
         {header}
         <div className="flex flex-col items-start gap-2 rounded-xl bg-card p-3 text-sm shadow-xs ring-1 ring-border">
           {owns ? (
@@ -131,7 +136,9 @@ export function RepoPage() {
     body = (
       <>
         {commit && <LatestCommitBar owner={owner} repo={name} commit={commit} historyRef={ref} />}
-        <FileTree owner={owner} repo={name} ref_={ref} path={path} entries={treeQ.data.entries} />
+        <Section title="Files" className="[&>div]:p-0">
+          <FileTree owner={owner} repo={name} ref_={ref} path={path} entries={treeQ.data.entries} />
+        </Section>
         {!path && treeQ.data.entries.some((e) => e.type === "blob" && e.name === "README.md") && (
           <ReadmeCard owner={owner} repo={name} ref_={ref} />
         )}
@@ -139,66 +146,89 @@ export function RepoPage() {
     )
   }
 
+  const repoBase = `/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
+  const parentDir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
+  const up = path
+    ? { to: uiPath("tree", owner, name, ref, parentDir), label: parentDir || name }
+    : { to: "/", label: "all repositories" }
+
   return (
     <div className="flex flex-col gap-3">
+      <PageToolbar up={up}>
+        <Breadcrumbs owner={owner} repo={name} ref_={ref} path={path} />
+      </PageToolbar>
       {header}
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        {branchesQ.data ? (
-          <BranchSwitcher
-            owner={owner}
-            repo={name}
-            current={ref}
-            branches={branchesQ.data.branches}
-            canCreate={writable}
-            onSelect={(b) => navigate(uiPath("tree", owner, name, b, ""))}
-            onCreated={(b) => {
-              branchesQ.reload()
-              navigate(uiPath("tree", owner, name, b, ""))
-            }}
-            onUnauthorized={expireSession}
-            canDelete={owns}
-            onDeleted={(b) => {
-              branchesQ.reload()
-              if (b === ref) navigate(uiPath("tree", owner, name, repo.default_branch, ""))
-            }}
-          />
-        ) : (
-          <span />
-        )}
-        <div className="flex items-center gap-2">
-          <Button asChild size="sm" variant="outline">
-            <Link to={`/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/compare`}>Compare</Link>
-          </Button>
-          {owns && branchesQ.data && branchesQ.data.branches.length >= 2 && (
-            <MergeDialog
-              owner={owner}
-              repo={name}
-              branches={branchesQ.data.branches}
-              defaultBranch={repo.default_branch}
-              current={ref}
-              onUnauthorized={expireSession}
-              onReload={retryAll}
-              onMerged={(into) => {
-                branchesQ.reload()
-                if (into !== ref) navigate(uiPath("tree", owner, name, into, ""))
-                else {
-                  treeQ.reload()
-                  commitsQ.reload()
-                }
-              }}
-            />
-          )}
-          {writable && (
-            <Button asChild size="sm">
-              <Link to={`/${encodeURIComponent(owner)}/${encodeURIComponent(name)}/new/${encodeURIComponent(ref)}`}>
-                Add file
-              </Link>
-            </Button>
-          )}
-        </div>
+      <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem]">
+        <div className="flex min-w-0 flex-col gap-3">{body}</div>
+        <aside aria-label="Repository details" className="flex min-w-0 flex-col gap-3">
+          <Section title="About">
+            <p className="text-sm break-words text-muted-foreground">
+              {repo.description || "No description."}
+            </p>
+            <p className="text-xs text-muted-foreground">Created {formatDate(repo.created_at)}</p>
+          </Section>
+          <Section title="Branch">
+            {branchesQ.data ? (
+              <BranchSwitcher
+                owner={owner}
+                repo={name}
+                current={ref}
+                branches={branchesQ.data.branches}
+                canCreate={writable}
+                onSelect={(b) => navigate(uiPath("tree", owner, name, b, ""))}
+                onCreated={(b) => {
+                  branchesQ.reload()
+                  navigate(uiPath("tree", owner, name, b, ""))
+                }}
+                onUnauthorized={expireSession}
+                canDelete={owns}
+                onDeleted={(b) => {
+                  branchesQ.reload()
+                  if (b === ref) navigate(uiPath("tree", owner, name, repo.default_branch, ""))
+                }}
+              />
+            ) : (
+              <Skeleton className="h-8 w-full" />
+            )}
+          </Section>
+          <Section title="Actions">
+            <div className="flex flex-col items-stretch gap-2 [&>*]:w-full">
+              {writable && (
+                <Button asChild size="sm">
+                  <Link to={`${repoBase}/new/${encodeURIComponent(ref)}`}>Add file</Link>
+                </Button>
+              )}
+              <Button asChild size="sm" variant="outline">
+                <Link to={`${repoBase}/compare`}>Compare</Link>
+              </Button>
+              {owns && (
+                <Button asChild size="sm" variant="outline">
+                  <Link to={`${repoBase}/settings`}>Settings</Link>
+                </Button>
+              )}
+              {owns && branchesQ.data && branchesQ.data.branches.length >= 2 && (
+                <MergeDialog
+                  owner={owner}
+                  repo={name}
+                  branches={branchesQ.data.branches}
+                  defaultBranch={repo.default_branch}
+                  current={ref}
+                  onUnauthorized={expireSession}
+                  onReload={retryAll}
+                  onMerged={(into) => {
+                    branchesQ.reload()
+                    if (into !== ref) navigate(uiPath("tree", owner, name, into, ""))
+                    else {
+                      treeQ.reload()
+                      commitsQ.reload()
+                    }
+                  }}
+                />
+              )}
+            </div>
+          </Section>
+        </aside>
       </div>
-      <Breadcrumbs owner={owner} repo={name} ref_={ref} path={path} />
-      {body}
     </div>
   )
 }

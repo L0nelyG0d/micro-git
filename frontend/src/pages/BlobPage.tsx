@@ -1,11 +1,12 @@
 import { Link, useParams } from "react-router-dom"
 import { useAuth } from "@/auth/AuthContext"
+import { PageToolbar } from "@/components/PageToolbar"
 import { Breadcrumbs } from "@/components/Breadcrumbs"
 import { ErrorBlock, LoadingBlock, NotFoundBlock } from "@/components/StateViews"
 import { Button } from "@/components/ui/button"
 import { ApiError } from "@/lib/api"
 import { formatSize } from "@/lib/format"
-import { canWrite, readPath, type Blob } from "@/lib/git"
+import { canWrite, readPath, uiPath, type Blob } from "@/lib/git"
 import { useFetch } from "@/lib/useFetch"
 
 /** `/:owner/:repo/blob/:ref/*` */
@@ -32,7 +33,11 @@ export function BlobPage() {
 
   return (
     <div className="flex flex-col gap-3">
-      <Breadcrumbs owner={owner} repo={repo} ref_={ref} path={path} lastIsFile />
+      <PageToolbar
+        up={{ to: uiPath("tree", owner, repo, ref, path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""), label: "folder" }}
+      >
+        <Breadcrumbs owner={owner} repo={repo} ref_={ref} path={path} lastIsFile />
+      </PageToolbar>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold break-all">{f.name}</h1>
