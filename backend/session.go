@@ -132,7 +132,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 	known := s.isKnownDevice(r, username)
 	// Throttled: answer before any database or bcrypt work, even if the
 	// password is right, and say nothing about whether the user exists.
-	if wait := s.limiter.loginWait(ip, username, known); wait > 0 {
+	if wait := s.limiter.loginAttempt(ip, username, known); wait > 0 {
 		tooMany(w, wait)
 		return
 	}
@@ -142,6 +142,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		`SELECT id, password_hash FROM users WHERE lower(username) = $1`, username).Scan(&id, &hash)
 	found := err == nil
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+		s.limiter.loginAborted(ip, username, known)
 		internalError(w, err)
 		return
 	}
@@ -149,16 +150,16 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		hash = string(dummyHash)
 	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(req.Password)) != nil || !found {
-		s.limiter.loginFailed(ip, username, known)
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
 	token, err := s.issueToken(id)
 	if err != nil {
+		s.limiter.loginAborted(ip, username, known)
 		internalError(w, err)
 		return
 	}
-	s.limiter.loginSucceeded(ip, username)
+	s.limiter.loginSucceeded(ip, username, known)
 	s.setSessionCookie(w, token, int(sessionTTL/time.Second))
 	s.setKnownDeviceCookie(w, s.knownDeviceValue(username), int(knownDeviceTTL/time.Second))
 	writeJSON(w, http.StatusOK, userResponse{ID: id, Username: username})

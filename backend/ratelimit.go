@@ -90,9 +90,15 @@ func delay(k int) time.Duration {
 	return min(d, loginMaxDelay)
 }
 
-func pairKey(ip, user string) string { return "p\x00" + ip + "\x00" + user }
-func ipKey(ip string) string         { return "i\x00" + ip }
-func regKey(ip string) string        { return "r\x00" + ip }
+func pairKey(ip, user string, known bool) string {
+	tier := "s"
+	if known {
+		tier = "k"
+	}
+	return "p\x00" + tier + "\x00" + ip + "\x00" + user
+}
+func ipKey(ip string) string  { return "i\x00" + ip }
+func regKey(ip string) string { return "r\x00" + ip }
 
 // get returns the live entry for key or nil; an expired one is dropped.
 // l.mu must be held.
@@ -136,18 +142,15 @@ func (l *limiter) touch(key string, now time.Time) *limitEntry {
 	return e
 }
 
-// loginWait returns how long the (ip, user) pair must wait before another
-// login attempt (0 = go ahead). It reads only; it never creates entries.
-func (l *limiter) loginWait(ip, user string, known bool) time.Duration {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	now := l.now()
+// pairWait is the wait imposed by the pair counter and the IP counter.
+// l.mu must be held.
+func (l *limiter) pairWait(ip, user string, known bool, now time.Time) time.Duration {
 	free := loginFreeFailures
 	if known {
 		free = loginKnownFailures
 	}
 	var wait time.Duration
-	if e := l.get(pairKey(ip, user), now); e != nil && e.count >= free {
+	if e := l.get(pairKey(ip, user, known), now); e != nil && e.count >= free {
 		wait = e.last.Add(delay(e.count - free)).Sub(now)
 	}
 	if !known {
@@ -158,13 +161,30 @@ func (l *limiter) loginWait(ip, user string, known bool) time.Duration {
 	return max(wait, 0)
 }
 
-// loginFailed records a failed login. A request with a known-device cookie
-// does not count against the IP-wide counter.
-func (l *limiter) loginFailed(ip, user string, known bool) {
+// loginWait returns how long the (ip, user) pair must wait before another
+// login attempt (0 = go ahead). It only reads; it never creates entries.
+func (l *limiter) loginWait(ip, user string, known bool) time.Duration {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.pairWait(ip, user, known, l.now())
+}
+
+// loginAttempt is the atomic check-and-reserve done before the password is
+// checked. A throttled request gets the wait and changes nothing. An admitted
+// request is counted as a failure right away (so a burst of concurrent
+// requests cannot all pass the check); the handler calls loginSucceeded or
+// loginAborted to take the reservation back. Cookie-less and known-device
+// requests use separate pair counters, so a bot's burst cannot eat the
+// budget of a real user holding a valid cookie; a known-device request does
+// not touch the IP-wide counter.
+func (l *limiter) loginAttempt(ip, user string, known bool) time.Duration {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := l.now()
-	keys := []string{pairKey(ip, user)}
+	if wait := l.pairWait(ip, user, known, now); wait > 0 {
+		return wait
+	}
+	keys := []string{pairKey(ip, user, known)}
 	if !known {
 		keys = append(keys, ipKey(ip))
 	}
@@ -174,14 +194,42 @@ func (l *limiter) loginFailed(ip, user string, known bool) {
 		e.last = now
 		e.expires = now.Add(limiterWindow)
 	}
+	return 0
 }
 
-// loginSucceeded forgets the pair's failures.
-func (l *limiter) loginSucceeded(ip, user string) {
+// release takes one reserved attempt back from key. l.mu must be held.
+func (l *limiter) release(key string) {
+	e := l.entries[key]
+	if e == nil {
+		return
+	}
+	if e.count--; e.count <= 0 {
+		l.remove(e)
+	}
+}
+
+// loginAborted undoes the reservation of an admitted attempt that did not
+// end in a verdict about the password (internal error).
+func (l *limiter) loginAborted(ip, user string, known bool) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if e := l.entries[pairKey(ip, user)]; e != nil {
-		l.remove(e)
+	l.release(pairKey(ip, user, known))
+	if !known {
+		l.release(ipKey(ip))
+	}
+}
+
+// loginSucceeded undoes the reservation and forgets the pair's failures.
+func (l *limiter) loginSucceeded(ip, user string, known bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if !known {
+		l.release(ipKey(ip))
+	}
+	for _, k := range []bool{false, true} {
+		if e := l.entries[pairKey(ip, user, k)]; e != nil {
+			l.remove(e)
+		}
 	}
 }
 

@@ -15,6 +15,7 @@ An in-memory limiter on `POST /auth/login` and `POST /auth/register`. It slows d
 7. **Register** is limited to 10 per IP per window.
 
 ## Details
+- The check and the count are atomic (reserve at check time, undo on success), and cookie / no-cookie requests have separate pair counters, so bursts cannot bypass the limit or eat the real user's cookie budget.
 - Client identity is `RemoteAddr` only. `X-Forwarded-For` is ignored because it is spoofable and the app is local-only.
 - State lives in memory and resets on restart. Memory is bounded: at most 10,000 entries, oldest evicted.
 - The clock is injectable so tests need no sleeping.

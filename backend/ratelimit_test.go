@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -33,7 +34,7 @@ func TestLimiterDelayGrowthAndWindow(t *testing.T) {
 		if w := l.loginWait(ipA, "bob", false); w != 0 {
 			t.Fatalf("failure %d: wait %v before the free failures are used up", i, w)
 		}
-		l.loginFailed(ipA, "bob", false)
+		l.loginAttempt(ipA, "bob", false)
 	}
 	// Each further failure doubles the wait: 1s, 2s, 4s, 8s ...
 	want := loginBaseDelay
@@ -49,22 +50,19 @@ func TestLimiterDelayGrowthAndWindow(t *testing.T) {
 		if w := l.loginWait(ipA, "bob", false); w != 0 {
 			t.Fatalf("step %d: still waiting %v after the delay", i, w)
 		}
-		l.loginFailed(ipA, "bob", false)
+		l.loginAttempt(ipA, "bob", false)
 		want *= 2
 	}
 	// Capped.
-	for i := 0; i < 40; i++ {
-		l.loginFailed(ipA, "bob", false)
-	}
-	if w := l.loginWait(ipA, "bob", false); w != loginMaxDelay {
-		t.Errorf("wait %v, want cap %v", w, loginMaxDelay)
+	if d := delay(40); d != loginMaxDelay {
+		t.Errorf("delay(40) = %v, want cap %v", d, loginMaxDelay)
 	}
 	// No lockout: after the window without a failure everything is forgotten.
 	clk.Advance(limiterWindow)
 	if w := l.loginWait(ipA, "bob", false); w != 0 {
 		t.Errorf("wait %v after the window", w)
 	}
-	l.loginFailed(ipA, "bob", false)
+	l.loginAttempt(ipA, "bob", false)
 	if l.size() != 2 { // pair + ip, old ones replaced
 		t.Errorf("size = %d", l.size())
 	}
@@ -73,12 +71,12 @@ func TestLimiterDelayGrowthAndWindow(t *testing.T) {
 func TestLimiterSuccessResetsPair(t *testing.T) {
 	l := newLimiter((&fakeClock{t: t0}).Now)
 	for i := 0; i < loginFreeFailures; i++ {
-		l.loginFailed(ipA, "bob", false)
+		l.loginAttempt(ipA, "bob", false)
 	}
 	if l.loginWait(ipA, "bob", false) == 0 {
 		t.Fatal("not throttled")
 	}
-	l.loginSucceeded(ipA, "bob")
+	l.loginSucceeded(ipA, "bob", false)
 	if w := l.loginWait(ipA, "bob", false); w != 0 {
 		t.Errorf("wait %v after success", w)
 	}
@@ -87,7 +85,7 @@ func TestLimiterSuccessResetsPair(t *testing.T) {
 func TestLimiterPairsAreIndependent(t *testing.T) {
 	l := newLimiter((&fakeClock{t: t0}).Now)
 	for i := 0; i < 10; i++ {
-		l.loginFailed(ipA, "victim", false)
+		l.loginAttempt(ipA, "victim", false)
 	}
 	if l.loginWait(ipA, "victim", false) == 0 {
 		t.Fatal("attacker pair not throttled")
@@ -104,12 +102,12 @@ func TestLimiterIPCap(t *testing.T) {
 	clk := &fakeClock{t: t0}
 	l := newLimiter(clk.Now)
 	for i := 0; i < loginIPMaxFailures; i++ {
-		l.loginFailed(ipA, "user"+strconv.Itoa(i), false)
+		l.loginAttempt(ipA, "user"+strconv.Itoa(i), false)
 	}
 	if w := l.loginWait(ipA, "fresh", false); w != 0 {
 		t.Fatalf("throttled at exactly the cap: %v", w)
 	}
-	l.loginFailed(ipA, "last", false)
+	l.loginAttempt(ipA, "last", false)
 	if w := l.loginWait(ipA, "fresh", false); w != loginBaseDelay {
 		t.Errorf("wait %v, want %v", w, loginBaseDelay)
 	}
@@ -128,20 +126,81 @@ func TestLimiterIPCap(t *testing.T) {
 func TestLimiterKnownTier(t *testing.T) {
 	l := newLimiter((&fakeClock{t: t0}).Now)
 	for i := 0; i < loginKnownFailures-1; i++ {
-		l.loginFailed(ipA, "bob", true)
+		l.loginAttempt(ipA, "bob", true)
 	}
 	if l.loginWait(ipA, "bob", true) != 0 {
 		t.Error("lenient tier throttled early")
 	}
-	if l.loginWait(ipA, "bob", false) == 0 {
-		t.Error("strict tier not throttled")
+	if l.loginWait(ipA, "bob", false) != 0 {
+		t.Error("known-device failures eat the cookie-less budget")
 	}
-	l.loginFailed(ipA, "bob", true)
+	l.loginAttempt(ipA, "bob", true)
 	if l.loginWait(ipA, "bob", true) == 0 {
 		t.Error("lenient tier never throttles: a stolen cookie could guess forever")
 	}
 	if l.size() != 1 {
 		t.Errorf("known-device failures touched the IP counter (size %d)", l.size())
+	}
+}
+
+// A cookie-less bot bursting on the same IP and username cannot use up the
+// budget of a request carrying a valid known-device cookie.
+func TestLimiterBotBurstDoesNotTouchKnownBudget(t *testing.T) {
+	l := newLimiter((&fakeClock{t: t0}).Now)
+	for i := 0; i < 500; i++ {
+		l.loginAttempt(ipA, "victim", false)
+	}
+	if w := l.loginAttempt(ipA, "victim", true); w != 0 {
+		t.Fatalf("known device throttled by a bot burst: %v", w)
+	}
+	l.mu.Lock()
+	n := l.entries[pairKey(ipA, "victim", false)].count
+	l.mu.Unlock()
+	if n != loginFreeFailures {
+		t.Errorf("a burst grew the strict counter to %d, want %d (refused requests are not counted)", n, loginFreeFailures)
+	}
+}
+
+func TestLimiterBurstAdmitsOnlyFreeCount(t *testing.T) {
+	l := newLimiter((&fakeClock{t: t0}).Now)
+	for _, known := range []bool{false, true} {
+		free := loginFreeFailures
+		if known {
+			free = loginKnownFailures
+		}
+		var admitted atomic.Int32
+		var wg sync.WaitGroup
+		for g := 0; g < 100; g++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				if l.loginAttempt(ipA, "burst", known) == 0 {
+					admitted.Add(1)
+				}
+			}()
+		}
+		wg.Wait()
+		if int(admitted.Load()) != free {
+			t.Errorf("known=%v: %d of 100 concurrent attempts admitted, want %d", known, admitted.Load(), free)
+		}
+	}
+}
+
+func TestLimiterAbortAndSuccessReleaseReservation(t *testing.T) {
+	l := newLimiter((&fakeClock{t: t0}).Now)
+	l.loginAttempt(ipA, "bob", false)
+	l.loginAborted(ipA, "bob", false)
+	if l.size() != 0 {
+		t.Errorf("size %d after abort", l.size())
+	}
+	l.loginAttempt(ipA, "bob", false)
+	l.loginAttempt(ipA, "bob", false)
+	l.loginSucceeded(ipA, "bob", false)
+	l.mu.Lock()
+	ip := l.entries[ipKey(ipA)].count
+	l.mu.Unlock()
+	if ip != 1 || l.loginWait(ipA, "bob", false) != 0 {
+		t.Errorf("ip counter %d after success, want 1", ip)
 	}
 }
 
@@ -171,7 +230,7 @@ func TestLimiterBoundedMemory(t *testing.T) {
 	clk := &fakeClock{t: t0}
 	l := newLimiter(clk.Now)
 	for i := 0; i < limiterMaxEntries+500; i++ {
-		l.loginFailed("10.0.0.1", "u"+strconv.Itoa(i), true) // one entry each
+		l.loginAttempt("10.0.0.1", "u"+strconv.Itoa(i), true) // one entry each
 		if n := l.size(); n > limiterMaxEntries {
 			t.Fatalf("size %d over the cap after %d inserts", n, i+1)
 		}
@@ -184,8 +243,8 @@ func TestLimiterBoundedMemory(t *testing.T) {
 		t.Fatal("unexpected throttle")
 	}
 	l.mu.Lock()
-	_, oldest := l.entries[pairKey("10.0.0.1", "u0")]
-	_, newest := l.entries[pairKey("10.0.0.1", "u"+strconv.Itoa(limiterMaxEntries+499))]
+	_, oldest := l.entries[pairKey("10.0.0.1", "u0", true)]
+	_, newest := l.entries[pairKey("10.0.0.1", "u"+strconv.Itoa(limiterMaxEntries+499), true)]
 	l.mu.Unlock()
 	if oldest || !newest {
 		t.Errorf("eviction order wrong: oldest kept=%v newest kept=%v", oldest, newest)
@@ -193,7 +252,7 @@ func TestLimiterBoundedMemory(t *testing.T) {
 	// Expired entries are dropped as new ones arrive.
 	clk.Advance(limiterWindow)
 	for i := 0; i < 100; i++ {
-		l.loginFailed("10.0.0.2", "n"+strconv.Itoa(i), true)
+		l.loginAttempt("10.0.0.2", "n"+strconv.Itoa(i), true)
 	}
 	if n := l.size(); n > limiterMaxEntries-limiterSweepBatch*50 {
 		t.Errorf("expired entries are not swept: size %d", n)
@@ -210,10 +269,10 @@ func TestLimiterConcurrent(t *testing.T) {
 			for i := 0; i < 200; i++ {
 				user := "u" + strconv.Itoa(i%7)
 				l.loginWait(ipA, user, g%2 == 0)
-				l.loginFailed(ipA, user, g%2 == 0)
+				l.loginAttempt(ipA, user, g%2 == 0)
 				l.registerAttempt(ipB)
 				if i%50 == 0 {
-					l.loginSucceeded(ipA, user)
+					l.loginSucceeded(ipA, user, g%2 == 0)
 				}
 			}
 		}()
@@ -626,5 +685,35 @@ func TestKnownDeviceCookieAttributesAndLogout(t *testing.T) {
 	s.CookieSecure = false
 	if c := cookieNamed(loginAt(s, ipA, name, "correct horse"), knownDeviceCookie); c == nil || c.Secure {
 		t.Errorf("Secure without COOKIE_SECURE: %+v", c)
+	}
+}
+
+func TestConcurrentBurstOverHTTP(t *testing.T) {
+	s, _ := limitedServer(t)
+	name := uniqueName(t)
+	newUser(t, s, name, "correct horse")
+	known := cookieNamed(loginAt(s, ipB, name, "correct horse"), knownDeviceCookie)
+	codes := make([]int, 100)
+	var wg sync.WaitGroup
+	for i := range codes {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			codes[i] = loginAt(s, ipA, name, "wrong password").Code
+		}()
+	}
+	wg.Wait()
+	n401 := 0
+	for _, c := range codes {
+		if c == http.StatusUnauthorized {
+			n401++
+		}
+	}
+	if n401 != loginFreeFailures {
+		t.Errorf("%d of 100 simultaneous wrong logins reached the password check, want %d", n401, loginFreeFailures)
+	}
+	// The real user, with the cookie, on the same IP and username, still logs in.
+	if rec := loginAt(s, ipA, name, "correct horse", known); rec.Code != http.StatusOK {
+		t.Errorf("known device after a bot burst: %d %s", rec.Code, rec.Body)
 	}
 }
