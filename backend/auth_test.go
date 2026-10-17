@@ -31,6 +31,9 @@ var (
 // pool at the end. bcryptCost is only ever lowered here, never in production.
 func TestMain(m *testing.M) {
 	bcryptCost = bcrypt.MinCost
+	// dummyHash was built at package init with the production cost; rebuild it
+	// so unknown-user logins cost the same (cheap) bcrypt time as real ones.
+	dummyHash, _ = bcrypt.GenerateFromPassword([]byte("dummy password"), bcryptCost)
 	code := m.Run()
 	if testPool != nil {
 		testPool.Close()
