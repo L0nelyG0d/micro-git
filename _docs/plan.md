@@ -49,10 +49,10 @@ Routing uses `net/http` patterns. Errors are JSON `{"error": "..."}`.
 
 | endpoint | auth | notes |
 |---|---|---|
-| `GET /health` | none | `200 OK` |
+| `GET /health` | none | `200 OK` (plain text); `HEAD` answers `200` without a body |
 | `POST /auth/register` | none | `201`; `409` username taken; `400` password shorter than 8 or bad username |
 | `POST /auth/login` | none | sets the `session` cookie; token never in the body |
-| `POST /auth/logout` | cookie | clears the cookie |
+| `POST /auth/logout` | none | clears the cookie; works without one (never `401`) |
 | `GET /auth/me` | cookie | `{id, username}` |
 | `GET /repos` | none | optional `?owner=` |
 | `POST /repos` | yes | `{name, description}`; `409` duplicate; the repo starts empty with no branches |
@@ -99,9 +99,11 @@ Clarifications (system analyst, resolve gaps in the rules above):
 
 ## API contracts
 
+The machine-readable version of this section is `openapi.yaml` at the repo root; `backend/openapi_test.go` and `frontend/src/lib/openapi.test.ts` keep its paths in sync with the code. When an endpoint changes, update the spec and this section together.
+
 Conventions (all endpoints):
 
-- JSON in and out, UTF-8, `snake_case`, `Content-Type: application/json`. Exception: `GET /health` returns plain text `OK`. No `/api` prefix on the backend (the Vite proxy adds and strips it)
+- JSON in and out, UTF-8, `snake_case`, `Content-Type: application/json`. Exception: `GET /health` (and `HEAD`) returns plain text `OK`. No `/api` prefix on the backend (the Vite proxy adds and strips it)
 - Error body is always `{"error": "<message>"}` with the message exactly as written below. Extra field only on the tip conflict (`current_tip`). Malformed JSON, wrong types or unknown fields: `400` `invalid JSON body`. A JSON body over 1 MiB (commits: 64 MiB): `413` `request too large`. Unknown route `404` `not found`; wrong method `405` `method not allowed`; unexpected failure `500` `internal error` (no details leaked)
 - Missing/invalid/expired cookie, or a cookie for a user that no longer exists: `401` `authentication required`. Not the owner: `403` `forbidden`
 - Ids are integers. Times are RFC 3339 UTC strings (`2026-01-02T15:04:05Z`); the frontend formats them. Oids are full 40-character lowercase hex
@@ -119,7 +121,7 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 
 ### Auth
 
-`GET /health` → `200` `OK`
+`GET /health` → `200` `OK` (`HEAD /health` → `200`, no body)
 
 `POST /auth/register`
 - Request: `{"username": "alice", "password": "correct horse"}`
@@ -164,7 +166,7 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 `POST /repos/{owner}/{repo}/branches` (owner)
 - Request: `{"name": "feature", "from": "main"}` (`from` is an existing branch name)
 - `201` Branch (`oid` equals the source tip)
-- `400` `invalid branch name` · `401` · `403`
+- `400` `invalid branch name` · `invalid JSON body` · `401` · `403`
 - `404` `repository not found` · `branch not found` (source missing, includes an empty repo)
 - `409` `branch already exists`
 
@@ -229,7 +231,7 @@ Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
  "changes": [{"path": "README.md", "content": "# Hi\n"}, {"path": "old.txt", "delete": true}]}
 ```
 - `201` `{"oid": "<40 hex>", "tree": "<40 hex>", "parent": "<40 hex or null>", "branch": "main"}`
-- `400`: `message must be 1-500 characters` · `changes must contain 1-50 entries` · `invalid branch name` · `invalid expected_tip` · `invalid path: <path>` · `duplicate path: <path>` · `change must have content or delete: <path>` · `file too large: <path>` · `file is not valid UTF-8 text: <path>` · `path conflicts with existing file or directory: <path>` · `first commit must target the default branch` · `no changes`
+- `400`: `invalid JSON body` · `message must be 1-500 characters` · `changes must contain 1-50 entries` · `invalid branch name` · `invalid expected_tip` · `invalid path: <path>` · `duplicate path: <path>` · `change must have content or delete: <path>` · `file too large: <path>` · `file is not valid UTF-8 text: <path>` · `path conflicts with existing file or directory: <path>` · `first commit must target the default branch` · `no changes`
 - `401` · `403` · `404` `repository not found` · `branch not found`
 - `409` `branch tip has moved` with the extra field `"current_tip": "<40 hex or empty string if the branch does not exist>"`
 - `413` `request too large`

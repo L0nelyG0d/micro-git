@@ -1,0 +1,1260 @@
+openapi: 3.0.3
+info:
+  title: micro git API
+  version: 1.0.0
+  description: |
+    JSON API of the micro git backend (`backend/handler.go`, `Server.routes`).
+
+    Conventions:
+    - JSON in and out, UTF-8, `snake_case`. Exception: `GET /health` returns plain text `OK`.
+    - Every error body is `{"error": "<message>"}` (the `Error` schema). The 409 tip conflict adds `current_tip`.
+    - The backend has no `/api` prefix. In development the Vite dev server serves the frontend and
+      proxies `/api/*` to the backend, stripping the prefix, so the browser calls `/api/repos` while
+      the backend sees `/repos`.
+    - Authentication is the `session` cookie (an HttpOnly JWT) set by `POST /auth/login`. Missing, invalid
+      or expired cookie, or a cookie of a deleted user: `401` `authentication required`. Not the owner: `403` `forbidden`.
+    - Order of checks on write endpoints: 401, 404 (repository, branch), 403, 400 (validation), 409 (conflict).
+    - A method a path does not serve gets `405` `method not allowed` with an `Allow` header; an unknown
+      route gets `404` `not found`. The 405 is listed on every operation; the unknown-route 404 is not repeated.
+    - Unexpected failures: `500` `internal error` (no details).
+    - A JSON body over 1 MiB (commits: 64 MiB) gets `413` `request too large`; malformed JSON, wrong types,
+      unknown fields or an empty body get `400` `invalid JSON body`.
+    - `X-Content-Type-Options: nosniff` is sent on every response, `Cache-Control: no-store` on `/auth/*`.
+    - Times are RFC 3339 UTC strings, oids are 40-character lowercase hex.
+servers:
+  - url: http://localhost:8080
+    description: Backend (no /api prefix). The Vite dev server proxies /api to this origin and strips the prefix.
+tags:
+  - name: health
+    description: Liveness.
+  - name: auth
+    description: Accounts and the session cookie.
+  - name: repos
+    description: Repositories.
+  - name: branches
+    description: Branches and fast-forward merge.
+  - name: commits
+    description: History, commit writes, diffs.
+  - name: reading
+    description: Files and directories at a ref.
+paths:
+  /health:
+    get:
+      tags: [health]
+      operationId: health
+      security: []
+      summary: Liveness check
+      responses:
+        '200':
+          description: The server is up.
+          content:
+            text/plain:
+              schema:
+                type: string
+                enum: [OK]
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+    head:
+      tags: [health]
+      operationId: healthHead
+      security: []
+      summary: Liveness check without a body
+      responses:
+        '200':
+          description: The server is up (headers only).
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /auth/register:
+    post:
+      tags: [auth]
+      operationId: register
+      security: []
+      summary: Create an account
+      description: The username is lower-cased. No cookie is set; call login next.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '201':
+          description: Account created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: >-
+            `username must be 3-32 characters: a-z, 0-9 and -`, `username is reserved` (`api`),
+            `password must be 8-72 bytes` or `invalid JSON body`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: '`username already taken`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /auth/login:
+    post:
+      tags: [auth]
+      operationId: login
+      security: []
+      summary: Log in and start a session
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Credentials'
+      responses:
+        '200':
+          description: Logged in. The token is only in the cookie, never in the body.
+          headers:
+            Set-Cookie:
+              description: >-
+                `session=<jwt>; Path=/; HttpOnly; SameSite=Lax; Max-Age=<session lifetime in seconds>`, plus
+                `Secure` when the server runs with `COOKIE_SECURE=true`. The lifetime is 3 hours (Max-Age 10800)
+                once issue #40 is merged; until then the code uses 7 days (604800).
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '400':
+          description: '`username and password are required` or `invalid JSON body`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          description: '`invalid username or password` (same message for an unknown user and a wrong password).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /auth/logout:
+    post:
+      tags: [auth]
+      operationId: logout
+      security: []
+      summary: Log out
+      description: Clears the cookie. Idempotent; works without a cookie and never returns 401.
+      responses:
+        '204':
+          description: Logged out.
+          headers:
+            Set-Cookie:
+              description: The `session` cookie with an empty value and `Max-Age=0`.
+              schema:
+                type: string
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+  /auth/me:
+    get:
+      tags: [auth]
+      operationId: me
+      summary: The logged-in user
+      security:
+        - sessionCookie: []
+      responses:
+        '200':
+          description: The current user.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/User'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos:
+    get:
+      tags: [repos]
+      operationId: listRepos
+      security: []
+      summary: List repositories, newest first
+      description: Public. No pagination. An unknown owner gives an empty list.
+      parameters:
+        - name: owner
+          in: query
+          required: false
+          description: Only repositories of this user (case-insensitive).
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The repositories.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [repos]
+                properties:
+                  repos:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Repo'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [repos]
+      operationId: createRepo
+      summary: Create a repository
+      description: The repository starts empty (no branches) with `default_branch` `main`.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateRepoRequest'
+      responses:
+        '201':
+          description: Created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repo'
+        '400':
+          description: >-
+            `invalid repository name`, `description must be at most 500 characters` or `invalid JSON body`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: '`repository already exists` (same owner, case-insensitive).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+    get:
+      tags: [repos]
+      operationId: getRepo
+      security: []
+      summary: Get a repository
+      responses:
+        '200':
+          description: The repository.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repo'
+        '404':
+          $ref: '#/components/responses/RepoNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    patch:
+      tags: [repos]
+      operationId: renameRepo
+      summary: Rename a repository (owner only)
+      description: >-
+        The only accepted field is `name`. The old name stops resolving (no redirect). Renaming to the same
+        name or changing only its case succeeds.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RenameRepoRequest'
+      responses:
+        '200':
+          description: The repository with its new name (same `id`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Repo'
+        '400':
+          description: '`invalid repository name` or `invalid JSON body` (including a missing `name`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/RepoNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: '`repository already exists` (another repository of this owner has that name).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    delete:
+      tags: [repos]
+      operationId: deleteRepo
+      summary: Delete a repository (owner only)
+      description: Its objects and branches are deleted with it.
+      security:
+        - sessionCookie: []
+      responses:
+        '204':
+          description: Deleted.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/RepoNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}/commits:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+    get:
+      tags: [commits]
+      operationId: listCommits
+      security: []
+      summary: Commit history (first-parent walk, 50 per page)
+      parameters:
+        - name: ref
+          in: query
+          required: false
+          description: Branch name or full commit oid. Defaults to the repository's default branch when absent.
+          schema:
+            type: string
+        - name: page
+          in: query
+          required: false
+          description: 1-based page number.
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+      responses:
+        '200':
+          description: One page of commits. A page past the end gives `commits` empty and `has_more` false.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommitList'
+        '400':
+          description: '`invalid page`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: >-
+            `repository not found` or `ref not found` (an empty repository has no refs, so it also gives
+            `ref not found`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [commits]
+      operationId: createCommit
+      summary: Commit file changes to a branch (owner only)
+      description: >-
+        Writes blobs, rebuilds the changed trees and moves the branch with a compare-and-swap on
+        `expected_tip`. The first commit of an empty repository has an empty `expected_tip` and must target
+        the default branch. The body limit is 64 MiB.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateCommitRequest'
+      responses:
+        '201':
+          description: The new commit.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CreateCommitResponse'
+        '400':
+          description: >-
+            `invalid JSON body`, `invalid branch name`, `invalid expected_tip`,
+            `message must be 1-500 characters`, `changes must contain 1-50 entries`,
+            `first commit must target the default branch`, `no changes`, or a per-path message:
+            `invalid path: <path>`, `duplicate path: <path>`, `change must have content or delete: <path>`,
+            `file too large: <path>`, `file is not valid UTF-8 text: <path>`,
+            `path conflicts with existing file or directory: <path>`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: '`repository not found` or `branch not found` (non-empty repository, unknown `branch`).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          $ref: '#/components/responses/TipMoved'
+        '413':
+          description: '`request too large` (body over 64 MiB).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}/commits/{oid}:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+      - name: oid
+        in: path
+        required: true
+        description: Full 40-character commit oid.
+        schema:
+          $ref: '#/components/schemas/Oid'
+    get:
+      tags: [commits]
+      operationId: getCommit
+      security: []
+      summary: Commit detail with the per-file diff against the first parent
+      description: A root commit diffs against the empty tree.
+      responses:
+        '200':
+          description: The commit and its changed files, sorted by path.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CommitDetail'
+        '400':
+          description: '`invalid commit id` (not 40 hex characters).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: '`repository not found` or `commit not found` (missing, or the oid is not a commit).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}/compare:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+    get:
+      tags: [commits]
+      operationId: compare
+      security: []
+      summary: Diff of two tips (base tree against head tree, no merge base)
+      parameters:
+        - name: base
+          in: query
+          required: true
+          description: Branch name or full commit oid.
+          schema:
+            type: string
+        - name: head
+          in: query
+          required: true
+          description: Branch name or full commit oid.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The changed files, sorted by path. Identical tips give an empty list.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Compare'
+        '400':
+          description: '`base and head are required`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '404':
+          description: '`repository not found` or `ref not found` (either ref; an empty repository too).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}/branches:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+    get:
+      tags: [branches]
+      operationId: listBranches
+      security: []
+      summary: List branches sorted by name
+      responses:
+        '200':
+          description: The branches; empty for an empty repository.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [branches]
+                properties:
+                  branches:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Branch'
+        '404':
+          $ref: '#/components/responses/RepoNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+    post:
+      tags: [branches]
+      operationId: createBranch
+      summary: Create a branch from another branch (owner only)
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateBranchRequest'
+      responses:
+        '201':
+          description: The new branch; `oid` equals the source tip.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Branch'
+        '400':
+          description: '`invalid branch name` or `invalid JSON body`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: >-
+            `repository not found` or `branch not found` (the `from` branch is missing; an empty repository too).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: '`branch already exists`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}/branches/{branch}:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+      - name: branch
+        in: path
+        required: true
+        description: Branch name.
+        schema:
+          type: string
+    delete:
+      tags: [branches]
+      operationId: deleteBranch
+      summary: Delete a branch except the default one (owner only)
+      description: Objects are kept.
+      security:
+        - sessionCookie: []
+      responses:
+        '204':
+          description: Deleted.
+        '400':
+          description: '`cannot delete the default branch`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: '`repository not found` or `branch not found`.'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}/merge:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+    post:
+      tags: [branches]
+      operationId: mergeBranches
+      summary: Fast-forward `base` to the tip of `head` (owner only)
+      description: Only the `base` ref moves; no objects are written.
+      security:
+        - sessionCookie: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MergeRequest'
+      responses:
+        '200':
+          description: Merged.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MergeResponse'
+        '400':
+          description: >-
+            `invalid branch name`, `cannot merge a branch into itself`, `already up to date`
+            (the head tip equals or is an ancestor of the base tip) or `invalid JSON body`.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: '`repository not found` or `branch not found` (either branch).'
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '409':
+          description: >-
+            `not a fast-forward` (no `current_tip`), or `branch tip has moved` (the compare-and-swap on the
+            base ref lost a race; includes `current_tip`).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+        '413':
+          $ref: '#/components/responses/RequestTooLarge'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}/tree/{ref}:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+      - $ref: '#/components/parameters/Ref'
+    get:
+      tags: [reading]
+      operationId: getTreeRoot
+      security: []
+      summary: Root directory at a branch or commit
+      responses:
+        '200':
+          description: Directory entries, directories first, each sorted bytewise by name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tree'
+        '307':
+          $ref: '#/components/responses/CleanedRedirect'
+        '400':
+          $ref: '#/components/responses/ReadBadRequest'
+        '404':
+          $ref: '#/components/responses/ReadNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}/tree/{ref}/{path}:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+      - $ref: '#/components/parameters/Ref'
+      - $ref: '#/components/parameters/Path'
+    get:
+      tags: [reading]
+      operationId: getTree
+      security: []
+      summary: Directory at a path (may end with a slash) at a branch or commit
+      responses:
+        '200':
+          description: Directory entries, directories first, each sorted bytewise by name.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Tree'
+        '307':
+          $ref: '#/components/responses/CleanedRedirect'
+        '400':
+          $ref: '#/components/responses/ReadBadRequest'
+        '404':
+          $ref: '#/components/responses/ReadNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}/blob/{ref}:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+      - $ref: '#/components/parameters/Ref'
+    get:
+      tags: [reading]
+      operationId: getBlobRoot
+      security: []
+      summary: The root is a directory, so this answers 400 `not a file` once the ref resolves
+      responses:
+        '307':
+          $ref: '#/components/responses/CleanedRedirect'
+        '400':
+          $ref: '#/components/responses/ReadBadRequest'
+        '404':
+          $ref: '#/components/responses/ReadNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+  /repos/{owner}/{repo}/blob/{ref}/{path}:
+    parameters:
+      - $ref: '#/components/parameters/Owner'
+      - $ref: '#/components/parameters/RepoName'
+      - $ref: '#/components/parameters/Ref'
+      - $ref: '#/components/parameters/Path'
+    get:
+      tags: [reading]
+      operationId: getBlob
+      security: []
+      summary: File content at a path at a branch or commit
+      responses:
+        '200':
+          description: The file. Only UTF-8 text is ever stored.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Blob'
+        '307':
+          $ref: '#/components/responses/CleanedRedirect'
+        '400':
+          $ref: '#/components/responses/ReadBadRequest'
+        '404':
+          $ref: '#/components/responses/ReadNotFound'
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
+        '500':
+          $ref: '#/components/responses/InternalError'
+components:
+  securitySchemes:
+    sessionCookie:
+      type: apiKey
+      in: cookie
+      name: session
+      description: >-
+        HttpOnly JWT (HS256, claims `sub` = user id and `exp`) set by `POST /auth/login`. Browsers send it
+        automatically; the frontend calls with `credentials: include` through the dev proxy.
+  parameters:
+    Owner:
+      name: owner
+      in: path
+      required: true
+      description: Owner username (case-insensitive).
+      schema:
+        type: string
+    RepoName:
+      name: repo
+      in: path
+      required: true
+      description: Repository name (case-insensitive).
+      schema:
+        type: string
+    Ref:
+      name: ref
+      in: path
+      required: true
+      description: A branch name, otherwise a full 40-character commit oid of this repository.
+      schema:
+        type: string
+    Path:
+      name: path
+      in: path
+      required: true
+      description: >-
+        Slash-separated path inside the repository (segments are percent-decoded, then validated: no `.`, `..`,
+        empty or `.git` segment, at most 255 characters). The router pattern is `{path...}`, so it may hold
+        several segments and end with a slash.
+      allowReserved: true
+      schema:
+        type: string
+  responses:
+    Unauthorized:
+      description: '`authentication required` (no cookie, an invalid or expired one, or the user no longer exists).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: '`forbidden` (the caller is not the repository owner).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RepoNotFound:
+      description: '`repository not found`.'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    MethodNotAllowed:
+      description: '`method not allowed`; the `Allow` header lists the methods of this path.'
+      headers:
+        Allow:
+          schema:
+            type: string
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    RequestTooLarge:
+      description: '`request too large` (JSON body over 1 MiB).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    InternalError:
+      description: '`internal error` (no details are leaked).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TipMoved:
+      description: >-
+        `branch tip has moved`: `expected_tip` is not the branch's current tip. `current_tip` is the actual
+        tip, or an empty string when the branch does not exist.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ReadBadRequest:
+      description: >-
+        `invalid path` (a `.git` segment, over 255 characters, encoded dot segments), `not a directory`
+        (tree on a file) or `not a file` (blob on a directory or the root).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    ReadNotFound:
+      description: >-
+        `repository not found`, `ref not found` (an empty repository has no refs) or `path not found`.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    CleanedRedirect:
+      description: >-
+        A literal `.`, `..` or empty (`//`) segment in the URL is redirected by the router to the cleaned path
+        before any handler runs. Browsers follow it; it never reaches the handler.
+      headers:
+        Location:
+          schema:
+            type: string
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: string
+          description: Human-readable message, exactly as listed on each response.
+        current_tip:
+          type: string
+          description: >-
+            Only on the `409` `branch tip has moved` response of the commit and merge endpoints: the branch's
+            actual tip oid, or an empty string when the branch does not exist.
+    Oid:
+      type: string
+      pattern: '^[0-9a-f]{40}$'
+      description: Full 40-character lowercase hex object id.
+    Credentials:
+      type: object
+      required: [username, password]
+      additionalProperties: false
+      properties:
+        username:
+          type: string
+          description: 3-32 characters a-z, 0-9 and `-` after lower-casing; `api` is reserved.
+        password:
+          type: string
+          description: 8-72 bytes on register.
+    User:
+      type: object
+      required: [id, username]
+      properties:
+        id:
+          type: integer
+          format: int64
+        username:
+          type: string
+    Repo:
+      type: object
+      required: [id, owner, name, description, default_branch, empty, created_at]
+      properties:
+        id:
+          type: integer
+          format: int64
+        owner:
+          type: string
+        name:
+          type: string
+        description:
+          type: string
+        default_branch:
+          type: string
+          example: main
+        empty:
+          type: boolean
+          description: True when the repository has no branches.
+        created_at:
+          type: string
+          format: date-time
+    CreateRepoRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,100}$'
+          description: Not `.` or `..`.
+        description:
+          type: string
+          maxLength: 500
+          description: Optional, at most 500 characters.
+    RenameRepoRequest:
+      type: object
+      required: [name]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,100}$'
+    Branch:
+      type: object
+      required: [name, oid, is_default]
+      properties:
+        name:
+          type: string
+        oid:
+          $ref: '#/components/schemas/Oid'
+        is_default:
+          type: boolean
+    CreateBranchRequest:
+      type: object
+      required: [name, from]
+      additionalProperties: false
+      properties:
+        name:
+          type: string
+          pattern: '^[A-Za-z0-9._-]{1,100}$'
+          description: Not `.`, `..` or shaped like an oid (40 lowercase hex characters).
+        from:
+          type: string
+          description: An existing branch name.
+    MergeRequest:
+      type: object
+      required: [base, head]
+      additionalProperties: false
+      properties:
+        base:
+          type: string
+          description: Branch that moves.
+        head:
+          type: string
+          description: Branch whose tip `base` is moved to.
+    MergeResponse:
+      type: object
+      required: [branch, oid, previous_oid]
+      properties:
+        branch:
+          type: string
+        oid:
+          $ref: '#/components/schemas/Oid'
+        previous_oid:
+          $ref: '#/components/schemas/Oid'
+    Change:
+      type: object
+      required: [path]
+      additionalProperties: false
+      description: >-
+        An upsert (`path` and `content`, content may be empty) or a delete (`path` and `delete: true`);
+        giving both or neither is `400`.
+      properties:
+        path:
+          type: string
+        content:
+          type: string
+          description: UTF-8 text without NUL, at most 1 MiB.
+        delete:
+          type: boolean
+    CreateCommitRequest:
+      type: object
+      required: [branch, expected_tip, message, changes]
+      additionalProperties: false
+      properties:
+        branch:
+          type: string
+        expected_tip:
+          type: string
+          description: The branch's current tip oid, or an empty string for the first commit of a new branch.
+        message:
+          type: string
+          description: Trimmed, then 1-500 characters.
+        changes:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items:
+            $ref: '#/components/schemas/Change'
+    CreateCommitResponse:
+      type: object
+      required: [oid, tree, parent, branch]
+      properties:
+        oid:
+          $ref: '#/components/schemas/Oid'
+        tree:
+          $ref: '#/components/schemas/Oid'
+        parent:
+          type: string
+          nullable: true
+          pattern: '^[0-9a-f]{40}$'
+          description: Previous tip, or null for the first commit.
+        branch:
+          type: string
+    CommitSummary:
+      type: object
+      required: [oid, message, author, time, parents]
+      properties:
+        oid:
+          $ref: '#/components/schemas/Oid'
+        message:
+          type: string
+          description: Full message without the trailing newline.
+        author:
+          type: string
+        time:
+          type: string
+          format: date-time
+        parents:
+          type: array
+          items:
+            $ref: '#/components/schemas/Oid'
+    CommitList:
+      type: object
+      required: [ref, page, per_page, has_more, commits]
+      properties:
+        ref:
+          type: string
+        page:
+          type: integer
+        per_page:
+          type: integer
+          example: 50
+        has_more:
+          type: boolean
+        commits:
+          type: array
+          items:
+            $ref: '#/components/schemas/CommitSummary'
+    CommitDetail:
+      allOf:
+        - $ref: '#/components/schemas/CommitSummary'
+        - type: object
+          required: [tree, files]
+          properties:
+            tree:
+              $ref: '#/components/schemas/Oid'
+            files:
+              type: array
+              items:
+                $ref: '#/components/schemas/FileDiff'
+    Compare:
+      type: object
+      required: [base, head, base_commit, head_commit, files]
+      properties:
+        base:
+          type: string
+        head:
+          type: string
+        base_commit:
+          $ref: '#/components/schemas/Oid'
+        head_commit:
+          $ref: '#/components/schemas/Oid'
+        files:
+          type: array
+          items:
+            $ref: '#/components/schemas/FileDiff'
+    FileDiff:
+      type: object
+      required: [path, status, additions, deletions, truncated, hunks]
+      properties:
+        path:
+          type: string
+        status:
+          type: string
+          enum: [added, modified, deleted]
+        additions:
+          type: integer
+        deletions:
+          type: integer
+        truncated:
+          type: boolean
+          description: >-
+            True when the file was not diffed (over 5000 lines on a side, or the response's cell budget was
+            spent); `hunks` is then empty.
+        hunks:
+          type: array
+          items:
+            $ref: '#/components/schemas/Hunk'
+    Hunk:
+      type: object
+      required: [old_start, old_lines, new_start, new_lines, lines]
+      properties:
+        old_start:
+          type: integer
+          description: 0 for an added file.
+        old_lines:
+          type: integer
+        new_start:
+          type: integer
+          description: 0 for a deleted file.
+        new_lines:
+          type: integer
+        lines:
+          type: array
+          items:
+            $ref: '#/components/schemas/DiffLine'
+    DiffLine:
+      type: object
+      required: [type, text]
+      properties:
+        type:
+          type: string
+          enum: [context, add, del]
+        text:
+          type: string
+          description: Without a `+`/`-` prefix and without the newline.
+    TreeEntry:
+      type: object
+      required: [name, type, oid]
+      properties:
+        name:
+          type: string
+        type:
+          type: string
+          enum: [tree, blob]
+        oid:
+          $ref: '#/components/schemas/Oid'
+    Tree:
+      type: object
+      required: [ref, commit, path, entries]
+      properties:
+        ref:
+          type: string
+          description: The `ref` as requested.
+        commit:
+          $ref: '#/components/schemas/Oid'
+        path:
+          type: string
+          description: Empty string for the root.
+        entries:
+          type: array
+          items:
+            $ref: '#/components/schemas/TreeEntry'
+    Blob:
+      type: object
+      required: [ref, commit, path, name, oid, size, content]
+      properties:
+        ref:
+          type: string
+        commit:
+          $ref: '#/components/schemas/Oid'
+        path:
+          type: string
+        name:
+          type: string
+        oid:
+          $ref: '#/components/schemas/Oid'
+        size:
+          type: integer
+          description: Bytes.
+        content:
+          type: string
+          description: UTF-8 text.
