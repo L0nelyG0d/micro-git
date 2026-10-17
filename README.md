@@ -7,6 +7,25 @@ format; the frontend (React + Vite) looks like a GitHub repository page.
 Clone, push and fetch are not supported. See `_docs/plan.md` for the full
 feature list, endpoints, tables and rules.
 
+## Quick start with make
+
+With Go, Node.js and npm, `psql` and a PostgreSQL database available, a fresh
+checkout needs no manual shell steps and no `source .env`:
+
+```sh
+cp /path/to/your/.env .env   # or create it as described under "Setup", step 2
+make setup                   # go mod download + npm ci
+make check-env               # DATABASE_URL and JWT_SECRET (32+ bytes) present?
+make schema                  # apply backend/db/schema.sql (retries for Neon cold starts)
+make dev                     # backend + frontend; open http://localhost:5173; Ctrl-C stops both
+```
+
+The backend port defaults to `8080`. If it is busy, `make` says so; pick
+another one with `make dev PORT=9090` (also `make backend PORT=9090`); the
+frontend proxy follows automatically. `PORT` in `.env` is not used by `make`.
+`make` lists all targets (`backend`, `frontend`, `test`, `test-fast`, `build`,
+`lint`, `clean`). The manual steps below do the same by hand.
+
 ## Prerequisites
 
 - Go (the version in `backend/go.mod`)
