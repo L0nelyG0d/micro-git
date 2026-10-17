@@ -15,7 +15,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ApiError } from "@/lib/api"
 import { formatDate } from "@/lib/format"
-import { canWrite, readPath, uiPath, type Branch, type CommitSummary, type Tree } from "@/lib/git"
+import { canWrite, readPath, uiPath, type Blob, type Branch, type CommitSummary, type Tree } from "@/lib/git"
 import type { Repo } from "@/lib/repos"
 import { useFetch } from "@/lib/useFetch"
 
@@ -28,21 +28,28 @@ export function RepoPage() {
 
   const repoQ = useFetch<Repo>(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`)
   const repo = repoQ.data
-  const live = repo && !repo.empty ? repo : undefined
   const ref = refParam ?? repo?.default_branch ?? ""
   const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
 
-  const branchesQ = useFetch<{ branches: Branch[] }>(live ? `${base}/branches` : null)
-  const treeQ = useFetch<Tree>(live ? readPath("tree", owner, name, ref, path) : null)
+  // Nothing below waits for the repo request unless it needs the default branch
+  // (no ref in the URL); with a ref all five requests start together. A missing
+  // or empty repo is decided from repoQ, and the extra answers are ignored.
+  const branchesQ = useFetch<{ branches: Branch[] }>(`${base}/branches`)
+  // The default branch is only used once the repo is known to have commits.
+  const fetchRef = refParam ?? (repo && !repo.empty ? repo.default_branch : "")
+  const treeQ = useFetch<Tree>(fetchRef ? readPath("tree", owner, name, fetchRef, path) : null)
   const commitsQ = useFetch<{ commits: CommitSummary[] }>(
-    live ? `${base}/commits?ref=${encodeURIComponent(ref)}&page=1` : null,
+    // Without a ref the API answers for the default branch.
+    `${base}/commits?${refParam ? `ref=${encodeURIComponent(refParam)}&` : ""}page=1`,
   )
+  const readmeQ = useFetch<Blob>(fetchRef && !path ? readPath("blob", owner, name, fetchRef, "README.md") : null)
 
   const retryAll = () => {
     repoQ.reload()
     branchesQ.reload()
     treeQ.reload()
     commitsQ.reload()
+    readmeQ.reload()
   }
 
   if (repoQ.error instanceof ApiError && repoQ.error.status === 404) {
@@ -140,7 +147,7 @@ export function RepoPage() {
           <FileTree owner={owner} repo={name} ref_={ref} path={path} entries={treeQ.data.entries} />
         </Section>
         {!path && treeQ.data.entries.some((e) => e.type === "blob" && e.name === "README.md") && (
-          <ReadmeCard owner={owner} repo={name} ref_={ref} />
+          <ReadmeCard q={readmeQ} />
         )}
       </>
     )
@@ -221,6 +228,7 @@ export function RepoPage() {
                     else {
                       treeQ.reload()
                       commitsQ.reload()
+                      readmeQ.reload()
                     }
                   }}
                 />

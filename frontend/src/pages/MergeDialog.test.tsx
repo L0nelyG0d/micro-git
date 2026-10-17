@@ -33,6 +33,7 @@ function setup(user: string | null = "alice", list = branches) {
   routes["GET /api/repos/alice/hello/tree/dev"] = routes["GET /api/repos/alice/hello/tree/main"]
   const commits = () =>
     json(200, { commits: [{ oid: OID, message: "m", author: "alice", time: "2026-01-02T15:04:05Z", parents: [] }] })
+  routes["GET /api/repos/alice/hello/commits?page=1"] = commits
   routes["GET /api/repos/alice/hello/commits?ref=main&page=1"] = commits
   routes["GET /api/repos/alice/hello/commits?ref=dev&page=1"] = commits
 }
@@ -125,7 +126,7 @@ it("success: posts base/head, toasts, closes and reloads the target branch", asy
   await vi.waitFor(() =>
     expect(calls.filter((c) => c === "GET /api/repos/alice/hello/tree/main").length).toBe(2),
   )
-  expect(calls.filter((c) => c === "GET /api/repos/alice/hello/commits?ref=main&page=1").length).toBe(2)
+  expect(calls.filter((c) => c === "GET /api/repos/alice/hello/commits?page=1").length).toBe(2)
 })
 
 it("success with a different target navigates to it", async () => {

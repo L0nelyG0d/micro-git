@@ -51,6 +51,7 @@ function setupRepo(user: "alice" | "bob" | null = "alice") {
   routes["GET /api/repos/alice/hello"] = () => json(200, repo())
   routes["GET /api/repos/alice/hello/branches"] = () => json(200, branches)
   routes["GET /api/repos/alice/hello/tree/main"] = () => json(200, tree())
+  routes["GET /api/repos/alice/hello/commits?page=1"] = () => json(200, commits)
   routes["GET /api/repos/alice/hello/commits?ref=main&page=1"] = () => json(200, commits)
 }
 
@@ -109,13 +110,13 @@ it("shows the latest commit bar from the first commits item", async () => {
   expect(main().getByText(formatDate("2026-01-02T15:04:05Z"))).toBeInTheDocument()
 })
 
-it("empty repo: no tree or commits calls; visitor sees a plain message", async () => {
+it("empty repo: no tree or README calls; visitor sees a plain message", async () => {
   setupRepo(null)
   routes["GET /api/repos/alice/hello"] = () => json(200, repo({ empty: true }))
   renderAt("/alice/hello")
   expect(await screen.findByText(/repository is empty/i)).toBeInTheDocument()
   expect(screen.queryByRole("link", { name: "Add file" })).not.toBeInTheDocument()
-  expect(calls.filter((c) => /tree|commits/.test(c))).toEqual([])
+  expect(calls.filter((c) => /\/(tree|blob)\//.test(c))).toEqual([])
 })
 
 it("empty repo: owner sees Add file for the default branch", async () => {
@@ -126,7 +127,7 @@ it("empty repo: owner sees Add file for the default branch", async () => {
     "href",
     "/alice/hello/new/main",
   )
-  expect(calls.filter((c) => /tree|commits/.test(c))).toEqual([])
+  expect(calls.filter((c) => /\/(tree|blob)\//.test(c))).toEqual([])
 })
 
 it("unknown repo shows not found; other failures show retry", async () => {
@@ -200,8 +201,7 @@ it("matches the owner case-insensitively", async () => {
   routes["GET /api/repos/Alice/hello"] = routes["GET /api/repos/alice/hello"]
   routes["GET /api/repos/Alice/hello/branches"] = routes["GET /api/repos/alice/hello/branches"]
   routes["GET /api/repos/Alice/hello/tree/main"] = routes["GET /api/repos/alice/hello/tree/main"]
-  routes["GET /api/repos/Alice/hello/commits?ref=main&page=1"] =
-    routes["GET /api/repos/alice/hello/commits?ref=main&page=1"]
+  routes["GET /api/repos/Alice/hello/commits?page=1"] = routes["GET /api/repos/alice/hello/commits?page=1"]
   renderAt("/Alice/hello")
   expect(await screen.findByRole("button", { name: "Delete repository" })).toBeInTheDocument()
 })
