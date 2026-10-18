@@ -1,6 +1,7 @@
+import { MemoryRouter } from "@/test-utils"
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom"
+import { Route, Routes, useLocation } from "react-router-dom"
 import { PageToolbar } from "@/components/PageToolbar"
 
 function Where() {

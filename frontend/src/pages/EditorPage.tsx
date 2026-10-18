@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react"
 import type { FormEvent } from "react"
-import { useNavigate, useParams } from "react-router-dom"
+import { useBlocker, useNavigate, useParams } from "react-router-dom"
 import { toast } from "sonner"
 import { useAuth } from "@/auth/AuthContext"
 import { BranchSwitcher } from "@/components/BranchSwitcher"
@@ -87,10 +87,8 @@ function Editor({
   const [error, setError] = useState("")
   const [conflict, setConflict] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const [leaveAsk, setLeaveAsk] = useState(false)
   const [baseline, setBaseline] = useState(isNew ? "" : null as string | null)
   const key = draftKey(owner, name, ref_, mode, isNew ? "" : initialPath)
-  const pendingLeave = useRef<HTMLElement | null>(null)
   const returnFocus = useRef<HTMLElement | null>(null)
   const bypass = useRef(false)
   const committed = useRef(false)
@@ -152,42 +150,26 @@ function Editor({
     return () => window.removeEventListener("beforeunload", onUnload)
   }, [dirty])
 
-  // In-app leave. The app uses BrowserRouter (no data router), so useBlocker is not available:
-  // intercept clicks on links, toolbar buttons (Back) and [data-leave] buttons (Cancel) instead.
+  // In-app leave: links, Cancel/Back/Up, breadcrumbs and the browser's Back/Forward buttons
+  // all go through the data router, so useBlocker sees every one of them.
+  const blocker = useBlocker(
+    ({ currentLocation, nextLocation }) =>
+      dirty &&
+      !bypass.current &&
+      !committed.current &&
+      currentLocation.pathname + currentLocation.search !==
+        nextLocation.pathname + nextLocation.search,
+  )
+  const leaveAsk = blocker.state === "blocked"
   useEffect(() => {
-    if (!dirty) return
-    const onClick = (ev: MouseEvent) => {
-      if (bypass.current || committed.current || ev.defaultPrevented) return
-      if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return
-      const target = (ev.target as Element | null)?.closest<HTMLElement>(
-        "a[href], [role=toolbar] button, [data-leave]",
-      )
-      if (!target || target.closest("[role=alertdialog]")) return
-      if (target instanceof HTMLAnchorElement) {
-        const href = target.getAttribute("href") ?? ""
-        if (!href.startsWith("/") || (target.target && target.target !== "_self")) return
-      }
-      ev.preventDefault()
-      ev.stopImmediatePropagation()
-      pendingLeave.current = target
-      returnFocus.current = target
-      setLeaveAsk(true)
-    }
-    document.addEventListener("click", onClick, true)
-    return () => document.removeEventListener("click", onClick, true)
-  }, [dirty])
+    if (blocker.state !== "blocked") return
+    const el = document.activeElement
+    returnFocus.current = el instanceof HTMLElement && el !== document.body ? el : null
+  }, [blocker.state])
 
   const discardAndLeave = () => {
     clearDraft(key)
-    setLeaveAsk(false)
-    const el = pendingLeave.current
-    pendingLeave.current = null
-    bypass.current = true
-    try {
-      el?.click()
-    } finally {
-      bypass.current = false
-    }
+    if (blocker.state === "blocked") blocker.proceed()
   }
 
   const reloadAll = () => {
@@ -266,6 +248,7 @@ function Editor({
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         onUnauthorized()
+        bypass.current = true // keep the draft; it is restored after logging in
         navigate("/login")
         return
       }
@@ -406,7 +389,7 @@ function Editor({
           <Button type="submit" disabled={busy || !ready || messageInvalid || pathMissing}>
             Commit
           </Button>
-          <Button type="button" variant="outline" data-leave onClick={() => navigate(cancelTo)}>
+          <Button type="button" variant="outline" onClick={() => navigate(cancelTo)}>
             Cancel
           </Button>
           {!isNew && (
@@ -423,7 +406,12 @@ function Editor({
         </div>
       </div>
 
-      <AlertDialog open={leaveAsk} onOpenChange={setLeaveAsk}>
+      <AlertDialog
+        open={leaveAsk}
+        onOpenChange={(open) => {
+          if (!open && blocker.state === "blocked") blocker.reset()
+        }}
+      >
         <AlertDialogContent
           onCloseAutoFocus={(ev) => {
             // Opened programmatically (no Trigger): put focus back where the user was.

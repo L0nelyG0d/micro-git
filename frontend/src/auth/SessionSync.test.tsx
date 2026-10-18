@@ -1,5 +1,5 @@
+import { MemoryRouter } from "@/test-utils"
 import { act, render, screen, waitFor } from "@testing-library/react"
-import { MemoryRouter } from "react-router-dom"
 import { toast } from "sonner"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"

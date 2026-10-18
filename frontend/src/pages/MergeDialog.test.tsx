@@ -1,6 +1,7 @@
+import { MemoryRouter } from "@/test-utils"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { MemoryRouter, useLocation } from "react-router-dom"
+import { useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { cacheClear } from "@/lib/fetchCache"

@@ -1,23 +1,10 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react"
+import { Suspense, useEffect, useRef, useState } from "react"
 import type { RefObject } from "react"
-import { matchPath, Route, Routes, useLocation } from "react-router-dom"
+import { matchPath, Outlet, useLocation } from "react-router-dom"
 import { Toaster } from "sonner"
 import { AuthProvider, useAuth } from "@/auth/AuthContext"
 import { Nav } from "@/components/Nav"
 import { LoadingBlock } from "@/components/StateViews"
-import { Home } from "@/pages/Home"
-import { NotFound } from "@/pages/NotFound"
-
-const BlobPage = lazy(() => import("@/pages/BlobPage").then((m) => ({ default: m.BlobPage })))
-const ComparePage = lazy(() => import("@/pages/ComparePage").then((m) => ({ default: m.ComparePage })))
-const EditorPage = lazy(() => import("@/pages/EditorPage").then((m) => ({ default: m.EditorPage })))
-const CommitPage = lazy(() => import("@/pages/CommitPage").then((m) => ({ default: m.CommitPage })))
-const HistoryPage = lazy(() => import("@/pages/HistoryPage").then((m) => ({ default: m.HistoryPage })))
-const Login = lazy(() => import("@/pages/Login").then((m) => ({ default: m.Login })))
-const Register = lazy(() => import("@/pages/Register").then((m) => ({ default: m.Register })))
-const RepoPage = lazy(() => import("@/pages/RepoPage").then((m) => ({ default: m.RepoPage })))
-const ProfilePage = lazy(() => import("@/pages/ProfilePage").then((m) => ({ default: m.ProfilePage })))
-const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })))
 
 const SUFFIX = "micro git"
 const R = "/:owner/:repo"
@@ -92,27 +79,12 @@ function Pages() {
   }
   return (
     <Suspense fallback={<LoadingBlock label="Loading page" />} key={epoch}>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route path="/" element={<Home />} />
-        <Route path="/:owner" element={<ProfilePage />} />
-        <Route path="/:owner/:repo" element={<RepoPage />} />
-        <Route path="/:owner/:repo/tree/:ref/*" element={<RepoPage />} />
-        <Route path="/:owner/:repo/blob/:ref/*" element={<BlobPage />} />
-        <Route path="/:owner/:repo/edit/:ref/*" element={<EditorPage mode="edit" />} />
-        <Route path="/:owner/:repo/new/:ref" element={<EditorPage mode="new" />} />
-        <Route path="/:owner/:repo/commits/:ref" element={<HistoryPage />} />
-        <Route path="/:owner/:repo/commit/:oid" element={<CommitPage />} />
-        <Route path="/:owner/:repo/settings" element={<SettingsPage />} />
-        <Route path="/:owner/:repo/compare" element={<ComparePage />} />
-        <Route path="*" element={<NotFound />} />
-      </Routes>
+      <Outlet />
     </Suspense>
   )
 }
 
-/** Router-agnostic: main.tsx wraps it in BrowserRouter, tests in MemoryRouter. */
+/** Layout route (see routes.tsx): main.tsx mounts it in a data router (createBrowserRouter), tests in a memory data router. */
 export default function App() {
   const mainRef = useRef<HTMLElement>(null)
   return (
