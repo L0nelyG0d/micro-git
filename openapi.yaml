@@ -501,7 +501,7 @@ paths:
         '409':
           $ref: '#/components/responses/TipMoved'
         '413':
-          description: '`request too large` (body over 64 MiB).'
+          description: '`request too large` (body over 64 MiB for the owner, over 1 MiB for anyone else; checked before the `403`).'
           content:
             application/json:
               schema:
@@ -955,8 +955,10 @@ components:
       description: >-
         On a 200 of `tree`, `blob` and `commits/{oid}`: `public, max-age=31536000, immutable` when the
         `{ref}`/`{oid}` is a full 40-hex commit id (objects are content-addressed, so the answer never changes),
-        and `no-cache` when `{ref}` is a branch name (revalidate with `If-None-Match`). Errors carry no cache
-        headers. `/auth/*` responses are always `no-store`.
+        and `no-cache` when `{ref}` is a branch name (revalidate with `If-None-Match`). For a private repository
+        (visible to its owner only) the same answers are `private, max-age=31536000, immutable` and
+        `private, no-cache`, so a shared cache never stores them. Errors carry no cache headers. `/auth/*`
+        responses are always `no-store`.
       schema:
         type: string
     ETagRead:
@@ -967,7 +969,7 @@ components:
       schema:
         type: string
     VaryAcceptEncoding:
-      description: '`Accept-Encoding`. Sent on every GET response, compressed or not.'
+      description: '`Accept-Encoding`. Sent on every response except to `HEAD`, compressed or not.'
       schema:
         type: string
     ContentEncodingGzip:
