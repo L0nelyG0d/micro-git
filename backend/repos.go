@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strings"
 	"time"
 	"unicode/utf8"
 
@@ -24,6 +25,7 @@ type Repo struct {
 	Name          string `json:"name"`
 	Description   string `json:"description"`
 	DefaultBranch string `json:"default_branch"`
+	Private       bool   `json:"private"`
 	Empty         bool   `json:"empty"`
 	CreatedAt     string `json:"created_at"`
 	OwnerID       int64  `json:"-"`
@@ -32,13 +34,20 @@ type Repo struct {
 var errRepoNotFound = errors.New("repository not found")
 
 const repoSelect = `SELECT r.id, r.owner_id, u.username, r.name, r.description, r.default_branch,
-	r.created_at, NOT EXISTS (SELECT 1 FROM refs WHERE repo_id = r.id)
+	r.private, r.created_at, NOT EXISTS (SELECT 1 FROM refs WHERE repo_id = r.id)
 	FROM repos r JOIN users u ON u.id = r.owner_id`
+
+// returningRepo wraps an INSERT/UPDATE (without RETURNING) so it yields the
+// full repo row, joined like repoSelect, in one round trip.
+func returningRepo(stmt string) string {
+	return `WITH r AS (` + stmt + ` RETURNING *) ` +
+		strings.Replace(repoSelect, "FROM repos r", "FROM r", 1)
+}
 
 func scanRepo(row pgx.Row) (Repo, error) {
 	var r Repo
 	var created time.Time
-	err := row.Scan(&r.ID, &r.OwnerID, &r.Owner, &r.Name, &r.Description, &r.DefaultBranch, &created, &r.Empty)
+	err := row.Scan(&r.ID, &r.OwnerID, &r.Owner, &r.Name, &r.Description, &r.DefaultBranch, &r.Private, &created, &r.Empty)
 	r.CreatedAt = created.UTC().Format(time.RFC3339)
 	return r, err
 }
@@ -67,8 +76,34 @@ func (s *Server) repoFromPath(w http.ResponseWriter, r *http.Request) (Repo, boo
 		internalError(w, err)
 		return Repo{}, false
 	}
+	if !s.canView(w, r, repo) {
+		return Repo{}, false
+	}
 	s.testHook("repo-loaded")
 	return repo, true
+}
+
+// canView reports whether the requester may see the repository. A private
+// repository is visible to its owner only; everyone else gets the same 404 as
+// for a missing one, so its existence is not revealed. On false it has already
+// written the response.
+func (s *Server) canView(w http.ResponseWriter, r *http.Request, repo Repo) bool {
+	if !repo.Private {
+		return true
+	}
+	u, ok := UserFromContext(r.Context())
+	if !ok {
+		var err error
+		if u, ok, err = s.authenticate(r); err != nil {
+			internalError(w, err)
+			return false
+		}
+	}
+	if !ok || u.ID != repo.OwnerID {
+		writeError(w, http.StatusNotFound, "repository not found")
+		return false
+	}
+	return true
 }
 
 // ownedRepoFromPath is repoFromPath plus the owner check, for write endpoints
@@ -109,10 +144,16 @@ func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
-	q := repoSelect
-	var args []any
+	// Private repositories are listed for their owner only.
+	viewer, _, err := s.authenticate(r)
+	if err != nil {
+		internalError(w, err)
+		return
+	}
+	q := repoSelect + ` WHERE (NOT r.private OR r.owner_id = $1)`
+	args := []any{viewer.ID}
 	if r.URL.Query().Has("owner") {
-		q += ` WHERE lower(u.username) = lower($1)`
+		q += ` AND lower(u.username) = lower($2)`
 		args = append(args, r.URL.Query().Get("owner"))
 	}
 	// One extra row past the page tells has_more.
@@ -146,6 +187,7 @@ func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 type createRepoRequest struct {
 	Name        string `json:"name"`
 	Description string `json:"description"`
+	Private     bool   `json:"private"`
 }
 
 // createRepo handles POST /repos (behind requireAuth).
@@ -163,19 +205,13 @@ func (s *Server) createRepo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "description must be at most 500 characters")
 		return
 	}
-	var id int64
-	err := s.DB.QueryRow(r.Context(),
-		`INSERT INTO repos (owner_id, name, description, created_at) VALUES ($1, $2, $3, $4) RETURNING id`,
-		u.ID, req.Name, req.Description, s.Now().UTC()).Scan(&id)
+	repo, err := scanRepo(s.DB.QueryRow(r.Context(), returningRepo(
+		`INSERT INTO repos (owner_id, name, description, private, created_at) VALUES ($1, $2, $3, $4, $5)`),
+		u.ID, req.Name, req.Description, req.Private, s.Now().UTC()))
 	if isUniqueViolation(err) {
 		writeError(w, http.StatusConflict, "repository already exists")
 		return
 	}
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	repo, err := s.findRepo(r.Context(), u.Username, req.Name)
 	if err != nil {
 		internalError(w, err)
 		return

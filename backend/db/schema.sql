@@ -44,3 +44,6 @@ BEGIN
             FOREIGN KEY (repo_id, oid) REFERENCES objects (repo_id, oid);
     END IF;
 END $$;
+
+-- Private repositories: hidden from everyone but the owner (404 for others).
+ALTER TABLE repos ADD COLUMN IF NOT EXISTS private boolean NOT NULL DEFAULT false;

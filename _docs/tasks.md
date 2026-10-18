@@ -177,3 +177,33 @@ Analysis on 2026-10-18. Main costs: one SQL statement per object on reads and wr
 Status: #47-#55 are all done, QA PASS and merged into `main` (#55 = flaky tests after code-splitting). Decisions: Neon baseline stays an estimate (statements x 200 ms); gzipped bodies carry a weak ETag (RFC-correct); a forged ETag for a missing path on an existing branch gets 304 (documented limit in plan.md).
 
 Original order: #47 first; then #48, #49, #50, #54 (backend, mostly separate files) and #51; #52 and #53 (frontend) in parallel. #51 and #53 both touch caching: #51 first.
+
+## Testing and optimization round (issues #56-#78)
+
+Created 2026-10-18 from three audits (QA layout/function test in the browser, backend + CLI audit, frontend best-practices audit). Worked in the working tree on `feature-private-repos-cli-github-ui`, nothing committed or merged yet (see `_docs/questions.md`, 2026-10-18 entries). Roles: PM and QA ran on Haiku, engineers and analysts on Sonnet.
+
+Backend and CLI
+- #62 mg clone/pull: reject unsafe server paths (incl. case-insensitive `.MG`/`.GIT`), never write through symlinks (os.OpenRoot) - QA PASS (round 2)
+- #63 login: usernames over 32 bytes rejected before the rate limiter - QA PASS (exact 1 MiB body still 413 by the body cap)
+- #64 commit body: non-owners capped at 1 MiB (413), owner check before the big read - QA PASS
+- #65 repo PATCH and delete-branch made atomic - QA PASS; #75 stale default_branch skip fixed - QA PASS
+- #66 statement_timeout (`DB_STATEMENT_TIMEOUT`, default 15s) and history depth cap 10000 - QA PASS (contract change logged)
+- #67 `private, no-cache` on branch-addressed reads of private repos; #68 private-repo test gaps closed - QA PASS
+- #69 go mod tidy, CI tidy-diff + govulncheck (advisory), COOKIE_SECURE startup warning - QA PASS
+- #70 mg: 8 MiB response cap, concurrent blob fetch (6 workers) - QA PASS
+
+Frontend
+- #56 tests for the private-repo UI - QA PASS
+- #57 editor unsaved-changes guard (beforeunload, in-app confirm dialog, draft kept across 401) - focus defect fixed; browser Back button not interceptable with BrowserRouter
+- #58 dark-mode `color-scheme`/`theme-color`, no `transition-all` - NOT started (look-and-feel, needs the user)
+- #59 Home/ProfilePage on useFetch - QA PASS; cross-tab stale list split off as #78
+- #60 form focus/aria and busy label - QA PASS (round 2)
+- #61 design-system.md vs DESIGN.md, shadows, stray files - NOT started (design decision for the user)
+- #71 tab strips wrap below 640 px; #77 breadcrumb and page overflow at 320 px - implemented, unit tests pass; owner-side browser check blocked
+- #72 hard-load spinner - closed: dev-server artifact (prod 67-135 ms)
+- #73 favicon, no doomed README/commits requests - implemented; browser check blocked; README now waits for the tree (decision logged)
+- #74 inline branch-name validation - implemented; browser check blocked
+- #76 flaky tests (two races in RepoPage/EditorPage tests) - fixed, 60/60 under load
+- #78 session revalidation on focus/visibilitychange - implemented; jsdom only
+
+Open decisions are in `_docs/questions.md` under "Testing/optimization round".

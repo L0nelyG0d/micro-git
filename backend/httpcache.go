@@ -16,10 +16,19 @@ import (
 // never changes: it is cached for a year. A response addressed by a branch
 // name changes whenever the tip moves, so it is revalidated with a strong ETag
 // derived from the resolved commit oid and the path.
+//
+// Known residual risk: an oid-addressed response is "public, ..., immutable"
+// for a year. If its repo is made private afterwards, copies already stored
+// by a shared cache (CDN, proxy) can still be served. The contract is
+// deliberately unchanged (see _docs/performance.md and _docs/questions.md).
 
 const (
-	cacheImmutable  = "public, max-age=31536000, immutable"
-	cacheRevalidate = "no-cache"
+	cacheImmutable = "public, max-age=31536000, immutable"
+	// A private repository must never sit in a shared cache.
+	cachePrivateImmutable = "private, max-age=31536000, immutable"
+	cacheRevalidate       = "no-cache"
+	// Revalidate always; "private" keeps a private repo out of shared caches.
+	cachePrivateRevalidate = "private, no-cache"
 
 	// gzipMinSize is the largest body that is sent uncompressed.
 	gzipMinSize = 1024
@@ -30,13 +39,22 @@ const (
 type cacheHeaders struct{ control, etag string }
 
 // immutableCache is for a response addressed by a full commit oid.
-func immutableCache() cacheHeaders { return cacheHeaders{control: cacheImmutable} }
+func immutableCache(private bool) cacheHeaders {
+	if private {
+		return cacheHeaders{control: cachePrivateImmutable}
+	}
+	return cacheHeaders{control: cacheImmutable}
+}
 
 // branchCache is for a response addressed by a branch name: the ETag changes
 // whenever the resolved commit (or the path or endpoint) changes.
-func branchCache(kind, commit, path string) cacheHeaders {
+func branchCache(kind, commit, path string, private bool) cacheHeaders {
+	control := cacheRevalidate
+	if private {
+		control = cachePrivateRevalidate
+	}
 	sum := sha256.Sum256([]byte(kind + "\x00" + commit + "\x00" + path))
-	return cacheHeaders{control: cacheRevalidate, etag: `"` + hex.EncodeToString(sum[:16]) + `"`}
+	return cacheHeaders{control: control, etag: `"` + hex.EncodeToString(sum[:16]) + `"`}
 }
 
 // set writes the headers. Call it only on a 200/304 so errors are never cached.

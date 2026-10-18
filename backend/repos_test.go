@@ -71,7 +71,7 @@ func TestCreateRepo(t *testing.T) {
 	}
 	var raw map[string]any
 	_ = json.Unmarshal(rec.Body.Bytes(), &raw)
-	if len(raw) != 7 {
+	if len(raw) != 8 {
 		t.Errorf("fields = %v", raw)
 	}
 	var r Repo
@@ -115,7 +115,7 @@ func TestCreateRepoErrors(t *testing.T) {
 		{"duplicate", `{"name":"taken"}`, c, 409, "repository already exists"},
 		{"duplicate other case", `{"name":"TAKEN"}`, c, 409, "repository already exists"},
 		{"bad json", `{"name":1}`, c, 400, "invalid JSON body"},
-		{"unknown field", `{"name":"x","private":true}`, c, 400, "invalid JSON body"},
+		{"unknown field", `{"name":"x","color":"red"}`, c, 400, "invalid JSON body"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

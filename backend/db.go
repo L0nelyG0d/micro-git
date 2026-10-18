@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -25,6 +26,13 @@ func NewPool(ctx context.Context, url string, pc PoolConfig) (*pgxpool.Pool, err
 	pcfg.MaxConns = pc.MaxConns
 	pcfg.MaxConnIdleTime = pc.MaxConnIdleTime
 	pcfg.HealthCheckPeriod = pc.HealthCheckPeriod
+	if pc.StatementTimeout > 0 {
+		if pcfg.ConnConfig.RuntimeParams == nil {
+			pcfg.ConnConfig.RuntimeParams = map[string]string{}
+		}
+		// a runaway query is cancelled by the server instead of holding a pooled connection
+		pcfg.ConnConfig.RuntimeParams["statement_timeout"] = strconv.FormatInt(pc.StatementTimeout.Milliseconds(), 10)
+	}
 	pool, err := pgxpool.NewWithConfig(ctx, pcfg)
 	if err != nil {
 		return nil, errors.New("invalid DATABASE_URL: it could not be parsed (details hidden because they contain the connection string)")

@@ -4,7 +4,7 @@ A small git-hosting site. Users register, create repositories, commit file
 changes from the browser, and browse branches, history, files and diffs. The
 backend (Go + PostgreSQL) stores blob / tree / commit objects in git's own
 format; the frontend (React + Vite) looks like a GitHub repository page.
-Clone, push and fetch are not supported. See `_docs/plan.md` for the full
+Clone, push and fetch of the git protocol are not supported; use the web UI or the `mg` command-line client (see "Command line"). See `_docs/plan.md` for the full
 feature list, endpoints, tables and rules.
 
 ## Quick start with make
@@ -62,7 +62,8 @@ Run these steps in order.
    | `DATABASE_URL` | yes | PostgreSQL connection string for the running backend |
    | `TEST_DATABASE_URL` | for DB tests | Connection string of a separate database or branch used by `go test`; the database tests are skipped when it is unset |
    | `JWT_SECRET` | yes | Key used to sign the session JWT. At least 32 bytes (the backend refuses to start with a shorter one); use a long random string, for example `openssl rand -base64 48` |
-   | `COOKIE_SECURE` | no | `true` adds the `Secure` attribute to the session cookie (needs HTTPS). Anything else, including unset, means off. Keep it off for local HTTP |
+   | `DB_STATEMENT_TIMEOUT` | no | Postgres `statement_timeout` for every pooled connection, a Go duration from `1ms` to `1h` (default `15s`). A query that runs longer is cancelled and the request fails with a redacted 5xx |
+   | `COOKIE_SECURE` | no | `true` adds the `Secure` attribute to the session cookie (needs HTTPS). Anything else, including unset, means off. Keep it off for local HTTP. Leaving it unset logs a startup warning |
    | `PORT` | no | Backend listen port, 1 to 65535. Defaults to `8080` |
    | `DB_MAX_CONNS` | no | Maximum size of the database connection pool, 1 to 1000. Defaults to `10`. Keep it below your database's connection limit divided by the number of backend instances |
 
@@ -300,3 +301,39 @@ Start the backend and frontend (Setup steps 5 and 6) and open
 - Request limits: JSON bodies over 1 MiB answer `413` (commits: 64 MiB); one
   diff response does at most 32 million line-pair cells, later files come back
   `truncated`; a file with more than 5000 lines on either side is not diffed.
+
+## Command line (`mg`)
+
+`mg` is a small client for the JSON API (Go standard library only, source in
+`backend/cmd/mg`). It is not the git protocol: `mg commit` sends whole files
+to the server, which builds the blob, tree and commit objects.
+
+```sh
+make cli                                  # builds bin/mg
+export PATH="$PWD/bin:$PATH"              # or call bin/mg directly
+mg register alice -server http://localhost:8080   # once; later: mg login alice
+mg new notes -private -d "my notes"
+mg commit alice/notes -m "first commit" README.md src/main.go
+mg ls alice/notes ; mg cat alice/notes README.md ; mg log alice/notes
+```
+
+Working-copy commands (a directory remembers its last sync in `.mg/state.json`):
+
+```sh
+mg clone alice/notes[:branch] [dir]       # download a branch
+mg status                                 # A/M/D since the last sync
+mg push -m "message"                      # commit every local change (50 files per commit)
+mg pull [-f]                              # fast-forward; refuses to overwrite local edits unless -f
+mg branch alice/notes [name [-from b] | -d name]
+mg merge alice/notes feature [-into main] # fast-forward only
+mg cherry-pick alice/notes <40-char oid> [-b branch]   # conflict = target changed that file
+mg diff alice/notes main feature ; mg show alice/notes <oid>
+```
+
+Push needs the remote tip to equal the one you last synced (else: `mg pull`
+first). Binary files and files over 1 MiB are skipped; `.git`, `.mg` and
+`node_modules` are ignored.
+
+The password is read from `MG_PASSWORD` or prompted without echo. The session
+is stored in `~/Library/Application Support/mg/config.json` (macOS) or
+`~/.config/mg/config.json` (Linux), readable by you only.

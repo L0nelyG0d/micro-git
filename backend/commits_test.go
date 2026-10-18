@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
@@ -325,4 +327,70 @@ func TestCommitRace(t *testing.T) {
 		base := mustCommit(t, s, owner, c, repo, commitJSON("main", "", "base", up("a", "1")))
 		race(t, s, owner, c, repo, base.OID)
 	})
+}
+
+// countingReader counts the bytes the server actually pulls from the body.
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
+}
+
+// paddedCommit is valid commit JSON followed by whitespace up to size bytes.
+func paddedCommit(branch, tip string, size int) string {
+	b := commitJSON(branch, tip, "m", up("pad.txt", "p"))
+	return b + strings.Repeat(" ", size-len(b))
+}
+
+func TestCommitBodyLimitByRole(t *testing.T) {
+	s := testServer(t)
+	owner, c := newUserCookie(t, s)
+	_, other := newUserCookie(t, s)
+	repo := createRepo(t, s, c, `{"name":"lim"}`)
+	base := mustCommit(t, s, owner, c, repo, commitJSON("main", "", "base", up("keep.txt", "k")))
+	priv := createRepo(t, s, c, `{"name":"hidden","private":true}`)
+
+	post := func(cookie *http.Cookie, r Repo, body string) (*httptest.ResponseRecorder, int64) {
+		cr := &countingReader{r: strings.NewReader(body)}
+		req := httptest.NewRequest(http.MethodPost, commitsURL(owner, r), cr)
+		if cookie != nil {
+			req.AddCookie(cookie)
+		}
+		rec := httptest.NewRecorder()
+		s.Handler().ServeHTTP(rec, req)
+		return rec, cr.n
+	}
+
+	tests := []struct {
+		name    string
+		repo    Repo
+		cookie  *http.Cookie
+		body    string
+		status  int
+		msg     string
+		maxRead int64 // 0: not checked
+	}{
+		{"non-owner 10 MiB", repo, other, paddedCommit("main", base.OID, 10<<20), 413, "request too large", maxJSONBody + 1},
+		{"non-owner small valid", repo, other, commitJSON("main", base.OID, "m", up("n", "n")), 403, "forbidden", 0},
+		{"non-owner missing branch", repo, other, commitJSON("nope", base.OID, "m", up("n", "n")), 404, "branch not found", 0},
+		{"anonymous 10 MiB", repo, nil, paddedCommit("main", base.OID, 10<<20), 401, "authentication required", 0},
+		{"private non-owner 10 MiB", priv, other, paddedCommit("main", "", 10<<20), 404, "repository not found", maxJSONBody + 1},
+		{"owner 2 MiB reaches validation", repo, c, paddedCommit("main", "xyz", 2<<20), 400, "invalid expected_tip", 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rec, n := post(tt.cookie, tt.repo, tt.body)
+			if rec.Code != tt.status || !strings.Contains(rec.Body.String(), `"`+tt.msg+`"`) {
+				t.Errorf("got %d %s, want %d %q", rec.Code, rec.Body, tt.status, tt.msg)
+			}
+			if tt.maxRead > 0 && n > tt.maxRead {
+				t.Errorf("server read %d bytes, want at most %d", n, tt.maxRead)
+			}
+		})
+	}
 }

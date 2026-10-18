@@ -335,8 +335,6 @@ func TestCommitLog(t *testing.T) {
 			{"?page=2", 2, 50, true, 69},
 			{"?page=3", 3, 20, false, 19},
 			{"?page=4", 4, 0, false, -1},
-			{"?page=1000000", 1000000, 0, false, -1},
-			{"?page=99999999999999", 99999999999999, 0, false, -1},
 		}
 		for _, tc := range cases {
 			var l histList
@@ -639,15 +637,19 @@ func TestCommitLogStatementCount(t *testing.T) {
 	}
 }
 
-func TestCommitLogHugePage(t *testing.T) {
+func TestCommitLogDepthCap(t *testing.T) {
 	f := newHistFixture(t, true)
-	for _, p := range []string{"50000000", "1099511627776", "1099511627777"} {
+	// deepest allowed pages still answer 200 (empty past the end of history)
+	for _, q := range []string{"?page=10000&per_page=1", "?page=100&per_page=100", "?page=200&per_page=50"} {
 		var l histList
-		if code, msg := f.get(t, f.longBase+"/commits", "?page="+p, &l); code != 200 {
-			t.Fatalf("page %s: %d %s", p, code, msg)
+		if code, msg := f.get(t, f.longBase+"/commits", q, &l); code != 200 || len(l.Commits) != 0 || l.HasMore || l.Commits == nil {
+			t.Errorf("%s: %d %s %+v", q, code, msg, l)
 		}
-		if len(l.Commits) != 0 || l.HasMore || l.Commits == nil {
-			t.Errorf("page %s: %+v", p, l)
+	}
+	// one past the cap, and absurd pages, give the documented 400
+	for _, q := range []string{"?page=10001&per_page=1", "?page=101&per_page=100", "?page=201", "?page=50000000", "?page=1099511627777"} {
+		if code, msg := f.get(t, f.longBase+"/commits", q, nil); code != 400 || msg != "invalid page" {
+			t.Errorf("%s: got %d %q", q, code, msg)
 		}
 	}
 }
