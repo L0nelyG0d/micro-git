@@ -2,6 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useRef, use
 import type { ReactNode } from "react"
 import { toast } from "sonner"
 import { api, ApiError } from "@/lib/api"
+import { cacheClear } from "@/lib/fetchCache"
 
 export type User = { id: number; username: string }
 
@@ -24,7 +25,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUserState] = useState<User | null>(null)
   // Mirrors `user` synchronously so expireSession can tell, even when called twice in a row, whether a user was still logged in.
   const userRef = useRef<User | null>(null)
+  // Bumped on every user change; a revalidation that started before one is stale.
+  const generation = useRef(0)
   const setUser = useCallback((u: User | null) => {
+    generation.current++
     userRef.current = u
     setUserState(u)
   }, [])
@@ -45,6 +49,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [setUser])
 
+  const expireSession = useCallback(() => {
+    if (!userRef.current) return
+    setUser(null)
+    toast.error("Your session has expired. Log in again.")
+  }, [setUser])
+
+  // Another tab may have logged out or in as someone else: when this tab comes
+  // back, ask /auth/me again (no polling). Focus and visibilitychange usually fire
+  // together, so a run in flight or under a second old absorbs the second event.
+  useEffect(() => {
+    let busy = false
+    let last = 0
+    const revalidate = () => {
+      if (document.visibilityState === "hidden" || busy || loading) return
+      if (Date.now() - last < 1000) return
+      busy = true
+      last = Date.now()
+      const started = generation.current
+      api<User>("/auth/me")
+        .then((u) => u, (e) => (e instanceof ApiError && e.status === 401 ? null : undefined))
+        .then((u) => {
+          // undefined = network/5xx: keep what we have.
+          if (u === undefined || started !== generation.current || (userRef.current?.id ?? null) === (u?.id ?? null)) return
+          cacheClear()
+          // Same path as a 401 elsewhere: logged out here, with the expiry toast
+          // (also shown when the other tab logged out on purpose).
+          if (u === null) expireSession()
+          else setUser(u)
+        })
+        .finally(() => {
+          busy = false
+          last = Date.now()
+        })
+    }
+    window.addEventListener("focus", revalidate)
+    document.addEventListener("visibilitychange", revalidate)
+    return () => {
+      window.removeEventListener("focus", revalidate)
+      document.removeEventListener("visibilitychange", revalidate)
+    }
+  }, [loading, setUser, expireSession])
+
   const login = useCallback(async (username: string, password: string) => {
     const u = await api<User>("/auth/login", { method: "POST", body: { username, password } })
     setUser(u)
@@ -55,12 +101,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const logout = useCallback(async () => {
     await api("/auth/logout", { method: "POST" })
     setUser(null)
-  }, [setUser])
-
-  const expireSession = useCallback(() => {
-    if (!userRef.current) return
-    setUser(null)
-    toast.error("Your session has expired. Log in again.")
   }, [setUser])
 
   const value = useMemo(

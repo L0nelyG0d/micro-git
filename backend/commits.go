@@ -63,13 +63,19 @@ func writeTipMoved(w http.ResponseWriter, current string) {
 }
 
 // createCommit handles POST /repos/{owner}/{repo}/commits (behind requireAuth).
-// Order of checks: 401, 404 (repo, branch), 403, 400, 409.
+// Order of checks: 401, 404 (repo, branch), 413 (non-owner, body over 1 MiB),
+// 403, 400, 409. Only the owner may send up to maxCommitBody; anyone else is
+// cut off at maxJSONBody before the server buffers more.
 func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 	repo, ok := s.repoFromPath(w, r)
 	if !ok {
 		return
 	}
-	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxCommitBody))
+	limit := int64(maxJSONBody)
+	if u, _ := UserFromContext(r.Context()); u.ID == repo.OwnerID {
+		limit = maxCommitBody
+	}
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 	var tooBig *http.MaxBytesError
 	if errors.As(err, &tooBig) {
 		writeError(w, http.StatusRequestEntityTooLarge, "request too large")

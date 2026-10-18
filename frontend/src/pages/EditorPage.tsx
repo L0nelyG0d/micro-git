@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { FormEvent } from "react"
 import { useNavigate, useParams } from "react-router-dom"
 import { toast } from "sonner"
@@ -23,6 +23,7 @@ import { Textarea } from "@/components/ui/textarea"
 import { api, ApiError } from "@/lib/api"
 import { canWrite, commitPath, readPath, uiPath, type Blob, type Branch, type Tree } from "@/lib/git"
 import type { Repo } from "@/lib/repos"
+import { clearDraft, draftKey, loadDraft, saveDraft } from "@/lib/editorDraft"
 import { errorMessage, useFetch } from "@/lib/useFetch"
 
 type Change = { path: string; content: string } | { path: string; delete: true }
@@ -87,6 +88,13 @@ function Editor({
   const [error, setError] = useState("")
   const [conflict, setConflict] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const [leaveAsk, setLeaveAsk] = useState(false)
+  const [baseline, setBaseline] = useState(isNew ? "" : null as string | null)
+  const key = draftKey(owner, name, ref_, mode, isNew ? "" : initialPath)
+  const pendingLeave = useRef<HTMLElement | null>(null)
+  const returnFocus = useRef<HTMLElement | null>(null)
+  const bypass = useRef(false)
+  const committed = useRef(false)
 
   const repoQ = useFetch<Repo>(base)
   const empty = !!repoQ.data?.empty
@@ -103,8 +111,85 @@ function Editor({
 
   // Prefill once; later reloads only refresh the tip so typed text is never lost.
   useEffect(() => {
-    if (!isNew && text === null && tipQ.data && "content" in tipQ.data) setText(tipQ.data.content)
-  }, [isNew, text, tipQ.data])
+    if (!isNew && text === null && tipQ.data && "content" in tipQ.data) {
+      const content = tipQ.data.content
+      setBaseline(content)
+      setText(loadDraft(key)?.text ?? content)
+    }
+  }, [isNew, text, tipQ.data, key])
+
+  // A draft kept across the 401 redirect to /login; restored once, on first render of a new file.
+  useEffect(() => {
+    const d = isNew ? loadDraft(key) : null
+    if (d) {
+      setText(d.text)
+      setPath(d.path)
+    }
+    const m = loadDraft(key)?.message
+    if (m) setMessage(m)
+  }, [isNew, key])
+
+  const dirty =
+    text !== null &&
+    baseline !== null &&
+    (text !== baseline || message !== "" || (isNew && path !== ""))
+
+  // Keep the draft in sessionStorage while dirty so it survives the redirect to /login.
+  useEffect(() => {
+    if (committed.current || text === null || baseline === null) return
+    if (dirty) saveDraft(key, { text, path, message })
+    else clearDraft(key)
+  }, [dirty, key, text, path, message, baseline])
+
+  // Browser leave (reload, close, external navigation).
+  useEffect(() => {
+    if (!dirty) return
+    const onUnload = (ev: BeforeUnloadEvent) => {
+      if (committed.current) return
+      ev.preventDefault()
+      ev.returnValue = ""
+    }
+    window.addEventListener("beforeunload", onUnload)
+    return () => window.removeEventListener("beforeunload", onUnload)
+  }, [dirty])
+
+  // In-app leave. The app uses BrowserRouter (no data router), so useBlocker is not available:
+  // intercept clicks on links, toolbar buttons (Back) and [data-leave] buttons (Cancel) instead.
+  useEffect(() => {
+    if (!dirty) return
+    const onClick = (ev: MouseEvent) => {
+      if (bypass.current || committed.current || ev.defaultPrevented) return
+      if (ev.button !== 0 || ev.metaKey || ev.ctrlKey || ev.shiftKey || ev.altKey) return
+      const target = (ev.target as Element | null)?.closest<HTMLElement>(
+        "a[href], [role=toolbar] button, [data-leave]",
+      )
+      if (!target || target.closest("[role=alertdialog]")) return
+      if (target instanceof HTMLAnchorElement) {
+        const href = target.getAttribute("href") ?? ""
+        if (!href.startsWith("/") || (target.target && target.target !== "_self")) return
+      }
+      ev.preventDefault()
+      ev.stopImmediatePropagation()
+      pendingLeave.current = target
+      returnFocus.current = target
+      setLeaveAsk(true)
+    }
+    document.addEventListener("click", onClick, true)
+    return () => document.removeEventListener("click", onClick, true)
+  }, [dirty])
+
+  const discardAndLeave = () => {
+    clearDraft(key)
+    setLeaveAsk(false)
+    const el = pendingLeave.current
+    pendingLeave.current = null
+    bypass.current = true
+    try {
+      el?.click()
+    } finally {
+      bypass.current = false
+    }
+  }
 
   const reloadAll = () => {
     setConflict(false)
@@ -173,6 +258,8 @@ function Editor({
         method: "POST",
         body: { branch: effectiveBranch, expected_tip: tip, message: trimmed, changes: [change] },
       })
+      committed.current = true
+      clearDraft(key)
       toast.success("Changes committed.")
       navigate(commitPath(owner, name, res.oid))
     } catch (e) {
@@ -252,7 +339,7 @@ function Editor({
         />
       </div>
 
-      <div className="flex flex-col gap-3 rounded-xl bg-card p-3 shadow-xs ring-1 ring-border">
+      <div className="flex flex-col gap-3 rounded-md bg-card p-3 shadow-xs ring-1 ring-border">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="commit-message">Commit message</Label>
           <Input
@@ -318,7 +405,7 @@ function Editor({
           <Button type="submit" disabled={busy || !ready || messageInvalid || pathMissing}>
             Commit
           </Button>
-          <Button type="button" variant="outline" onClick={() => navigate(cancelTo)}>
+          <Button type="button" variant="outline" data-leave onClick={() => navigate(cancelTo)}>
             Cancel
           </Button>
           {!isNew && (
@@ -334,6 +421,33 @@ function Editor({
           )}
         </div>
       </div>
+
+      <AlertDialog open={leaveAsk} onOpenChange={setLeaveAsk}>
+        <AlertDialogContent
+          onCloseAutoFocus={(ev) => {
+            // Opened programmatically (no Trigger): put focus back where the user was.
+            ev.preventDefault()
+            const el = returnFocus.current
+            returnFocus.current = null
+            const fallback = document.getElementById("file-content")
+            ;(el?.isConnected ? el : fallback)?.focus()
+          }}
+        >
+          <AlertDialogHeader>
+            <AlertDialogTitle>Discard unsaved changes?</AlertDialogTitle>
+            <AlertDialogDescription>
+              {isNew ? "This new file has" : `${initialPath} has`} changes that are not committed.
+              Leaving now discards them.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep editing</AlertDialogCancel>
+            <Button type="button" variant="destructive" onClick={discardAndLeave}>
+              Discard changes
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       <AlertDialog open={confirmDelete} onOpenChange={setConfirmDelete}>
         <AlertDialogContent>

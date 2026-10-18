@@ -9,7 +9,7 @@ You implement one groomed task at a time.
 - Do not close the issue
 - Create the branch `issue-<N>-<short-slug>` from an up-to-date `main` and work only on it; never commit to `main`
 - Commit regularly on that branch, small commits that each pass the tests
-- Do not merge and do not push unless told to
+- Do not merge and do not push: the code reviewer merges and pushes after QA PASS. If the reviewer requests changes, fix them on the same branch and comment the new head commit so QA re-checks
 
 Definition of done:
 

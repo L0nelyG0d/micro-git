@@ -310,3 +310,37 @@ func TestRequireAndOptionalAuth(t *testing.T) {
 		t.Errorf("optional, cookie: code %d user %+v ok %v", code, got, ok)
 	}
 }
+
+// A username longer than any real one is answered like an unknown user and
+// never reaches the limiter (its key would hold the whole name) or the DB.
+func TestLoginOversizedUsername(t *testing.T) {
+	s, _ := limitedServer(t)
+	const ip = "203.0.113.63"
+	longest := pairKey(ip, strings.Repeat("a", maxUsernameLen), false)
+	tests := []struct {
+		label, user string
+		counted     bool // the failed login reaches the limiter
+	}{
+		{"1 MiB", strings.Repeat("a", 1<<20-100), false},
+		{"33 bytes", strings.Repeat("a", maxUsernameLen+1), false},
+		{"33 bytes after lowercasing", strings.Repeat("A", maxUsernameLen+1), false},
+		{"32 bytes", strings.Repeat("a", maxUsernameLen), true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.label, func(t *testing.T) {
+			before := s.limiter.size()
+			rec := loginAt(s, ip, tc.user, "whatever password")
+			wantError(t, rec, 401, "invalid username or password")
+			if got := s.limiter.size() > before; got != tc.counted {
+				t.Errorf("limiter grew = %v, want %v", got, tc.counted)
+			}
+			s.limiter.mu.Lock()
+			defer s.limiter.mu.Unlock()
+			for k := range s.limiter.entries {
+				if len(k) > len(longest) {
+					t.Fatalf("limiter key of %d bytes, max %d", len(k), len(longest))
+				}
+			}
+		})
+	}
+}

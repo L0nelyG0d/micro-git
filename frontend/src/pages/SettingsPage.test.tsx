@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
@@ -57,7 +57,7 @@ const renderAt = (path: string) =>
 it("owner sees General, Commit history, Branches and Danger zone", async () => {
   setup("alice")
   renderAt("/alice/hello/settings")
-  expect(await screen.findByRole("heading", { name: "alice/hello settings" })).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
   for (const t of ["General", "Commit history", "Branches", "Danger zone"])
     expect(screen.getByRole("heading", { name: t })).toBeInTheDocument()
   expect(await screen.findByRole("link", { name: "dev" })).toBeInTheDocument()
@@ -116,4 +116,40 @@ it("blocks saving a description over 500 characters", async () => {
   await userEvent.paste("a".repeat(501))
   expect(screen.getByText("501/500 characters")).toBeInTheDocument()
   expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled()
+})
+
+it("shows Saving… with aria-busy on the visibility confirm while the request is pending", async () => {
+  setup("alice")
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  routes["PATCH /api/repos/alice/hello"] = () => json(200, { ...repo(), private: true })
+  const inner = vi.mocked(fetch).getMockImplementation()!
+  vi.mocked(fetch).mockImplementation(async (u, i) => {
+    if (i?.method === "PATCH") await gate
+    return inner(u, i)
+  })
+  renderAt("/alice/hello/settings")
+  await userEvent.click(await screen.findByRole("button", { name: "Change visibility" }))
+  const confirm = await screen.findByRole("button", { name: "Make private" })
+  expect(confirm).not.toHaveAttribute("aria-busy")
+  await userEvent.click(confirm)
+  const busy = await screen.findByRole("button", { name: "Saving…" })
+  expect(busy).toBeDisabled()
+  expect(busy).toHaveAttribute("aria-busy", "true")
+  release()
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Saving…" })).not.toBeInTheDocument())
+})
+
+it("section nav wraps instead of clipping on narrow screens (#71)", async () => {
+  setup("alice")
+  renderAt("/alice/hello/settings")
+  const nav = await screen.findByRole("navigation", { name: "Settings sections" })
+  expect(nav).toHaveClass("flex-wrap")
+  expect(nav).not.toHaveClass("overflow-x-auto")
+  expect(Array.from(nav.querySelectorAll("a")).map((a) => a.textContent)).toEqual([
+    "General",
+    "Commit history",
+    "Branches",
+    "Danger zone",
+  ])
 })

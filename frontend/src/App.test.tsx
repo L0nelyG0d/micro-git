@@ -99,7 +99,7 @@ it("logs in and goes back to the page the user came from", async () => {
   await userEvent.type(screen.getByLabelText("Password"), "secret123")
   await userEvent.click(screen.getByRole("button", { name: "Log in" }))
   expect(await screen.findByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
-  expect(await within(screen.getByRole("navigation")).findByText("alice")).toBeInTheDocument()
+  expect(await within(screen.getByRole("navigation", { name: "Main" })).findByText("alice")).toBeInTheDocument()
 })
 
 it("shows the login error inline, clears the password and re-enables submit", async () => {
@@ -212,7 +212,7 @@ it("stays logged in and shows an error when logout fails", async () => {
   renderAt("/alice/hello")
   await userEvent.click(await screen.findByRole("button", { name: "Log out" }))
   expect(await screen.findByText(/could not log out/i)).toBeInTheDocument()
-  expect(await within(screen.getByRole("navigation")).findByText("alice")).toBeInTheDocument()
+  expect(await within(screen.getByRole("navigation", { name: "Main" })).findByText("alice")).toBeInTheDocument()
   expect(await screen.findByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
 })
 
@@ -272,4 +272,50 @@ it("moves focus to main after a client-side navigation but not on first load", a
   expect(screen.getByRole("main")).not.toHaveFocus()
   await userEvent.click(screen.getByRole("link", { name: "Register" }))
   await waitFor(() => expect(screen.getByRole("main")).toHaveFocus())
+})
+
+it("focuses the first empty field after a failed submit and links it to its error", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  renderAt("/login")
+  await screen.findByRole("link", { name: "Register" })
+  await userEvent.click(await screen.findByRole("button", { name: "Log in" }))
+  const username = screen.getByLabelText("Username")
+  expect(username).toHaveFocus()
+  expect(username).toHaveAttribute("aria-invalid", "true")
+  expect(username).toHaveAttribute("aria-describedby", screen.getByRole("alert").id)
+  expect(username).toHaveAttribute("spellcheck", "false")
+  await userEvent.type(username, "alice")
+  await userEvent.click(screen.getByRole("button", { name: "Log in" }))
+  expect(screen.getByLabelText("Password")).toHaveFocus()
+  expect(screen.getByLabelText("Password")).toHaveAttribute("aria-invalid", "true")
+  expect(username).not.toHaveAttribute("aria-invalid", "true")
+})
+
+it("focuses the password and ties it to the alert after a rejected login", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["POST /api/auth/login"] = () => json(401, { error: "invalid username or password" })
+  renderAt("/login")
+  await screen.findByRole("link", { name: "Register" })
+  await userEvent.type(await screen.findByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "wrongpass")
+  await userEvent.click(screen.getByRole("button", { name: "Log in" }))
+  const alert = await screen.findByRole("alert")
+  expect(screen.getByLabelText("Password")).toHaveFocus()
+  expect(screen.getByLabelText("Password")).toHaveAttribute("aria-describedby", alert.id)
+})
+
+it("focuses the username and marks only it invalid when registering a taken username (409)", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["POST /api/auth/register"] = () => json(409, { error: "username already taken" })
+  renderAt("/register")
+  await within(screen.getByRole("main")).findByRole("link", { name: "Log in" })
+  await userEvent.type(await screen.findByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "secret123")
+  await userEvent.click(screen.getByRole("button", { name: "Register" }))
+  const alert = await screen.findByRole("alert")
+  const username = screen.getByLabelText("Username")
+  expect(username).toHaveFocus()
+  expect(username).toHaveAttribute("aria-invalid", "true")
+  expect(username).toHaveAttribute("aria-describedby", alert.id)
+  expect(screen.getByLabelText("Password")).not.toHaveAttribute("aria-invalid", "true")
 })

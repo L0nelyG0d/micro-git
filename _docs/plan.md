@@ -91,7 +91,7 @@ Clarifications (system analyst, resolve gaps in the rules above):
 - Branch name additionally cannot be `.` or `..`, is at most 100 characters, and cannot look like an oid (40 lowercase hex characters), so a `ref` is never ambiguous. A `ref` is resolved as a branch name first, otherwise as a full 40-character commit oid of this repo. Abbreviated oids are not accepted by the API (the UI shows 7 characters but links with the full oid)
 - Commit `message` is trimmed; length is checked after trimming; stored with one trailing `\n`. Author and committer line: `<username> <username@micro-git.local> <unix seconds> +0000`
 - `changes`: an entry is an upsert (`path` + `content`, content may be empty) or a delete (`path` + `delete: true`). Both fields, or neither, is `400`. The same path twice in one request is `400`. A delete of a missing path is ignored; a delete of a directory path is `400`. "no changes" is returned only when the whole commit changes nothing. `content` containing a NUL character is not text (`400`)
-- Request body larger than 64 MiB: `413`
+- Request body larger than 64 MiB: `413`. Only the owner may send more than 1 MiB: for a non-owner the limit is 1 MiB and an oversized body gets `413` before the `403` (the body is not read past the limit). The branch `404` still comes before the `403` for bodies within 1 MiB; private repos stay `404` for non-owners
 - The first commit on an empty repo must target `default_branch` (`400` otherwise). On a non-empty repo, `branch` must already exist (`404`); new branches are only created through the branches endpoint
 - `expected_tip` must be the branch's current tip. Empty string is valid only when the branch does not exist yet; any other mismatch (including a non-empty tip on an empty repo, or an empty one on an existing branch) is `409`
 - `empty` on a repo means it has no refs
@@ -224,14 +224,14 @@ In-memory, standard library only; constants and their meaning are at the top of 
 - `404` `repository not found` · `ref not found` · `path not found`
 
 `GET /repos/{owner}/{repo}/commits?ref=main&page=1&per_page=50`
-- `ref` defaults to `default_branch`; `page` is 1-based, default 1; `per_page` default 50, 1 to 100 (`400` `invalid per_page`). First-parent walk from the ref
+- `ref` defaults to `default_branch`; `page` is 1-based, default 1; `per_page` default 50, 1 to 100 (`400` `invalid per_page`). `page * per_page` may not exceed 10000, the history depth limit (`400` `invalid page`). First-parent walk from the ref
 - `200`
 ```
 {"ref": "main", "page": 1, "per_page": 50, "has_more": true,
  "commits": [{"oid": "<40 hex>", "message": "Add readme", "author": "alice",
               "time": "2026-01-02T15:04:05Z", "parents": ["<40 hex>"]}]}
 ```
-  `message` is the full message without the trailing newline; the UI shows the first line. A page past the end gives `commits: []`, `has_more: false`
+  `message` is the full message without the trailing newline; the UI shows the first line. A page past the end (within the depth limit) gives `commits: []`, `has_more: false`
 - `400` `invalid page` · `404` `repository not found` · `ref not found`
 
 `GET /repos/{owner}/{repo}/commits/{oid}`

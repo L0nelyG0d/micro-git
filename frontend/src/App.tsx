@@ -1,8 +1,8 @@
-import { lazy, Suspense, useEffect, useRef } from "react"
+import { lazy, Suspense, useEffect, useRef, useState } from "react"
 import type { RefObject } from "react"
 import { matchPath, Route, Routes, useLocation } from "react-router-dom"
 import { Toaster } from "sonner"
-import { AuthProvider } from "@/auth/AuthContext"
+import { AuthProvider, useAuth } from "@/auth/AuthContext"
 import { Nav } from "@/components/Nav"
 import { LoadingBlock } from "@/components/StateViews"
 import { Home } from "@/pages/Home"
@@ -16,6 +16,7 @@ const HistoryPage = lazy(() => import("@/pages/HistoryPage").then((m) => ({ defa
 const Login = lazy(() => import("@/pages/Login").then((m) => ({ default: m.Login })))
 const Register = lazy(() => import("@/pages/Register").then((m) => ({ default: m.Register })))
 const RepoPage = lazy(() => import("@/pages/RepoPage").then((m) => ({ default: m.RepoPage })))
+const ProfilePage = lazy(() => import("@/pages/ProfilePage").then((m) => ({ default: m.ProfilePage })))
 const SettingsPage = lazy(() => import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })))
 
 const SUFFIX = "micro git"
@@ -37,6 +38,8 @@ function titleFor(pathname: string): string {
   if (pathname === "/") return SUFFIX
   if (m("/login")) return `Log in · ${SUFFIX}`
   if (m("/register")) return `Register · ${SUFFIX}`
+  const profile = m("/:owner")
+  if (profile) return `${dec(profile.params.owner ?? "")} · ${SUFFIX}`
   const repo = m(R) ?? m(`${R}/tree/:ref/*`)
   if (repo) return `${repoOf(repo.params)} · ${SUFFIX}`
   const hist = m(`${R}/commits/:ref`)
@@ -71,6 +74,44 @@ function TitleSync({ mainRef }: { mainRef: RefObject<HTMLElement | null> }) {
   return null
 }
 
+/**
+ * Pages remount when the logged-in user changes, so everything on screen is
+ * fetched again: private repositories must appear after login and disappear
+ * after logout.
+ */
+function Pages() {
+  const { user, loading } = useAuth()
+  // The first answer of /auth/me is not a change (nothing was fetched for
+  // another user yet); only a later switch bumps the epoch and remounts.
+  const [seen, setSeen] = useState<{ id: number | null } | null>(null)
+  const [epoch, setEpoch] = useState(0)
+  const id = user?.id ?? null
+  if (!loading && seen?.id !== id) {
+    setSeen({ id })
+    if (seen) setEpoch((e) => e + 1)
+  }
+  return (
+    <Suspense fallback={<LoadingBlock label="Loading page" />} key={epoch}>
+      <Routes>
+        <Route path="/login" element={<Login />} />
+        <Route path="/register" element={<Register />} />
+        <Route path="/" element={<Home />} />
+        <Route path="/:owner" element={<ProfilePage />} />
+        <Route path="/:owner/:repo" element={<RepoPage />} />
+        <Route path="/:owner/:repo/tree/:ref/*" element={<RepoPage />} />
+        <Route path="/:owner/:repo/blob/:ref/*" element={<BlobPage />} />
+        <Route path="/:owner/:repo/edit/:ref/*" element={<EditorPage mode="edit" />} />
+        <Route path="/:owner/:repo/new/:ref" element={<EditorPage mode="new" />} />
+        <Route path="/:owner/:repo/commits/:ref" element={<HistoryPage />} />
+        <Route path="/:owner/:repo/commit/:oid" element={<CommitPage />} />
+        <Route path="/:owner/:repo/settings" element={<SettingsPage />} />
+        <Route path="/:owner/:repo/compare" element={<ComparePage />} />
+        <Route path="*" element={<NotFound />} />
+      </Routes>
+    </Suspense>
+  )
+}
+
 /** Router-agnostic: main.tsx wraps it in BrowserRouter, tests in MemoryRouter. */
 export default function App() {
   const mainRef = useRef<HTMLElement>(null)
@@ -88,24 +129,8 @@ export default function App() {
         Skip to main content
       </a>
       <Nav />
-      <main id="main" tabIndex={-1} ref={mainRef} className="mx-auto max-w-4xl p-4 outline-none">
-        <Suspense fallback={<LoadingBlock label="Loading page" />}>
-          <Routes>
-            <Route path="/login" element={<Login />} />
-            <Route path="/register" element={<Register />} />
-            <Route path="/" element={<Home />} />
-            <Route path="/:owner/:repo" element={<RepoPage />} />
-            <Route path="/:owner/:repo/tree/:ref/*" element={<RepoPage />} />
-            <Route path="/:owner/:repo/blob/:ref/*" element={<BlobPage />} />
-            <Route path="/:owner/:repo/edit/:ref/*" element={<EditorPage mode="edit" />} />
-            <Route path="/:owner/:repo/new/:ref" element={<EditorPage mode="new" />} />
-            <Route path="/:owner/:repo/commits/:ref" element={<HistoryPage />} />
-            <Route path="/:owner/:repo/commit/:oid" element={<CommitPage />} />
-            <Route path="/:owner/:repo/settings" element={<SettingsPage />} />
-            <Route path="/:owner/:repo/compare" element={<ComparePage />} />
-            <Route path="*"element={<NotFound />} />
-          </Routes>
-        </Suspense>
+      <main id="main" tabIndex={-1} ref={mainRef} className="mx-auto max-w-6xl p-4 outline-none md:py-6">
+        <Pages />
       </main>
       <Toaster theme="system" />
     </AuthProvider>

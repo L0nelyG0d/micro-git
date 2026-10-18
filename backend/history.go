@@ -19,6 +19,10 @@ const (
 	maxPerPage     = 100
 )
 
+// maxHistoryCommits caps how deep ?page= can reach: page*per_page may not
+// exceed it, which bounds the commits one request loads.
+const maxHistoryCommits = 10000
+
 type commitSummary struct {
 	OID     string   `json:"oid"`
 	Message string   `json:"message"`
@@ -124,6 +128,10 @@ func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid per_page")
 		return
 	}
+	if page > maxHistoryCommits || page*perPage > maxHistoryCommits {
+		writeError(w, http.StatusBadRequest, "invalid page")
+		return
+	}
 	ref := repo.DefaultBranch
 	if r.URL.Query().Has("ref") {
 		ref = r.URL.Query().Get("ref")
@@ -133,10 +141,6 @@ func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	resp := commitListResponse{Ref: ref, Page: page, PerPage: perPage, Commits: []commitSummary{}}
-	if page > 1<<40 { // far past any history; avoids overflow below
-		writeJSON(w, http.StatusOK, resp)
-		return
-	}
 	skip := (page - 1) * perPage
 	// First-parent walk in one statement; one extra commit past the page
 	// tells has_more.
@@ -214,6 +218,6 @@ func (s *Server) getCommit(w http.ResponseWriter, r *http.Request) {
 		s.readError(w, r, repo, err)
 		return
 	}
-	immutableCache().set(w)
+	immutableCache(repo.Private).set(w)
 	writeJSON(w, http.StatusOK, commitDetailResponse{commitSummary: summarize(oid, c), Tree: c.Tree, Files: files})
 }

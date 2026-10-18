@@ -35,6 +35,7 @@ function setup(user: string | null = "alice", r = repo()) {
 }
 
 beforeEach(() => {
+  sessionStorage.clear()
   cacheClear()
   calls = []
   routes = {}
@@ -292,4 +293,105 @@ it("shows a loading state first", async () => {
   renderAt("/alice/hello/edit/main/a.txt")
   expect(screen.getByRole("status", { name: "Loading editor" })).toBeInTheDocument()
   await screen.findByLabelText("File content")
+})
+
+const unload = () => {
+  const ev = new Event("beforeunload", { cancelable: true })
+  window.dispatchEvent(ev)
+  return ev
+}
+
+it("dirty editor: beforeunload is prevented", async () => {
+  setup()
+  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
+  renderAt("/alice/hello/edit/main/a.txt")
+  await screen.findByLabelText("File content")
+  await type("File content", "changed")
+  expect(unload().defaultPrevented).toBe(true)
+})
+
+it("clean editor: no beforeunload prompt and Cancel leaves silently", async () => {
+  setup()
+  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
+  routes["GET /api/repos/alice/hello/blob/main/a.txt?x"] = () => json(200, blob())
+  renderAt("/alice/hello/edit/main/a.txt")
+  await screen.findByLabelText("File content")
+  expect(unload().defaultPrevented).toBe(false)
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/blob/main/a.txt"))
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+})
+
+it("dirty editor: Cancel and breadcrumb links ask first; Keep editing stays, Discard leaves", async () => {
+  setup()
+  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
+  renderAt("/alice/hello/edit/main/a.txt")
+  await screen.findByLabelText("File content")
+  await type("File content", "changed")
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  const dlg = await screen.findByRole("alertdialog")
+  expect(screen.getByTestId("loc")).toHaveTextContent("/edit/main/a.txt")
+  await userEvent.click(within(dlg).getByRole("button", { name: "Keep editing" }))
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument())
+  expect(screen.getByLabelText("File content")).toHaveValue("changed")
+  await userEvent.click(screen.getByRole("link", { name: "hello" }))
+  await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard changes" }))
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(/^\/alice\/hello\/tree\/main$/))
+  expect(sessionStorage.length).toBe(0)
+})
+
+it("successful commit: no prompt and no beforeunload", async () => {
+  setup()
+  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
+  routes["POST /api/repos/alice/hello/commits"] = () =>
+    json(201, { oid: NEW, tree: OID, parent: OID, branch: "main" })
+  renderAt("/alice/hello/edit/main/a.txt")
+  await screen.findByLabelText("File content")
+  await type("File content", "changed")
+  await type("Commit message", "Msg")
+  await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await userEvent.click(commitBtn())
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(`/commit/${NEW}`))
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+  expect(unload().defaultPrevented).toBe(false)
+  expect(sessionStorage.length).toBe(0)
+})
+
+it("401 keeps the draft and restores it when the editor reopens", async () => {
+  setup()
+  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
+  routes["POST /api/repos/alice/hello/commits"] = () => json(401, { error: "authentication required" })
+  const first = renderAt("/alice/hello/edit/main/a.txt")
+  await screen.findByLabelText("File content")
+  await type("File content", "my draft")
+  await type("Commit message", "Msg")
+  await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await userEvent.click(commitBtn())
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/login"))
+  first.unmount()
+  setup()
+  renderAt("/alice/hello/edit/main/a.txt")
+  expect(await screen.findByLabelText("File content")).toHaveValue("my draft")
+  expect(screen.getByLabelText("Commit message")).toHaveValue("Msg")
+})
+
+it("closing the leave dialog returns focus to the activated control, else the textarea", async () => {
+  setup()
+  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
+  renderAt("/alice/hello/edit/main/a.txt")
+  await screen.findByLabelText("File content")
+  await type("File content", "changed")
+  const cancel = screen.getByRole("button", { name: "Cancel" })
+  await userEvent.click(cancel)
+  await screen.findByRole("alertdialog")
+  await userEvent.keyboard("{Escape}")
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument())
+  await waitFor(() => expect(cancel).toHaveFocus())
+  expect(screen.getByLabelText("File content")).toHaveValue("changed")
+
+  const link = screen.getByRole("link", { name: "hello" })
+  await userEvent.click(link)
+  const dlg = await screen.findByRole("alertdialog")
+  await userEvent.click(within(dlg).getByRole("button", { name: "Keep editing" }))
+  await waitFor(() => expect(link).toHaveFocus())
 })

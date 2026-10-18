@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"net/http"
 )
@@ -108,7 +109,11 @@ func (s *Server) deleteBranch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "cannot delete the default branch")
 		return
 	}
-	err := rs.DeleteRef(r.Context(), name)
+	err := deleteNonDefaultRef(r.Context(), rs, name)
+	if errors.Is(err, errDefaultBranch) {
+		writeError(w, http.StatusBadRequest, "cannot delete the default branch")
+		return
+	}
 	if errors.Is(err, ErrRefNotFound) {
 		writeError(w, http.StatusNotFound, "branch not found")
 		return
@@ -118,4 +123,24 @@ func (s *Server) deleteBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+var errDefaultBranch = errors.New("default branch")
+
+// deleteNonDefaultRef deletes a branch unless it is the repo's default, checked
+// inside the DELETE so a concurrent set-default cannot slip in between.
+func deleteNonDefaultRef(ctx context.Context, rs *RepoStore, name string) error {
+	tag, err := rs.db.Exec(ctx,
+		`DELETE FROM refs WHERE repo_id = $1 AND name = $2
+		 AND NOT EXISTS (SELECT 1 FROM repos WHERE id = $1 AND default_branch = $2)`, rs.repoID, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+	if _, err := rs.GetRef(ctx, name); err != nil {
+		return err // ErrRefNotFound, or a real error
+	}
+	return errDefaultBranch
 }

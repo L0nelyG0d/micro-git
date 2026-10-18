@@ -117,6 +117,7 @@ it("empty repo: no tree or README calls; visitor sees a plain message", async ()
   expect(await screen.findByText(/repository is empty/i)).toBeInTheDocument()
   expect(screen.queryByRole("link", { name: "Add file" })).not.toBeInTheDocument()
   expect(calls.filter((c) => /\/(tree|blob)\//.test(c))).toEqual([])
+  expect(calls.filter((c) => c.includes("/commits"))).toEqual([])
 })
 
 it("empty repo: owner sees Add file for the default branch", async () => {
@@ -183,7 +184,7 @@ it("owner on a branch sees Add file, Create branch and Delete repository", async
     "/alice/hello/new/main",
   )
   expect(await screen.findByRole("button", { name: "Create branch" })).toBeInTheDocument()
-  expect(await screen.findByRole("button", { name: "Delete repository" })).toBeInTheDocument()
+  expect(await screen.findByRole("link", { name: "Settings" })).toHaveAttribute("href", "/alice/hello/settings")
 })
 
 it.each([["bob"], [null]] as const)("non-owner (%s) sees no write actions", async (u) => {
@@ -203,7 +204,7 @@ it("matches the owner case-insensitively", async () => {
   routes["GET /api/repos/Alice/hello/tree/main"] = routes["GET /api/repos/alice/hello/tree/main"]
   routes["GET /api/repos/Alice/hello/commits?page=1"] = routes["GET /api/repos/alice/hello/commits?page=1"]
   renderAt("/Alice/hello")
-  expect(await screen.findByRole("button", { name: "Delete repository" })).toBeInTheDocument()
+  expect(await screen.findByRole("link", { name: "Settings" })).toBeInTheDocument()
 })
 
 it("a commit oid as ref is read-only", async () => {
@@ -262,11 +263,45 @@ it.each([
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
 })
 
+it.each([
+  ["feature/x"],
+  ["a b"],
+  [".."],
+  ["a".repeat(101)],
+  ["a".repeat(40)],
+  ["é"],
+])("create branch: invalid name %j shows an inline error and sends no request", async (bad) => {
+  setupRepo("alice")
+  renderAt("/alice/hello")
+  const input = await openCreate()
+  await userEvent.type(input, bad)
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create branch" }))
+  const alert = within(screen.getByRole("dialog")).getByRole("alert")
+  expect(alert).toHaveTextContent("invalid branch name")
+  expect(input).toHaveFocus()
+  expect(input).toHaveAttribute("aria-invalid", "true")
+  expect(input).toHaveAccessibleDescription("invalid branch name")
+  expect(calls.some((c) => c.startsWith("POST") && c.endsWith("/branches"))).toBe(false)
+})
+
+it("create branch: boundary names (100 chars, dots, dashes) are still posted", async () => {
+  setupRepo("alice")
+  const name = "." + "a".repeat(98) + "-"
+  routes["POST /api/repos/alice/hello/branches"] = (b) => {
+    expect(b).toEqual({ name, from: "main" })
+    return json(409, { error: "branch already exists" })
+  }
+  renderAt("/alice/hello")
+  await userEvent.type(await openCreate(), name)
+  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create branch" }))
+  expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent("branch already exists")
+})
+
 it("delete repo: dialog names the repo, confirm deletes and redirects with a toast", async () => {
   setupRepo("alice")
   routes["DELETE /api/repos/alice/hello"] = () => json(204)
   routes["GET /api/repos?page=1"] = () => json(200, { repos: [], page: 1, per_page: 50, has_more: false })
-  renderAt("/alice/hello")
+  renderAt("/alice/hello/settings")
   await userEvent.click(await screen.findByRole("button", { name: "Delete repository" }))
   const dlg = screen.getByRole("alertdialog")
   expect(dlg).toHaveTextContent("alice/hello")
@@ -277,7 +312,7 @@ it("delete repo: dialog names the repo, confirm deletes and redirects with a toa
 
 it("delete repo: cancel sends no request; failure shows the error", async () => {
   setupRepo("alice")
-  renderAt("/alice/hello")
+  renderAt("/alice/hello/settings")
   await userEvent.click(await screen.findByRole("button", { name: "Delete repository" }))
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
   expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
@@ -287,7 +322,7 @@ it("delete repo: cancel sends no request; failure shows the error", async () => 
   await userEvent.click(screen.getByRole("button", { name: "Delete repository" }))
   await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete repository" }))
   expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("forbidden")
-  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
 })
 
 it("delete branch: owner only, default branch excluded", async () => {
@@ -358,9 +393,11 @@ const EXPIRED = "Your session has expired. Log in again."
 function expectToast() {
   expect(document.querySelector("[data-sonner-toast]")).toHaveTextContent(EXPIRED)
 }
-function expectLoggedOut() {
-  expectToast()
-  expect(screen.getByRole("link", { name: "Log in" })).toBeInTheDocument()
+// The page body may also render its own "Log in" link (settings), and it commits
+// a render later than the nav, so scope to the nav and wait for the real condition.
+async function expectLoggedOut() {
+  await vi.waitFor(() => expectToast())
+  expect(await within(screen.getByRole("navigation", { name: "Main" })).findByRole("link", { name: "Log in" })).toBeInTheDocument()
 }
 
 it("delete branch: 401 expires the session with a toast and hides owner actions", async () => {
@@ -372,9 +409,11 @@ it("delete branch: 401 expires the session with a toast and hides owner actions"
   await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete branch" }))
   await vi.waitFor(() => expectToast())
   expect(calls).toContain("DELETE /api/repos/alice/hello/branches/dev")
-  expectLoggedOut()
-  expect(screen.queryByRole("button", { name: "Delete branch" })).not.toBeInTheDocument()
-  expect(screen.queryByRole("button", { name: "Create branch" })).not.toBeInTheDocument()
+  await expectLoggedOut()
+  await vi.waitFor(() => {
+    expect(screen.queryByRole("button", { name: "Delete branch" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Create branch" })).not.toBeInTheDocument()
+  })
 })
 
 it("create branch: 401 expires the session with a toast and hides owner actions", async () => {
@@ -385,21 +424,23 @@ it("create branch: 401 expires the session with a toast and hides owner actions"
   await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create branch" }))
   await vi.waitFor(() => expectToast())
   expect(calls).toContain("POST /api/repos/alice/hello/branches")
-  expectLoggedOut()
-  expect(screen.queryByRole("button", { name: "Delete branch" })).not.toBeInTheDocument()
-  expect(screen.queryByRole("button", { name: "Create branch" })).not.toBeInTheDocument()
+  await expectLoggedOut()
+  await vi.waitFor(() => {
+    expect(screen.queryByRole("button", { name: "Delete branch" })).not.toBeInTheDocument()
+    expect(screen.queryByRole("button", { name: "Create branch" })).not.toBeInTheDocument()
+  })
 })
 
 it("delete repo: 401 expires the session with a toast and stays on the page", async () => {
   setupRepo("alice")
   routes["DELETE /api/repos/alice/hello"] = () => loggedOut()
-  renderAt("/alice/hello")
+  renderAt("/alice/hello/settings")
   await userEvent.click(await screen.findByRole("button", { name: "Delete repository" }))
   await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete repository" }))
   await vi.waitFor(() => expectToast())
   expect(calls).toContain("DELETE /api/repos/alice/hello")
-  expectLoggedOut()
-  expect(screen.queryByRole("button", { name: "Delete repository" })).not.toBeInTheDocument()
+  await expectLoggedOut()
+  await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Delete repository" })).not.toBeInTheDocument())
   expect(screen.queryByRole("button", { name: "Create branch" })).not.toBeInTheDocument()
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
 })
@@ -424,7 +465,7 @@ it("file viewer shows name, size, ref, breadcrumbs and exact content", async () 
   expect(await screen.findByRole("heading", { name: "main.go" })).toBeInTheDocument()
   expect(screen.getByTestId("file-content").textContent).toBe("  <b>hi</b>\n\tindent  \n")
   expect(screen.getByText(/28 bytes/)).toBeInTheDocument()
-  expect(screen.getByText("main", { selector: "span.font-mono" })).toBeInTheDocument()
+  expect(screen.getByText("main", { selector: "span.font-mono" })).toHaveClass("max-sm:break-all")
   const crumbs = screen.getByRole("navigation", { name: "Breadcrumbs" })
   expect(within(crumbs).getAllByRole("link").map((l) => l.getAttribute("href"))).toEqual([
     "/alice/hello/tree/main",
@@ -475,7 +516,7 @@ it("file viewer: loading and error with retry", async () => {
   expect(await screen.findByRole("heading", { name: "x" })).toBeInTheDocument()
 })
 
-it("starts branches, tree, commits and README without waiting for the repo", async () => {
+it("starts branches, tree and commits without waiting for the repo; README waits for the tree", async () => {
   setupRepo(null)
   let release: () => void = () => {}
   const gate = new Promise<void>((r) => (release = r))
@@ -483,17 +524,16 @@ it("starts branches, tree, commits and README without waiting for the repo", asy
     await gate
     return json(200, repo())
   }
-  routes["GET /api/repos/alice/hello/blob/main/README.md"] = () => json(404, { error: "file not found" })
   renderAt("/alice/hello/tree/main")
-  await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(5))
-  for (const k of ["/branches", "/tree/main", "/commits?ref=main&page=1", "/blob/main/README.md"]) {
+  await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(4))
+  for (const k of ["/branches", "/tree/main", "/commits?ref=main&page=1"]) {
     expect(calls.some((c) => c.endsWith(k))).toBe(true)
   }
   release()
   expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
 })
 
-it("without a ref in the URL, branches and commits still do not wait for the repo", async () => {
+it("without a ref in the URL, commits wait for the repo (empty repos have none); branches do not", async () => {
   setupRepo(null)
   let release: () => void = () => {}
   const gate = new Promise<void>((r) => (release = r))
@@ -502,8 +542,8 @@ it("without a ref in the URL, branches and commits still do not wait for the rep
     return json(200, repo())
   }
   renderAt("/alice/hello")
-  await vi.waitFor(() => expect(calls.some((c) => c.endsWith("/commits?page=1"))).toBe(true))
-  expect(calls.some((c) => c.endsWith("/branches"))).toBe(true)
+  await vi.waitFor(() => expect(calls.some((c) => c.endsWith("/branches"))).toBe(true))
+  expect(calls.some((c) => c.includes("/commits"))).toBe(false) // needs repo.empty
   expect(calls.some((c) => c.includes("/tree/"))).toBe(false) // needs the default branch
   release()
   expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()

@@ -82,6 +82,7 @@ it("renders summary and the shared diff, prefilled selects, truncated note", asy
   expect(screen.getByTestId("line-add")).toHaveTextContent("+new")
   expect(screen.getByTestId("line-del")).toHaveTextContent("-old")
   expect(screen.getByText("diff too large to display")).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "alice/hello" })).toHaveClass("max-sm:break-all")
 })
 
 it("shows the empty state for identical tips", async () => {

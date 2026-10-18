@@ -8,3 +8,7 @@ coverage/
 backend/backend
 *.log
 .claude/
+bin/
+.playwright-mcp/
+graphify-out/
+resolving the issues.txt

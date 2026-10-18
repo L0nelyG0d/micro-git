@@ -471,7 +471,7 @@ func FindRepoRef(ctx context.Context, db querier, owner, name, ref string) (Read
 	var tip, treeOID *string
 	var commitData, treeData []byte
 	err := db.QueryRow(ctx, `
-SELECT r.id, r.owner_id, u.username, r.name, r.description, r.default_branch, r.created_at,
+SELECT r.id, r.owner_id, u.username, r.name, r.description, r.default_branch, r.private, r.created_at,
        NOT EXISTS (SELECT 1 FROM refs WHERE repo_id = r.id),
        f.oid, c.data, t.oid, t.data
   FROM repos r
@@ -483,7 +483,7 @@ SELECT r.id, r.owner_id, u.username, r.name, r.description, r.default_branch, r.
  WHERE lower(u.username) = lower($1) AND lower(r.name) = lower($2)`,
 		owner, name, ref, treeHeaderRE).Scan(
 		&h.Repo.ID, &h.Repo.OwnerID, &h.Repo.Owner, &h.Repo.Name, &h.Repo.Description,
-		&h.Repo.DefaultBranch, &created, &h.Repo.Empty, &tip, &commitData, &treeOID, &treeData)
+		&h.Repo.DefaultBranch, &h.Repo.Private, &created, &h.Repo.Empty, &tip, &commitData, &treeOID, &treeData)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ReadHead{}, errRepoNotFound
 	}

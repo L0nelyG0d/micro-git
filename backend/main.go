@@ -24,6 +24,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	for _, w := range cfg.Warnings {
+		log.Printf("config warning: %s", w)
+	}
 	pool, err := NewPool(context.Background(), cfg.DatabaseURL, cfg.Pool)
 	if err != nil {
 		log.Fatalf("database: %v", err)

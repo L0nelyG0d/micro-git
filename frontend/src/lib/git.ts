@@ -26,6 +26,12 @@ export function isOidRef(ref: string): boolean {
   return /^[0-9a-f]{40}$/.test(ref)
 }
 
+/** Mirrors the server's validBranchName (backend/commits.go): charset, not . or .., at most 100, not an oid. */
+export function validateBranchName(name: string): string {
+  const ok = /^[A-Za-z0-9._-]+$/.test(name) && name !== "." && name !== ".." && name.length <= 100 && !isOidRef(name)
+  return ok ? "" : "invalid branch name"
+}
+
 /** Edit / Add file / Create branch are for the owner on a branch only. */
 export function canWrite(user: User | null, owner: string | undefined, ref: string): boolean {
   return isOwner(user, owner) && !isOidRef(ref)

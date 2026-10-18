@@ -4,6 +4,7 @@ export type Repo = {
   name: string
   description: string
   default_branch: string
+  private: boolean
   empty: boolean
   created_at: string
 }

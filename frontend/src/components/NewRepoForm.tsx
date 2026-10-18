@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import type { FormEvent } from "react"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
@@ -19,10 +19,18 @@ type Props = {
 export function NewRepoForm({ onCreated, onCancel, onUnauthorized }: Props) {
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
+  const [isPrivate, setIsPrivate] = useState(false)
   const [nameError, setNameError] = useState("")
   const [descError, setDescError] = useState("")
   const [formError, setFormError] = useState("")
   const [busy, setBusy] = useState(false)
+  const nameRef = useRef<HTMLInputElement>(null)
+  const descRef = useRef<HTMLTextAreaElement>(null)
+
+  // The trigger button unmounts when the form opens, so move focus here.
+  useEffect(() => {
+    nameRef.current?.focus()
+  }, [])
 
   async function submit(e: FormEvent) {
     e.preventDefault()
@@ -32,10 +40,13 @@ export function NewRepoForm({ onCreated, onCancel, onUnauthorized }: Props) {
     setNameError(ne)
     setDescError(de)
     setFormError("")
-    if (ne || de) return
+    if (ne || de) {
+      ;(ne ? nameRef : descRef).current?.focus()
+      return
+    }
     setBusy(true)
     try {
-      const repo = await api<Repo>("/repos", { method: "POST", body: { name, description } })
+      const repo = await api<Repo>("/repos", { method: "POST", body: { name, description, private: isPrivate } })
       onCreated(repo)
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {
@@ -43,9 +54,15 @@ export function NewRepoForm({ onCreated, onCancel, onUnauthorized }: Props) {
         onUnauthorized()
       } else if (err instanceof ApiError && err.status === 409) {
         setNameError(err.message)
+        nameRef.current?.focus()
       } else if (err instanceof ApiError && err.status === 400) {
-        if (/description/i.test(err.message)) setDescError(err.message)
-        else setNameError(err.message)
+        if (/description/i.test(err.message)) {
+          setDescError(err.message)
+          descRef.current?.focus()
+        } else {
+          setNameError(err.message)
+          nameRef.current?.focus()
+        }
       } else {
         setFormError(
           err instanceof ApiError
@@ -65,7 +82,10 @@ export function NewRepoForm({ onCreated, onCancel, onUnauthorized }: Props) {
           <Label htmlFor="repo-name">Name</Label>
           <Input
             id="repo-name"
+            name="name"
+            ref={nameRef}
             autoComplete="off"
+            spellCheck={false}
             required
             value={name}
             aria-invalid={!!nameError}
@@ -82,6 +102,8 @@ export function NewRepoForm({ onCreated, onCancel, onUnauthorized }: Props) {
           <Label htmlFor="repo-description">Description (optional)</Label>
           <Textarea
             id="repo-description"
+            name="description"
+            ref={descRef}
             value={description}
             aria-invalid={!!descError}
             aria-describedby={descError ? "repo-description-error" : undefined}
@@ -93,6 +115,23 @@ export function NewRepoForm({ onCreated, onCancel, onUnauthorized }: Props) {
             </p>
           )}
         </div>
+        <fieldset className="flex flex-col gap-2">
+          <legend className="mb-1 text-sm font-medium">Visibility</legend>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="radio" name="visibility" checked={!isPrivate} onChange={() => setIsPrivate(false)} className="mt-1" />
+            <span>
+              <span className="font-medium">Public</span>
+              <span className="block text-xs text-muted-foreground">Anyone can see this repository.</span>
+            </span>
+          </label>
+          <label className="flex items-start gap-2 text-sm">
+            <input type="radio" name="visibility" checked={isPrivate} onChange={() => setIsPrivate(true)} className="mt-1" />
+            <span>
+              <span className="font-medium">Private</span>
+              <span className="block text-xs text-muted-foreground">Only you can see this repository.</span>
+            </span>
+          </label>
+        </fieldset>
         {formError && (
           <p role="alert" className="text-sm text-destructive">
             {formError}

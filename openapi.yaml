@@ -323,7 +323,7 @@ paths:
       operationId: updateRepo
       summary: Update a repository's name, description or default branch (owner only)
       description: >-
-        Send any of `name`, `description` and `default_branch`; at least one is required and omitted fields
+        Send any of `name`, `description`, `default_branch` and `private`; at least one is required and omitted fields
         stay unchanged. After a rename the old name stops resolving (no redirect); renaming to the same name or
         changing only its case succeeds. `description` may be empty to clear it. `default_branch` must be an
         existing branch.
@@ -411,7 +411,7 @@ paths:
         - name: page
           in: query
           required: false
-          description: 1-based page number.
+          description: 1-based page number. `page * per_page` may not exceed 10000 (the history depth limit); deeper pages give `400`.
           schema:
             type: integer
             minimum: 1
@@ -433,7 +433,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/CommitList'
         '400':
-          description: '`invalid page` or `invalid per_page`.'
+          description: '`invalid page` (including a page deeper than `page * per_page` = 10000) or `invalid per_page`.'
           content:
             application/json:
               schema:
@@ -457,7 +457,8 @@ paths:
       description: >-
         Writes blobs, rebuilds the changed trees and moves the branch with a compare-and-swap on
         `expected_tip`. The first commit of an empty repository has an empty `expected_tip` and must target
-        the default branch. The body limit is 64 MiB.
+        the default branch. The body limit is 64 MiB for the owner and 1 MiB for anyone else: a non-owner
+        body over 1 MiB gets `413` before the `403`.
       security:
         - sessionCookie: []
       requestBody:
@@ -1110,7 +1111,7 @@ components:
           type: string
     Repo:
       type: object
-      required: [id, owner, name, description, default_branch, empty, created_at]
+      required: [id, owner, name, description, default_branch, private, empty, created_at]
       properties:
         id:
           type: integer
@@ -1124,6 +1125,11 @@ components:
         default_branch:
           type: string
           example: main
+        private:
+          type: boolean
+          description: >-
+            A private repository is visible to its owner only; everyone else gets `404 repository not found`
+            on every endpoint of it, and it is left out of `GET /repos` for them.
         empty:
           type: boolean
           description: True when the repository has no branches.
@@ -1143,6 +1149,10 @@ components:
           type: string
           maxLength: 500
           description: Optional, at most 500 characters.
+        private:
+          type: boolean
+          default: false
+          description: Create the repository as private (owner-only).
     UpdateRepoRequest:
       type: object
       minProperties: 1
@@ -1156,6 +1166,9 @@ components:
           maxLength: 500
         default_branch:
           type: string
+        private:
+          type: boolean
+          description: Switch the repository between public and private.
     Branch:
       type: object
       required: [name, oid, is_default]

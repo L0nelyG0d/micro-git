@@ -49,3 +49,31 @@ func TestLoadConfigCookieSecure(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfigCookieSecureWarning(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		val      string
+		wantWarn bool
+	}{{"", true}, {"true", false}, {"false", false}} {
+		env := map[string]string{"DATABASE_URL": "x", "JWT_SECRET": goodSecret}
+		if tc.val != "" {
+			env["COOKIE_SECURE"] = tc.val
+		}
+		cfg, err := LoadConfig(func(k string) string { return env[k] })
+		if err != nil {
+			t.Fatalf("COOKIE_SECURE=%q: %v", tc.val, err)
+		}
+		if got := len(cfg.Warnings) > 0; got != tc.wantWarn {
+			t.Errorf("COOKIE_SECURE=%q: warnings %q, want warning=%v", tc.val, cfg.Warnings, tc.wantWarn)
+		}
+		for _, w := range cfg.Warnings {
+			if !strings.Contains(w, "COOKIE_SECURE") {
+				t.Errorf("warning %q does not name COOKIE_SECURE", w)
+			}
+			if strings.Contains(w, goodSecret) || strings.Contains(w, "postgres") {
+				t.Errorf("warning leaks a secret: %q", w)
+			}
+		}
+	}
+}

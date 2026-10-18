@@ -6,7 +6,7 @@
 # one process that needs it. Values are never echoed.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup check-env schema backend frontend dev test test-fast build lint clean
+.PHONY: help setup check-env schema backend frontend dev test test-fast build cli lint clean
 
 # Backend port; override with `make dev PORT=9090`.
 PORT ?= 8080
@@ -34,6 +34,10 @@ loadenv = export DATABASE_URL="$$($(call envval,DATABASE_URL))" \
 		JWT_SECRET="$$($(call envval,JWT_SECRET))" \
 		COOKIE_SECURE="$$($(call envval,COOKIE_SECURE))" \
 		PORT="$(PORT)"
+
+cli: ## Build the command-line client to bin/mg (see README, "Command line")
+	cd backend && go build -o ../bin/mg ./cmd/mg
+	@echo "built bin/mg  (try: bin/mg help)"
 
 help: ## Show this help (default target)
 	@echo "Targets (PORT=$(PORT); override: make dev PORT=9090):"
@@ -127,4 +131,4 @@ lint: ## gofmt -l (must list nothing), go vet, tsc -b, npm run lint if defined
 	@if grep -q '"lint"' frontend/package.json; then cd frontend && npm run lint; fi
 
 clean: ## Remove backend/backend and frontend/dist (keeps .env and node_modules)
-	rm -rf backend/backend frontend/dist
+	rm -rf backend/backend bin frontend/dist

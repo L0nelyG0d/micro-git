@@ -164,11 +164,11 @@ func TestETagMatching(t *testing.T) {
 }
 
 func TestBranchCacheETag(t *testing.T) {
-	a := branchCache("tree", "c1", "src")
-	if a != branchCache("tree", "c1", "src") {
+	a := branchCache("tree", "c1", "src", false)
+	if a != branchCache("tree", "c1", "src", false) {
 		t.Error("not deterministic")
 	}
-	for _, b := range []cacheHeaders{branchCache("tree", "c2", "src"), branchCache("tree", "c1", "other"), branchCache("blob", "c1", "src")} {
+	for _, b := range []cacheHeaders{branchCache("tree", "c2", "src", false), branchCache("tree", "c1", "other", false), branchCache("blob", "c1", "src", false)} {
 		if b.etag == a.etag {
 			t.Error("etag collision across commit/path/kind")
 		}
@@ -307,5 +307,15 @@ func TestReadGzipEndToEnd(t *testing.T) {
 	// HEAD on a read route is a 405 (GET only) and never encoded
 	if rec := serve(f.s.Handler(), "HEAD", base+"/blob/main/big.txt", gz); rec.Header().Get("Content-Encoding") != "" {
 		t.Error("HEAD encoded")
+	}
+}
+
+func TestBranchCachePrivate(t *testing.T) {
+	pub, priv := branchCache("tree", "c1", "src", false), branchCache("tree", "c1", "src", true)
+	if pub.control != "no-cache" || priv.control != "private, no-cache" {
+		t.Errorf("control: public %q, private %q", pub.control, priv.control)
+	}
+	if pub.etag == "" || pub.etag != priv.etag {
+		t.Errorf("etag must be set and independent of visibility: %q %q", pub.etag, priv.etag)
 	}
 }

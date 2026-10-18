@@ -18,10 +18,10 @@ Rules
 
 Git
 
-- One branch per issue: `issue-<N>-<short-slug>`, created from an up-to-date `main`. The engineer commits only on that branch; QA checks that same branch; the orchestrator merges it into `main` only after QA PASS (see `_docs/process.md`). Nobody commits to `main` directly except the orchestrator's merges and doc-only housekeeping
+- One branch per issue: `issue-<N>-<short-slug>`, created from an up-to-date `main`. The engineer commits only on that branch; QA checks that same branch; the code reviewer reviews it after QA PASS and is the only role that merges it into `main` (see `_docs/process.md`). Nobody commits to `main` directly except the code reviewer's merges and doc-only housekeeping
 - Small, regular commits that each leave the tests passing
 - Short imperative messages that reference the issue (`Refs #4`); `Closes #4` on the last commit of the issue
-- Push only when the user asks (the user allowed pushing `main` after the 2026-10-16 review; ask again for later pushes unless they say otherwise)
+- Only the code reviewer pushes, and only `main` right after merging an approved issue (the user delegated this on 2026-10-19, replacing "push only when the user asks"). No other role pushes; never force-push
 
 Documents - look these up when relevant, don't load them all up front
 
@@ -29,6 +29,7 @@ Documents - look these up when relevant, don't load them all up front
 - `_docs/plan.md` - what the app does: features, endpoints, tables, rules
 - `_docs/tasks.md` - the backlog, one task per GitHub issue
 - `_docs/testing-guidelines.md` - read before writing tests
+- `_docs/process.md` sections "Testing-phase issues" (which skills the `ui` issues use: `web-design-guidelines`, `design-taste-frontend`, `image-to-code`) and "Dogfooding with mg" (committing our work with `bin/mg` and storing the hash) - read when QA files an issue or an issue is about to merge
 - `_docs/design-system.md` - read before anything touching the UI
 
 Fast local test database (use this instead of Neon when time matters)

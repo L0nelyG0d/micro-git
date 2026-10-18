@@ -16,6 +16,9 @@ import (
 const (
 	cookieName = "session"
 	sessionTTL = 3 * time.Hour // cookie Max-Age and JWT exp both derive from this
+
+	// maxUsernameLen is the longest username usernameRE accepts (auth.go).
+	maxUsernameLen = 32
 )
 
 // User is the authenticated user the middleware puts in the request context.
@@ -128,6 +131,12 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	username := strings.ToLower(req.Username)
+	// No account can have this name, so answer like an unknown user without
+	// touching the limiter (its key embeds the name), the HMAC or the DB.
+	if len(username) > maxUsernameLen {
+		writeError(w, http.StatusUnauthorized, "invalid username or password")
+		return
+	}
 	ip := clientIP(r)
 	known := s.isKnownDevice(r, username)
 	// Throttled: answer before any database or bcrypt work, even if the

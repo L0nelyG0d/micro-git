@@ -130,6 +130,9 @@ func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, 
 		return fail()
 	}
 	repo = head.Repo
+	if !s.canView(w, r, repo) {
+		return fail()
+	}
 	s.testHook("repo-loaded")
 	objs := head.Objects
 	if head.HasRef {
@@ -153,12 +156,12 @@ func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, 
 	// by a full commit oid is immutable.
 	kind := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repos/"), "/", 4)[2]
 	if head.HasRef {
-		cache = branchCache(kind, commit, path)
+		cache = branchCache(kind, commit, path, repo.Private)
 		if cache.notModified(w, r) {
 			return fail()
 		}
 	} else {
-		cache = immutableCache()
+		cache = immutableCache(repo.Private)
 	}
 	store = primed(NewRepoStore(s.DB, repo.ID).Objects(r.Context()), objs)
 	root, err := commitTree(store, commit)

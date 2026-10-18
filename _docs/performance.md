@@ -42,6 +42,10 @@ Decision (2026-10-18): the Neon column stays an estimate, labelled as such. The 
 
 Both ancestry questions (already up to date, fast-forward possible) are answered by one `WITH RECURSIVE` statement (`RepoStore.CommitReachability`); the `count(*)` over commits is gone. The count is constant: a test merges a branch 200 commits ahead and asserts at most 10 statements. Local time rose because the parent lines are parsed in SQL with a regex, but on Neon the round trips dominate (56 -> 6). No index or generated column added: every step is a primary-key lookup on `objects (repo_id, oid)`, so there is no schema change and nothing to apply to Neon.
 
+### Cache-Control of private repos (#67)
+
+A private repo never reaches a shared cache: branch-addressed reads send `private, no-cache` plus the ETag, oid-addressed reads `private, max-age=31536000, immutable`. Residual risk, left as is on purpose: an oid-addressed response served while the repo was public carries `public, ..., immutable` for a year, so copies a CDN or proxy stored before the repo was made private can still be served from that cache. Fixing it would mean dropping `public` or the long max-age for everyone; open question in `_docs/questions.md`.
+
 ## Frontend
 
 `npm run build` (`tsc -b && vite build`, vite 8.3.4):

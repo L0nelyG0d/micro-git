@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { Link, useSearchParams } from "react-router-dom"
 import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
@@ -6,9 +6,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useAuth } from "@/auth/AuthContext"
 import { NewRepoForm } from "@/components/NewRepoForm"
 import { Pagination } from "@/components/Pagination"
-import { Section } from "@/components/Section"
-import { RepoTable } from "@/components/RepoTable"
-import { api, ApiError } from "@/lib/api"
+import { RepoRows } from "@/components/RepoRows"
+import { cacheClear } from "@/lib/fetchCache"
+import { errorMessage, useFetch } from "@/lib/useFetch"
 import { parsePage } from "@/lib/pagination"
 import type { RepoList } from "@/lib/repos"
 
@@ -16,35 +16,25 @@ export function Home() {
   const { user, loading: sessionLoading, expireSession } = useAuth()
   const [search] = useSearchParams()
   const page = parsePage(search.get("page"))
-  const [list, setList] = useState<RepoList | null>(null)
-  const [error, setError] = useState("")
   const [formOpen, setFormOpen] = useState(false)
-  const [attempt, setAttempt] = useState(0)
 
-  const load = useCallback(() => {
-    setList(null)
-    setError("")
-    setAttempt((n) => n + 1)
-  }, [])
+  // Wait for the session: the list differs for a logged-in user (private repos).
+  const { data, error, reload } = useFetch<RepoList>(sessionLoading ? null : `/repos?page=${page}`)
+  // A repo created here is shown at once; it applies to the fetched `data` it was
+  // built from only, so newer data (reload, revalidation) replaces it.
+  const [created, setCreated] = useState<{ base: RepoList; list: RepoList }>()
+  const list = created && created.base === data ? created.list : (data ?? null)
 
+  // The cache is keyed by path, not by user: when the user changes, drop it and refetch.
+  const seenUser = useRef<{ id?: number } | undefined>(undefined)
   useEffect(() => {
-    let active = true
-    setList(null)
-    setError("")
-    api<RepoList>(`/repos?page=${page}`)
-      .then((d) => active && setList(d))
-      .catch((e) => {
-        if (!active) return
-        setError(
-          e instanceof ApiError
-            ? e.message
-            : "Could not reach the server. Check your connection and try again.",
-        )
-      })
-    return () => {
-      active = false
+    if (sessionLoading) return
+    if (seenUser.current && seenUser.current.id !== user?.id) {
+      cacheClear()
+      reload()
     }
-  }, [attempt, page])
+    seenUser.current = { id: user?.id }
+  }, [user?.id, sessionLoading, reload])
 
   // Stays open after a 401 so the expiry message remains visible.
   const showForm = formOpen
@@ -68,13 +58,14 @@ export function Home() {
           onUnauthorized={expireSession}
           onCreated={(repo) => {
             // A new repo is the newest, so it belongs on page 1 only.
-            if (page === 1)
-              setList((l) => {
-                if (!l) return l
-                const all = [repo, ...l.repos]
-                // Keep the page size; the pushed-out repo moves to page 2.
-                return { ...l, repos: all.slice(0, l.per_page), has_more: l.has_more || all.length > l.per_page }
+            if (page === 1 && data) {
+              const all = [repo, ...data.repos]
+              // Keep the page size; the pushed-out repo moves to page 2.
+              setCreated({
+                base: data,
+                list: { ...data, repos: all.slice(0, data.per_page), has_more: data.has_more || all.length > data.per_page },
               })
+            }
             setFormOpen(false)
             toast.success(`Repository ${repo.owner}/${repo.name} created.`)
           }}
@@ -83,8 +74,8 @@ export function Home() {
 
       {error ? (
         <div role="alert" className="flex flex-col items-start gap-2 text-sm">
-          <p className="text-destructive">{error}</p>
-          <Button variant="outline" size="sm" onClick={load}>
+          <p className="text-destructive">{errorMessage(error)}</p>
+          <Button variant="outline" size="sm" onClick={reload}>
             Retry
           </Button>
         </div>
@@ -116,9 +107,7 @@ export function Home() {
           )}
         </p>
       ) : (
-        <Section title="Repository list" className="[&>div]:p-0">
-          <RepoTable repos={list.repos} />
-        </Section>
+        <RepoRows repos={list.repos} />
       )}
 
       {list && (page > 1 || list.has_more) && (

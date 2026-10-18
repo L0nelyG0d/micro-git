@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import type { FormEvent, MouseEvent } from "react"
 import { toast } from "sonner"
 import {
@@ -24,7 +24,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { api, ApiError } from "@/lib/api"
-import { isOidRef, type Branch } from "@/lib/git"
+import { isOidRef, validateBranchName, type Branch } from "@/lib/git"
 import { shortOid } from "@/lib/format"
 import { errorMessage } from "@/lib/useFetch"
 
@@ -78,6 +78,7 @@ function CreateBranch({ owner, repo, current, onCreated, onUnauthorized }: Props
   const [name, setName] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
+  const inputRef = useRef<HTMLInputElement>(null)
 
   const reset = (o: boolean) => {
     setOpen(o)
@@ -92,6 +93,13 @@ function CreateBranch({ owner, repo, current, onCreated, onUnauthorized }: Props
     const trimmed = name.trim()
     if (!trimmed) {
       setError("Enter a branch name.")
+      inputRef.current?.focus()
+      return
+    }
+    const invalid = validateBranchName(trimmed)
+    if (invalid) {
+      setError(invalid)
+      inputRef.current?.focus()
       return
     }
     setBusy(true)
@@ -134,13 +142,17 @@ function CreateBranch({ owner, repo, current, onCreated, onUnauthorized }: Props
             <Label htmlFor="new-branch-name">Branch name</Label>
             <Input
               id="new-branch-name"
+              name="branch"
+              ref={inputRef}
+              spellCheck={false}
               value={name}
               onChange={(e) => setName(e.target.value)}
               autoComplete="off"
               aria-invalid={!!error}
+              aria-describedby={error ? "new-branch-name-error" : undefined}
             />
             {error && (
-              <p role="alert" className="text-xs text-destructive">
+              <p id="new-branch-name-error" role="alert" className="text-xs text-destructive">
                 {error}
               </p>
             )}

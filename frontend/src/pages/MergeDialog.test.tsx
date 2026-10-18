@@ -82,13 +82,12 @@ it("owner with two branches sees Merge; defaults into=main, from=dev", async () 
   expect(within(dlg).getByRole("button", { name: "Merge" })).toBeEnabled()
 })
 
-it("owner repo page shows Compare, Merge, Rename and Delete together", async () => {
+it("owner repo page shows Compare, Merge and Settings together", async () => {
   setup()
   renderAt("/alice/hello")
   expect(await screen.findByRole("link", { name: "Compare" })).toBeInTheDocument()
   expect(await screen.findByRole("button", { name: "Merge" })).toBeInTheDocument()
-  expect(await screen.findByRole("button", { name: "Rename" })).toBeInTheDocument()
-  expect(await screen.findByRole("button", { name: "Delete repository" })).toBeInTheDocument()
+  expect(await screen.findByRole("link", { name: "Settings" })).toBeInTheDocument()
 })
 
 it("is hidden from non-owners and on a single-branch repo", async () => {

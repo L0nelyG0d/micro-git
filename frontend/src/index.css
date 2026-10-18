@@ -3,74 +3,87 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* Colors follow GitHub's Primer palette. Light is the default; dark follows the
+   system setting and the .dark class forces it. */
 :root {
-  --radius: 0.5rem;
-  --background: #f8fafc;
-  --foreground: #0f172a;
+  --radius: 0.375rem;
+  --background: #ffffff;
+  --foreground: #1f2328;
   --card: #ffffff;
-  --card-foreground: #0f172a;
+  --card-foreground: #1f2328;
   --popover: #ffffff;
-  --popover-foreground: #0f172a;
-  --primary: #4f46e5;
+  --popover-foreground: #1f2328;
+  --primary: #0969da;
   --primary-foreground: #ffffff;
-  --secondary: #f1f5f9;
-  --secondary-foreground: #0f172a;
-  --muted: #f1f5f9;
-  --muted-foreground: #64748b;
-  --accent: #f1f5f9;
-  --accent-foreground: #0f172a;
-  --destructive: #b91c1c;
-  --success: #15803d;
-  --border: #e2e8f0;
-  --input: #e2e8f0;
-  --ring: #4f46e5;
+  --secondary: #f6f8fa;
+  --secondary-foreground: #1f2328;
+  --muted: #f6f8fa;
+  --muted-foreground: #59636e;
+  --accent: #eaeef2;
+  --accent-foreground: #1f2328;
+  --destructive: #d1242f;
+  --success: #1a7f37;
+  --border: #d1d9e0;
+  --input: #d1d9e0;
+  --ring: #0969da;
+  --action: #1f883d;
+  --action-foreground: #ffffff;
+  --header: #f6f8fa;
+  --header-foreground: #1f2328;
 }
 
-/* Dark follows the system setting; the .dark class forces it. */
 @media (prefers-color-scheme: dark) {
   :root:not(.light) {
-    --background: #0f172a;
-    --foreground: #f1f5f9;
-    --card: #1e293b;
-    --card-foreground: #f1f5f9;
-    --popover: #1e293b;
-    --popover-foreground: #f1f5f9;
-    --primary: #818cf8;
-    --primary-foreground: #0f172a;
-    --secondary: #1e293b;
-    --secondary-foreground: #f1f5f9;
-    --muted: #1e293b;
-    --muted-foreground: #94a3b8;
-    --accent: #1e293b;
-    --accent-foreground: #f1f5f9;
-    --destructive: #f87171;
-    --success: #4ade80;
-    --border: #334155;
-    --input: #334155;
-    --ring: #818cf8;
+    --background: #0d1117;
+    --foreground: #e6edf3;
+    --card: #0d1117;
+    --card-foreground: #e6edf3;
+    --popover: #161b22;
+    --popover-foreground: #e6edf3;
+    --primary: #4493f8;
+    --primary-foreground: #0d1117;
+    --secondary: #161b22;
+    --secondary-foreground: #e6edf3;
+    --muted: #161b22;
+    --muted-foreground: #9198a1;
+    --accent: #262c36;
+    --accent-foreground: #e6edf3;
+    --destructive: #f85149;
+    --success: #3fb950;
+    --border: #3d444d;
+    --input: #3d444d;
+    --ring: #1f6feb;
+    --action: #238636;
+    --action-foreground: #ffffff;
+    --header: #010409;
+    --header-foreground: #e6edf3;
   }
 }
 
 .dark {
-  --background: #0f172a;
-  --foreground: #f1f5f9;
-  --card: #1e293b;
-  --card-foreground: #f1f5f9;
-  --popover: #1e293b;
-  --popover-foreground: #f1f5f9;
-  --primary: #818cf8;
-  --primary-foreground: #0f172a;
-  --secondary: #1e293b;
-  --secondary-foreground: #f1f5f9;
-  --muted: #1e293b;
-  --muted-foreground: #94a3b8;
-  --accent: #1e293b;
-  --accent-foreground: #f1f5f9;
-  --destructive: #f87171;
-  --success: #4ade80;
-  --border: #334155;
-  --input: #334155;
-  --ring: #818cf8;
+  --background: #0d1117;
+  --foreground: #e6edf3;
+  --card: #0d1117;
+  --card-foreground: #e6edf3;
+  --popover: #161b22;
+  --popover-foreground: #e6edf3;
+  --primary: #4493f8;
+  --primary-foreground: #0d1117;
+  --secondary: #161b22;
+  --secondary-foreground: #e6edf3;
+  --muted: #161b22;
+  --muted-foreground: #9198a1;
+  --accent: #262c36;
+  --accent-foreground: #e6edf3;
+  --destructive: #f85149;
+  --success: #3fb950;
+  --border: #3d444d;
+  --input: #3d444d;
+  --ring: #1f6feb;
+  --action: #238636;
+  --action-foreground: #ffffff;
+  --header: #010409;
+  --header-foreground: #e6edf3;
 }
 
 @theme inline {
@@ -93,8 +106,13 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-action: var(--action);
+  --color-action-foreground: var(--action-foreground);
+  --color-header: var(--header);
+  --color-header-foreground: var(--header-foreground);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif;
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) + 0.25rem);
+  --radius-xl: calc(var(--radius) + 0.125rem);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -113,6 +131,6 @@
     @apply border-border outline-ring/50;
   }
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground font-sans antialiased;
   }
 }

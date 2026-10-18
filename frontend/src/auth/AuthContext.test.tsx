@@ -49,3 +49,23 @@ it("expireSession shows no toast when nobody is logged in", async () => {
   act(() => auth.expireSession())
   expect(errorSpy).not.toHaveBeenCalled()
 })
+
+it("a revalidation answered after a local logout does not bring the user back", async () => {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  let calls = 0
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => {
+      if (++calls === 2) await gate
+      return { status: 200, ok: true, json: async () => ({ id: calls === 1 ? 1 : 2, username: "alice" }) } as Response
+    }),
+  )
+  render(<AuthProvider><Probe /></AuthProvider>)
+  await screen.findByText("user alice")
+  await act(async () => { window.dispatchEvent(new Event("focus")) })
+  act(() => auth.expireSession())
+  expect(await screen.findByText("logged out")).toBeInTheDocument()
+  await act(async () => release())
+  expect(screen.getByText("logged out")).toBeInTheDocument()
+})
