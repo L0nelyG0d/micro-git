@@ -71,3 +71,6 @@ Now that we discussed the questions start closing the issues with the qa commiti
 
 ## #103 openapi checks: YAML parser?
 Asked 2026-10-19 (PM). No YAML parser or JSON-schema validator is approved. Default used: extend the existing line scanner in `frontend/src/lib/openapi.test.ts`. Say if a parser dependency is wanted.
+
+## #119 nav overflow at 320px (stashed 2026-10-19)
+- [ ] (#119) How should "Session unavailable" look below 360px, and does the username stay visible at 320px? Default used: username stays visible (already truncates); below 360px the label shows "Offline" next to the warning icon (the full phrase stays in the `title` and at 360px and up); no hamburger menu. Reversible: one span pair in `Nav.tsx`. Alternatives: wrap the label, or a banner under the nav.

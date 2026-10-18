@@ -36,11 +36,12 @@ export function Nav() {
           {sessionError && (
             <span
               role="status"
-              title="Could not check your session. Public pages still work."
+              title="Session unavailable. Could not check your session. Public pages still work."
               className="flex items-center gap-1 text-xs text-destructive"
             >
-              <TriangleAlert className="size-4" aria-hidden />
-              Session unavailable
+              <TriangleAlert className="size-4 shrink-0" aria-hidden />
+              <span className="max-[359px]:hidden">Session unavailable</span>
+              <span className="min-[360px]:hidden">Offline</span>
             </span>
           )}
           {loading ? (
