@@ -1,5 +1,5 @@
-import { lazy } from "react"
 import type { RouteObject } from "react-router-dom"
+import { lazyWithRetry as lazy } from "@/lib/lazyWithRetry"
 import { Home } from "@/pages/Home"
 import { NotFound } from "@/pages/NotFound"
 

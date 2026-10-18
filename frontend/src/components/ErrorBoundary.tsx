@@ -1,6 +1,7 @@
 import { Component } from "react"
 import type { ErrorInfo, ReactNode } from "react"
 import { Link } from "react-router-dom"
+import { resetFailedLazies } from "@/lib/lazyWithRetry"
 import { Button } from "@/components/ui/button"
 
 /** Same look as ErrorBlock: an alert with a Retry button, plus a way out. */
@@ -46,11 +47,17 @@ export class ErrorBoundary extends Component<Props, { failed: boolean }> {
   }
 
   componentDidUpdate(prev: Props) {
-    if (this.state.failed && prev.resetKey !== this.props.resetKey) this.setState({ failed: false })
+    if (this.state.failed && prev.resetKey !== this.props.resetKey) this.retry()
+  }
+
+  retry = () => {
+    // A page chunk that failed to load is imported again; if that failed too, only a reload helps.
+    if (resetFailedLazies()) return window.location.reload()
+    this.setState({ failed: false })
   }
 
   render() {
-    if (this.state.failed) return <ErrorFallback onRetry={() => this.setState({ failed: false })} />
+    if (this.state.failed) return <ErrorFallback onRetry={this.retry} />
     return this.props.children
   }
 }
