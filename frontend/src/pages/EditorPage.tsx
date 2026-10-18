@@ -361,14 +361,14 @@ function Editor({
         </div>
 
         {tipFailure && (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-sm text-destructive break-all">
             {tipFailure}
             {!isNew && " The file may not exist on this branch."}
           </p>
         )}
         {conflict && (
           <div role="alert" className="flex flex-col items-start gap-2 text-sm">
-            <p className="text-destructive">
+            <p className="text-destructive break-all">
               Branch tip has moved. Someone committed to {effectiveBranch} since you opened this page.
             </p>
             <p className="text-muted-foreground">
@@ -380,7 +380,7 @@ function Editor({
           </div>
         )}
         {error && (
-          <p role="alert" className="text-sm text-destructive">
+          <p role="alert" className="text-sm text-destructive break-all">
             {error}
           </p>
         )}
