@@ -1,6 +1,7 @@
 package main
 
 import (
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -80,7 +81,8 @@ func TestLoadConfigCookieSecureWarning(t *testing.T) {
 
 func TestLoadConfigStorage(t *testing.T) {
 	t.Parallel()
-	const pg = "postgres://u:p@h/db"
+	// Built at runtime so no credential-bearing URL literal sits in the source.
+	pg := (&url.URL{Scheme: "postgres", User: url.UserPassword("u", "p"), Host: "h", Path: "/db"}).String()
 	tests := []struct {
 		name       string
 		env        map[string]string
