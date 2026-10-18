@@ -1,5 +1,7 @@
 # Design system
 
+> **Superseded for visual values.** The source of truth for colors, radius, density and surfaces is `DESIGN.md` plus `frontend/src/index.css` (GitHub Primer palette: blue `#0969da` links/focus, green `#1f883d` action, hairline borders, no surface shadows, `--radius` 0.375rem, 14px base text). Token values and density rules below are historical (indigo `#4F46E5`, `p-3` cards, `shadow-xs`) and kept only for the non-visual rules (components, accessibility, tone, oids and diffs). Where they disagree, `DESIGN.md` and `index.css` win.
+
 Read this before touching any UI. Use the tokens and components below; never hardcode colors, spacing, or font sizes in components.
 
 ## Approach
@@ -31,9 +33,9 @@ Any other dependency still needs the user's approval first.
 | `--border` | `#E2E8F0` | `#334155` | dividers, input borders |
 | `--foreground` | `#0F172A` | `#F1F5F9` | main text |
 | `--muted-foreground` | `#64748B` | `#94A3B8` | labels, notes |
-| `--primary` | `#4F46E5` | `#818CF8` | primary buttons, links (indigo) |
+| `--primary` | `#0969da` | `#4493f8` | links, focus (blue); see `--action` `#1f883d` / `#238636` for the primary button |
 | `--primary-foreground` | `#FFFFFF` | `#0F172A` | text on primary |
-| `--ring` | `#4F46E5` | `#818CF8` | focus ring |
+| `--ring` | `#0969da` | `#1f6feb` | focus ring |
 | `--destructive` | `#B91C1C` | `#F87171` | errors, deleted lines, delete |
 | `--success` | `#15803D` | `#4ADE80` | saved, added lines (custom token) |
 
@@ -44,7 +46,7 @@ Text must meet WCAG AA contrast (4.5:1) in both themes. Check any new color pair
 - Weights: 400 body, 600 headings and totals
 - Use Tailwind's default spacing scale only. No arbitrary values like `p-[13px]`
 - Radius from `--radius`: `0.5rem` for inputs and buttons, `0.75rem` (`rounded-xl`) for cards
-- Density: card and form padding is 12px (`p-3`), gaps between blocks 12px (`gap-3`), table cells `px-2 py-1.5` with small muted `text-xs` headers, page headings `text-xl`. Cards use a faint `shadow-xs` and a hairline ring. The nav is a compact sticky top bar; there is no bottom tab bar
+- Density: card and form padding is 12px (`p-3`), gaps between blocks 12px (`gap-3`), table cells `px-2 py-1.5` with small muted `text-xs` headers, page headings `text-xl`. Surfaces use `border border-border`; no shadow utilities on surfaces. The nav is a compact sticky top bar; there is no bottom tab bar
 - Code, file contents and oids use the system monospace stack (`font-mono`), `text-sm`
 - Page content: `max-w-4xl`, centered, 16px side padding on mobile
 - Mobile-first. Tables scroll horizontally inside their own container; the nav stays on one row
