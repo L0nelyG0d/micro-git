@@ -75,24 +75,32 @@ func testServer(t *testing.T) *Server {
 // a group adds its files here (users: #85).
 var sqliteGroups = map[string]string{
 	"auth_test.go": "users", "session_test.go": "users", "ratelimit_test.go": "users",
-	"repos_test.go": "repos", "rename_test.go": "repos", "delete_race_test.go": "repos",
+	"atomic_test.go": "repos", "repos_test.go": "repos", "rename_test.go": "repos", "delete_race_test.go": "repos",
 }
 
 // sqlitePending names the tests inside an enabled file that still need store
 // methods from a later issue; they skip under TEST_STORE=sqlite with that
 // issue in the message. An issue that ports the methods deletes the entry.
+// Each entry was checked by removing it and running under TEST_STORE=sqlite;
+// the stated issue is where that run first fails ("run"). Issues named only
+// after the first failure are by reading the test ("read").
 var sqlitePending = map[string]string{
-	"TestRenameRepo": "#88 (commits)",
-	"TestUpdateRepoDescriptionAndDefaultBranch": "#88 (commits) and #91 (branches)",
-	"TestEmptyFlag":                           "#88 (refs)",
-	"TestDeleteRepo":                          "#87 (objects) and #88 (refs)",
-	"TestListRepos":                           "#92 (ListRepos)",
-	"TestListReposPagination":                 "#92 (ListRepos)",
-	"TestListReposDefaultPageBoundary":        "#92 (ListRepos)",
-	"TestListReposTieBreaker":                 "#92 (ListRepos)",
-	"TestListReposValidationOrder":            "#92 (ListRepos)",
-	"TestReadsRacingRepoDeleteAre404":         "#87 and #88 (reads, commits)",
-	"TestMissingObjectInExistingRepoStays500": "#87 and #88 (reads, commits)",
+	// run: first failure is mustCommit (500, errNotPorted in Objects/PutObjectsMoveRef)
+	"TestRenameRepo": "#87 and #88 (commit; run)",
+	"TestUpdateRepoDescriptionAndDefaultBranch":       "#87 and #88 (commit; run), #91 (branches; read)",
+	"TestReadsRacingRepoDeleteAre404":                 "#87 and #88 (commit; run)",
+	"TestMissingObjectInExistingRepoStays500":         "#87 and #88 (commit; run)",
+	"TestDeleteBranchRacingSetDefault":                "#87 and #88 (fixture commit; run), #91 (branches; read)",
+	"TestPatchDefaultBranchMissingAndRepoGone":        "#87 and #88 (fixture commit; run)",
+	"TestPatchDefaultBranchNotSkippedByStaleSnapshot": "#87 and #88 (fixture commit; run), #91 (branches; read)",
+	// run: first failure is PutObject (objects), then CreateRef/ListRefs (refs)
+	"TestEmptyFlag":  "#87 (PutObject; run) and #88 (refs; read)",
+	"TestDeleteRepo": "#87 (PutObject; run) and #88 (refs; read)",
+	// run: the list endpoint returns 500 (ListRepos errNotPorted)
+	"TestListRepos":                    "#92 (ListRepos; run)",
+	"TestListReposPagination":          "#92 (ListRepos; run)",
+	"TestListReposDefaultPageBoundary": "#92 (ListRepos; run)",
+	"TestListReposTieBreaker":          "#92 (ListRepos; run)",
 }
 
 // testSourceFile returns the base name of the file that holds the running
