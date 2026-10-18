@@ -267,7 +267,7 @@ describe("commits", () => {
 
   it("lists tree entries in UTF-8 byte order", async () => {
     await seeded("ann", "r", [{ path: "\u{1F600}", content: "a" }, { path: "\uFF5E", content: "b" }])
-    expect((await svc.getTreeRoot("ann", "r", "main")).entries.map((e) => e.name)).toEqual(["\uFF5E", "\u{1F600}", "README.md"].sort((a, b) => (a === "README.md" ? 1 : b === "README.md" ? -1 : 0)))
+    expect((await svc.getTreeRoot("ann", "r", "main")).entries.map((e) => e.name)).toEqual(["\uFF5E", "\u{1F600}"])
   })
 
   it("history is computed from the stored commits: parents, order, paging", async () => {
