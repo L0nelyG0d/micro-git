@@ -110,11 +110,7 @@ function CreateBranch({ owner, repo, current, onCreated, onUnauthorized }: Props
       onCreated(trimmed)
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) onUnauthorized()
-      setError(
-        e instanceof ApiError
-          ? e.message
-          : "Could not reach the server. Check your connection and try again.",
-      )
+      setError(errorMessage(e))
     } finally {
       setBusy(false)
     }

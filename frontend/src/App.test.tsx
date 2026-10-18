@@ -115,6 +115,22 @@ it("shows the login error inline, clears the password and re-enables submit", as
   expect(await screen.findByRole("button", { name: "Log in" })).toBeEnabled()
 })
 
+it.each([
+  ["/login", "Log in", "POST /api/auth/login"],
+  ["/register", "Register", "POST /api/auth/register"],
+])("shows the unreachable text, not the browser's, on a network failure at %s", async (path, button, key) => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes[key] = () => new TypeError("Failed to fetch")
+  renderAt(path)
+  await within(screen.getByRole("main")).findByRole("button", { name: button })
+  await userEvent.type(await screen.findByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "secret123")
+  await userEvent.click(screen.getByRole("button", { name: button }))
+  const alert = await screen.findByRole("alert")
+  expect(alert).toHaveTextContent("Could not reach the server. Check your connection and try again.")
+  expect(alert).not.toHaveTextContent(/failed to fetch/i)
+})
+
 it("shows a friendly wait message when login is rate limited", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["POST /api/auth/login"] = () =>

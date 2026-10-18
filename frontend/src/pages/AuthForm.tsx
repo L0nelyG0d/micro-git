@@ -2,6 +2,7 @@ import { useRef, useState } from "react"
 import type { FormEvent, ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { ApiError } from "@/services"
+import { errorMessage } from "@/lib/useFetch"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
@@ -52,7 +53,9 @@ export function AuthForm({ title, submitLabel, notice, footer, onSubmit }: Props
       setError(
         err instanceof ApiError && err.status === 429
           ? `Too many attempts. Please wait ${formatWait(err.retryAfter)} and try again.`
-          : err instanceof Error
+          : err instanceof ApiError || err instanceof TypeError
+            ? errorMessage(err)
+            : err instanceof Error
             ? err.message
             : "Something went wrong. Try again.",
       )

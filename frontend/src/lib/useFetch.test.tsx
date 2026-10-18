@@ -2,7 +2,8 @@ import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { request as api } from "@/services/http"
 import { cacheClear, invalidateAfterWrite, isImmutablePath } from "@/lib/fetchCache"
-import { useFetch } from "@/lib/useFetch"
+import { ApiError } from "@/services"
+import { errorMessage, UNREACHABLE_MESSAGE, useFetch } from "@/lib/useFetch"
 
 type Pending = { url: string; signal?: AbortSignal | null; resolve: (body: unknown) => void; fail: () => void }
 let pending: Pending[]
@@ -158,4 +159,15 @@ it("does not cache an answer that raced a write", async () => {
   h.unmount()
   const again = renderHook(() => useFetch<string>("/repos/o/r"))
   expect(again.result.current.data).toBeUndefined()
+})
+
+it.each([502, 503, 504])("errorMessage maps a %i answer to the unreachable text, with or without a body", (status) => {
+  expect(errorMessage(new ApiError(status, "bad gateway"))).toBe(UNREACHABLE_MESSAGE)
+  expect(errorMessage(new ApiError(status, "Something went wrong. Try again."))).toBe(UNREACHABLE_MESSAGE)
+})
+
+it("errorMessage maps a network TypeError to the unreachable text and keeps other ApiError messages", () => {
+  expect(errorMessage(new TypeError("Failed to fetch"))).toBe(UNREACHABLE_MESSAGE)
+  expect(errorMessage(new ApiError(500, "internal error"))).toBe("internal error")
+  expect(errorMessage(new ApiError(500, "Something went wrong. Try again."))).toBe("Something went wrong. Try again.")
 })
