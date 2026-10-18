@@ -59,13 +59,20 @@ Run these steps in order.
 
    | variable | required | purpose |
    |---|---|---|
-   | `DATABASE_URL` | yes | PostgreSQL connection string for the running backend |
+   | `STORE` | no | `db` (default) or `memory`. Anything else stops startup. `memory` needs no database and loses all data on exit (startup warning) |
+   | `DB_DRIVER` | no | `postgres` (default) or `sqlite`. Validated even when `STORE=memory` |
+   | `DATABASE_URL` | when `STORE` is not `memory` and `DB_DRIVER` is `postgres` | PostgreSQL connection string for the running backend |
+   | `SQLITE_PATH` | no | SQLite file used when `DB_DRIVER=sqlite`. Defaults to `./data/mg.db` |
    | `TEST_DATABASE_URL` | for DB tests | Connection string of a separate database or branch used by `go test`; the database tests are skipped when it is unset |
    | `JWT_SECRET` | yes | Key used to sign the session JWT. At least 32 bytes (the backend refuses to start with a shorter one); use a long random string, for example `openssl rand -base64 48` |
    | `DB_STATEMENT_TIMEOUT` | no | Postgres `statement_timeout` for every pooled connection, a Go duration from `1ms` to `1h` (default `15s`). A query that runs longer is cancelled and the request fails with a redacted 5xx |
    | `COOKIE_SECURE` | no | `true` adds the `Secure` attribute to the session cookie (needs HTTPS). Anything else, including unset, means off. Keep it off for local HTTP. Leaving it unset logs a startup warning |
    | `PORT` | no | Backend listen port, 1 to 65535. Defaults to `8080` |
    | `DB_MAX_CONNS` | no | Maximum size of the database connection pool, 1 to 1000. Defaults to `10`. Keep it below your database's connection limit divided by the number of backend instances |
+
+   Until the memory store (#82) and SQLite (#93) land, the backend refuses
+   `STORE=memory` and `DB_DRIVER=sqlite` at startup ("not available in this
+   build yet"); only Postgres runs.
 
    The pool also closes connections idle for more than 5 minutes
    (`MaxConnIdleTime`) and checks idle ones every 30 seconds
@@ -88,7 +95,7 @@ Run these steps in order.
    ```
 
 5. Run the backend (terminal 1). It listens on `:$PORT` (default `8080`) and
-   exits with an error if `DATABASE_URL` or `JWT_SECRET` is missing, if
+   exits with an error if `DATABASE_URL` (Postgres) or `JWT_SECRET` is missing, if
    `JWT_SECRET` is shorter than 32 bytes or if `PORT` is not a number from 1
    to 65535. It shuts down gracefully on Ctrl+C / SIGTERM (10 seconds for
    requests in flight).
