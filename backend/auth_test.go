@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,7 +52,7 @@ func testServer(t *testing.T) *Server {
 		srv.JWTSecret = []byte("test-secret")
 		return srv
 	case "sqlite":
-		t.Skip("TEST_STORE=sqlite: the SQLite store does not exist yet (#93)")
+		return newSQLiteServer(t)
 	case "postgres":
 	default:
 		t.Fatalf("TEST_STORE=%q: want memory, sqlite or postgres", kind)
@@ -64,6 +66,64 @@ func testServer(t *testing.T) *Server {
 		t.Fatalf("connect: %v", poolErr)
 	}
 	srv := NewServer(newPgxStore(testPool))
+	srv.JWTSecret = []byte("test-secret")
+	return srv
+}
+
+// sqliteGroups are the test files whose store methods gormStore has ported;
+// every other file still skips under TEST_STORE=sqlite. Each issue that ports
+// a group adds its files here (users: #85).
+var sqliteGroups = map[string]string{"auth_test.go": "users", "session_test.go": "users", "ratelimit_test.go": "users"}
+
+// testSourceFile returns the base name of the file that holds the running
+// Test function, found by walking the stack, so a helper in another file
+// (limitedServer in ratelimit_test.go, ...) does not change the group. A frame
+// counts as a test when its name is "Test" followed by an uppercase letter or
+// the end of the name (or a closure inside such a function); a helper named
+// like TestFoo that is not a test would fool it, so do not name helpers so.
+func testSourceFile() string {
+	pcs := make([]uintptr, 32)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for {
+		f, more := frames.Next()
+		name := f.Function[strings.LastIndex(f.Function, "/")+1:]
+		name = name[strings.Index(name, ".")+1:]
+		if isTestFuncName(name) && strings.HasSuffix(f.File, "_test.go") {
+			return filepath.Base(f.File)
+		}
+		if !more {
+			return ""
+		}
+	}
+}
+
+// isTestFuncName reports whether a function name (package stripped) has the
+// shape of a Test function: "Test" then an uppercase letter, an underscore
+// or the end, ignoring a closure suffix such as ".func1".
+func isTestFuncName(name string) bool {
+	if i := strings.Index(name, "."); i >= 0 {
+		name = name[:i]
+	}
+	rest, ok := strings.CutPrefix(name, "Test")
+	if !ok {
+		return false
+	}
+	return rest == "" || rest[0] == '_' || (rest[0] >= 'A' && rest[0] <= 'Z')
+}
+
+// newSQLiteServer builds a Server on a gormStore over a temp SQLite file, or
+// skips the test when its group is not ported yet. testServer is the caller.
+func newSQLiteServer(t *testing.T) *Server {
+	t.Helper()
+	file := testSourceFile()
+	if _, ok := sqliteGroups[file]; !ok {
+		t.Skip("TEST_STORE=sqlite: gormStore does not implement this group yet (#86 to #92)")
+	}
+	db := openSQLiteForTest(t)
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	srv := NewServer(newGormStore(db))
 	srv.JWTSecret = []byte("test-secret")
 	return srv
 }
