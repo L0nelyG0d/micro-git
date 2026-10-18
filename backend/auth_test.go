@@ -73,14 +73,33 @@ func testServer(t *testing.T) *Server {
 // sqliteGroups are the test files whose store methods gormStore has ported;
 // every other file still skips under TEST_STORE=sqlite. Each issue that ports
 // a group adds its files here (users: #85).
-var sqliteGroups = map[string]string{"auth_test.go": "users", "session_test.go": "users"}
+var sqliteGroups = map[string]string{"auth_test.go": "users", "session_test.go": "users", "ratelimit_test.go": "users"}
+
+// testSourceFile returns the base name of the file that holds the running
+// Test function, found by walking the stack, so a helper in another file
+// (limitedServer in ratelimit_test.go, ...) does not change the group.
+func testSourceFile() string {
+	pcs := make([]uintptr, 32)
+	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
+	for {
+		f, more := frames.Next()
+		name := f.Function[strings.LastIndex(f.Function, "/")+1:]
+		name = name[strings.Index(name, ".")+1:]
+		if strings.HasPrefix(name, "Test") && strings.HasSuffix(f.File, "_test.go") {
+			return filepath.Base(f.File)
+		}
+		if !more {
+			return ""
+		}
+	}
+}
 
 // newSQLiteServer builds a Server on a gormStore over a temp SQLite file, or
 // skips the test when its group is not ported yet. testServer is the caller.
 func newSQLiteServer(t *testing.T) *Server {
 	t.Helper()
-	_, file, _, _ := runtime.Caller(2)
-	if _, ok := sqliteGroups[filepath.Base(file)]; !ok {
+	file := testSourceFile()
+	if _, ok := sqliteGroups[file]; !ok {
 		t.Skip("TEST_STORE=sqlite: gormStore does not implement this group yet (#86 to #92)")
 	}
 	db := openSQLiteForTest(t)
