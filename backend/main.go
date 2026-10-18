@@ -30,12 +30,12 @@ func main() {
 	if err := checkStoreAvailable(cfg); err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	pool, err := NewPool(context.Background(), cfg.DatabaseURL, cfg.Pool)
+	store, closeStore, err := openStore(context.Background(), cfg)
 	if err != nil {
 		log.Fatalf("database: %v", err)
 	}
 
-	srv := NewServer(newPgxStore(pool))
+	srv := NewServer(store)
 	srv.JWTSecret = []byte(cfg.JWTSecret)
 	srv.CookieSecure = cfg.CookieSecure
 
@@ -57,7 +57,7 @@ func main() {
 
 	select {
 	case err := <-errc:
-		pool.Close()
+		closeStore()
 		log.Fatalf("server: %v", err)
 	case <-ctx.Done():
 	}
@@ -68,14 +68,29 @@ func main() {
 	if err := httpSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Printf("shutdown: %v", err)
 	}
-	pool.Close()
+	closeStore()
 }
 
-// checkStoreAvailable refuses settings whose store is not built yet (#82
-// memory, #93 SQLite) so main never falls back to Postgres silently.
+// openStore builds the Store the config names. STORE=memory opens no database
+// and no pool; otherwise it opens the Postgres pool. The returned func releases
+// the store's resources.
+func openStore(ctx context.Context, cfg Config) (Store, func(), error) {
+	if cfg.Store == StoreMemory {
+		return newMemStore(), func() {}, nil
+	}
+	pool, err := NewPool(ctx, cfg.DatabaseURL, cfg.Pool)
+	if err != nil {
+		return nil, nil, err
+	}
+	return newPgxStore(pool), pool.Close, nil
+}
+
+// checkStoreAvailable refuses settings whose store is not built yet (#93
+// SQLite) so main never falls back to Postgres silently. STORE=memory needs no
+// database, so DB_DRIVER does not matter for it.
 func checkStoreAvailable(cfg Config) error {
 	if cfg.Store == StoreMemory {
-		return errors.New("STORE=memory is not available in this build yet")
+		return nil
 	}
 	if cfg.DBDriver == DriverSQLite {
 		return errors.New("DB_DRIVER=sqlite is not available in this build yet")
