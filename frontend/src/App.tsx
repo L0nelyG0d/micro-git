@@ -3,6 +3,7 @@ import type { RefObject } from "react"
 import { matchPath, Outlet, useLocation } from "react-router-dom"
 import { Toaster } from "sonner"
 import { AuthProvider, useAuth } from "@/auth/AuthContext"
+import { ErrorBoundary } from "@/components/ErrorBoundary"
 import { Nav } from "@/components/Nav"
 import { LoadingBlock } from "@/components/StateViews"
 
@@ -68,6 +69,7 @@ function TitleSync({ mainRef }: { mainRef: RefObject<HTMLElement | null> }) {
  */
 function Pages() {
   const { user, loading } = useAuth()
+  const { pathname } = useLocation()
   // The first answer of /auth/me is not a change (nothing was fetched for
   // another user yet); only a later switch bumps the epoch and remounts.
   const [seen, setSeen] = useState<{ id: number | null } | null>(null)
@@ -78,9 +80,11 @@ function Pages() {
     if (seen) setEpoch((e) => e + 1)
   }
   return (
-    <Suspense fallback={<LoadingBlock label="Loading page" />} key={epoch}>
-      <Outlet />
-    </Suspense>
+    <ErrorBoundary resetKey={pathname}>
+      <Suspense fallback={<LoadingBlock label="Loading page" />} key={epoch}>
+        <Outlet />
+      </Suspense>
+    </ErrorBoundary>
   )
 }
 
