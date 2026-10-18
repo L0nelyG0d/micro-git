@@ -18,7 +18,7 @@ var t0 = time.Date(2026, 1, 2, 15, 4, 5, 0, time.UTC)
 // newUser registers a user through the API and returns its id.
 func newUser(t *testing.T, s *Server, name, password string) int64 {
 	t.Helper()
-	cleanupUser(t, s.DB, name)
+	cleanupUser(t, rawDB(s), name)
 	rec := post(s, regBody(name, password))
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("register: %d %s", rec.Code, rec.Body)
@@ -244,7 +244,7 @@ func TestMeDeletedUser(t *testing.T) {
 	name := uniqueName(t)
 	newUser(t, s, name, "correct horse")
 	cookie := sessionCookie(t, do(s, http.MethodPost, "/auth/login", loginBody(name, "correct horse"), nil))
-	if _, err := s.DB.Exec(context.Background(), `DELETE FROM users WHERE username = $1`, name); err != nil {
+	if _, err := rawDB(s).Exec(context.Background(), `DELETE FROM users WHERE username = $1`, name); err != nil {
 		t.Fatal(err)
 	}
 	wantError(t, do(s, http.MethodGet, "/auth/me", "", cookie), 401, "authentication required")

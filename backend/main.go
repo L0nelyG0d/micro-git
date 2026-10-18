@@ -32,7 +32,7 @@ func main() {
 		log.Fatalf("database: %v", err)
 	}
 
-	srv := NewServer(pool)
+	srv := NewServer(newPgxStore(pool))
 	srv.JWTSecret = []byte(cfg.JWTSecret)
 	srv.CookieSecure = cfg.CookieSecure
 

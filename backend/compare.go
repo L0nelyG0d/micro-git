@@ -35,7 +35,7 @@ func (s *Server) compare(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	store := NewRepoStore(s.DB, repo.ID).Objects(r.Context())
+	store := s.Store.Objects(r.Context(), repo.ID)
 	bc, err := loadCommit(store, baseOID)
 	if err != nil {
 		s.readError(w, r, repo, err)

@@ -26,7 +26,7 @@ func newUserCookie(t *testing.T, s *Server) (string, *http.Cookie) {
 	name := uniqueName(t)
 	uid := newUser(t, s, name, "correct horse")
 	t.Cleanup(func() { // runs before the user cleanup (LIFO); repos cascade
-		if _, err := s.DB.Exec(context.Background(), `DELETE FROM repos WHERE owner_id = $1`, uid); err != nil {
+		if _, err := rawDB(s).Exec(context.Background(), `DELETE FROM repos WHERE owner_id = $1`, uid); err != nil {
 			t.Errorf("cleanup repos: %v", err)
 		}
 	})
@@ -81,7 +81,7 @@ func TestCreateRepo(t *testing.T) {
 		t.Errorf("repo = %+v", r)
 	}
 	var n int
-	_ = s.DB.QueryRow(context.Background(), `SELECT count(*) FROM refs WHERE repo_id = $1`, r.ID).Scan(&n)
+	_ = rawDB(s).QueryRow(context.Background(), `SELECT count(*) FROM refs WHERE repo_id = $1`, r.ID).Scan(&n)
 	if n != 0 {
 		t.Errorf("refs created: %d", n)
 	}
@@ -204,7 +204,7 @@ func TestEmptyFlag(t *testing.T) {
 	s := testServer(t)
 	owner, c := newUserCookie(t, s)
 	r := createRepo(t, s, c, `{"name":"e"}`)
-	rs := NewRepoStore(s.DB, r.ID)
+	rs := NewRepoStore(rawDB(s), r.ID)
 	oid, err := rs.Objects(context.Background()).PutObject("blob", []byte("x"))
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +235,7 @@ func TestDeleteRepo(t *testing.T) {
 	owner, c := newUserCookie(t, s)
 	_, other := newUserCookie(t, s)
 	r := createRepo(t, s, c, `{"name":"doomed"}`)
-	rs := NewRepoStore(s.DB, r.ID)
+	rs := NewRepoStore(rawDB(s), r.ID)
 	ctx := context.Background()
 	oid, err := rs.Objects(ctx).PutObject("blob", []byte("x"))
 	if err != nil {
@@ -262,7 +262,7 @@ func TestDeleteRepo(t *testing.T) {
 	wantError(t, do(s, http.MethodDelete, path, "", c), 404, "repository not found")
 	for _, table := range []string{"objects", "refs"} {
 		var n int
-		if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE repo_id = $1`, r.ID).Scan(&n); err != nil || n != 0 {
+		if err := rawDB(s).QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE repo_id = $1`, r.ID).Scan(&n); err != nil || n != 0 {
 			t.Errorf("%s rows after delete = %d, err %v", table, n, err)
 		}
 	}
@@ -360,10 +360,10 @@ func TestListReposDefaultPageBoundary(t *testing.T) {
 	owner, c := newUserCookie(t, s)
 	createRepo(t, s, c, `{"name":"r0"}`)
 	var ownerID int64
-	if err := s.DB.QueryRow(t.Context(), `SELECT id FROM users WHERE username = $1`, owner).Scan(&ownerID); err != nil {
+	if err := rawDB(s).QueryRow(t.Context(), `SELECT id FROM users WHERE username = $1`, owner).Scan(&ownerID); err != nil {
 		t.Fatal(err)
 	}
-	_, err := s.DB.Exec(t.Context(),
+	_, err := rawDB(s).Exec(t.Context(),
 		`INSERT INTO repos (owner_id, name, created_at)
 		 SELECT $1, 'r' || g, $2::timestamptz + g * interval '1 second' FROM generate_series(1, 49) g`,
 		ownerID, t0)
@@ -374,7 +374,7 @@ func TestListReposDefaultPageBoundary(t *testing.T) {
 	if len(p.Repos) != 50 || p.HasMore || p.PerPage != 50 {
 		t.Fatalf("50 repos: len %d has_more %v per_page %d", len(p.Repos), p.HasMore, p.PerPage)
 	}
-	if _, err := s.DB.Exec(t.Context(),
+	if _, err := rawDB(s).Exec(t.Context(),
 		`INSERT INTO repos (owner_id, name, created_at) VALUES ($1, 'r50', $2)`, ownerID, t0); err != nil {
 		t.Fatal(err)
 	}
@@ -394,7 +394,7 @@ func TestListReposTieBreaker(t *testing.T) {
 		createRepo(t, s, c, `{"name":"`+n+`"}`)
 	}
 	// Identical created_at: only id DESC makes the order (and the pages) stable.
-	if _, err := s.DB.Exec(t.Context(),
+	if _, err := rawDB(s).Exec(t.Context(),
 		`UPDATE repos SET created_at = $1 WHERE owner_id = (SELECT id FROM users WHERE username = $2)`, t0, owner); err != nil {
 		t.Fatal(err)
 	}

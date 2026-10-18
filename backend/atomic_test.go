@@ -57,7 +57,7 @@ func TestDeleteBranchRacingSetDefault(t *testing.T) {
 	rec := do(f.s, http.MethodDelete, f.base+"/branches/dev", "", c)
 	f.s.hook = nil
 	wantError(t, rec, 400, "cannot delete the default branch")
-	if _, err := NewRepoStore(f.s.DB, f.repo.ID).GetRef(t.Context(), "dev"); err != nil {
+	if _, err := NewRepoStore(rawDB(f.s), f.repo.ID).GetRef(t.Context(), "dev"); err != nil {
 		t.Errorf("default branch was deleted: %v", err)
 	}
 }

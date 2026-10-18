@@ -9,7 +9,6 @@ import (
 
 	"github.com/L0nelyG0d/micro-git/backend/gitobj"
 	"github.com/L0nelyG0d/micro-git/backend/treebuild"
-	"github.com/jackc/pgx/v5"
 )
 
 type treeEntryJSON struct {
@@ -41,8 +40,8 @@ var errPathNotFound = errors.New("path not found")
 // commit oid of this repository) to a commit oid. On failure it has written
 // 404 "ref not found" (or 500) and returns false. Reused by the commit log.
 func (s *Server) resolveRef(w http.ResponseWriter, r *http.Request, repo Repo, ref string) (string, bool) {
-	oid, err := NewRepoStore(s.DB, repo.ID).ResolveCommit(r.Context(), ref)
-	if errors.Is(err, ErrRefNotFound) {
+	oid, err := s.Store.ResolveCommit(r.Context(), repo.ID, ref)
+	if errors.Is(err, ErrNotFound) {
 		if s.repoGone(r, repo) { // deleted meanwhile: its refs went with it
 			writeError(w, http.StatusNotFound, "repository not found")
 			return "", false
@@ -120,8 +119,8 @@ func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, 
 		return repo, "", "", nil, "", false, cacheHeaders{}, false
 	}
 	ref := r.PathValue("ref")
-	head, err := FindRepoRef(r.Context(), s.DB, r.PathValue("owner"), r.PathValue("repo"), ref)
-	if errors.Is(err, errRepoNotFound) {
+	head, err := s.Store.FindRepoRef(r.Context(), r.PathValue("owner"), r.PathValue("repo"), ref)
+	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "repository not found")
 		return fail()
 	}
@@ -163,7 +162,7 @@ func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, 
 	} else {
 		cache = immutableCache(repo.Private)
 	}
-	store = primed(NewRepoStore(s.DB, repo.ID).Objects(r.Context()), objs)
+	store = primed(s.Store.Objects(r.Context(), repo.ID), objs)
 	root, err := commitTree(store, commit)
 	if err == nil {
 		oid, isDir, err = walkPath(store, root, path)
@@ -236,10 +235,8 @@ func (s *Server) getBlob(w http.ResponseWriter, r *http.Request) {
 // repoGone reports whether the repository no longer exists. It ignores a
 // canceled request context so the check still answers.
 func (s *Server) repoGone(r *http.Request, repo Repo) bool {
-	var one int
-	err := s.DB.QueryRow(context.WithoutCancel(r.Context()),
-		`SELECT 1 FROM repos WHERE id = $1`, repo.ID).Scan(&one)
-	return errors.Is(err, pgx.ErrNoRows)
+	exists, err := s.Store.RepoExists(context.WithoutCancel(r.Context()), repo.ID)
+	return err == nil && !exists
 }
 
 // readError is internalError for the read endpoints. A missing object or a

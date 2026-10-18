@@ -56,6 +56,12 @@ type commitResponse struct {
 	Branch string  `json:"branch"`
 }
 
+// tipMovedError is returned from the commit transaction when the branch tip
+// is no longer the one the client expected.
+type tipMovedError struct{ current string }
+
+func (e *tipMovedError) Error() string { return "branch tip has moved" }
+
 func writeTipMoved(w http.ResponseWriter, current string) {
 	writeJSON(w, http.StatusConflict, map[string]string{
 		"error": "branch tip has moved", "current_tip": current,
@@ -90,7 +96,6 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 	dec.DisallowUnknownFields()
 	jsonOK := dec.Decode(&req) == nil && dec.Decode(&struct{}{}) == io.EOF
 
-	rs := NewRepoStore(s.DB, repo.ID)
 	// 404 for a missing branch comes before 403, so it needs the body. The
 	// same statement reads the tip and its commit, which the transaction below
 	// reuses: a tip that moves in between is caught by the compare-and-swap.
@@ -98,7 +103,7 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 	var tipBody []byte
 	if jsonOK && validBranchName(req.Branch) && !repo.Empty {
 		var err error
-		if tip, tipBody, err = rs.GetRefCommit(r.Context(), req.Branch); errors.Is(err, ErrRefNotFound) {
+		if tip, tipBody, err = s.Store.GetRefCommit(r.Context(), repo.ID, req.Branch); errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, "branch not found")
 			return
 		} else if err != nil {
@@ -151,7 +156,7 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 	fail := func(err error) {
 		// The tip was read before the transaction, so a repository deleted
 		// since then shows up as missing trees, not only as a foreign key.
-		if isForeignKeyViolation(err) ||
+		if errors.Is(err, ErrForeignKey) ||
 			errors.Is(err, treebuild.ErrNotFound) && s.repoGone(r, repo) {
 			writeError(w, http.StatusNotFound, "repository not found")
 			return
@@ -159,69 +164,61 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 	}
 	// One transaction: objects and the ref move commit together or not at all.
-	tx, err := s.DB.Begin(ctx)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	defer func() { _ = tx.Rollback(ctx) }()
-	ts := NewRepoStore(tx, repo.ID)
-	objs := ts.Objects(ctx)
-
-	root := ""
-	if tip != "" {
-		pc, err := gitobj.ParseCommit(tipBody)
-		if err != nil {
-			internalError(w, err)
-			return
+	var oid, tree string
+	err = s.Store.InTx(ctx, func(ts Store) error {
+		objs := ts.Objects(ctx, repo.ID)
+		root := ""
+		if tip != "" {
+			pc, err := gitobj.ParseCommit(tipBody)
+			if err != nil {
+				return err
+			}
+			root = pc.Tree
 		}
-		root = pc.Tree
-	}
-	tree, newObjs, err := treebuild.Build(objs, root, changes)
+		var newObjs []treebuild.Object
+		var err error
+		tree, newObjs, err = treebuild.Build(objs, root, changes)
+		if err != nil {
+			return err
+		}
+		if req.ExpectedTip != tip {
+			return &tipMovedError{current: tip}
+		}
+
+		sig := gitobj.Signature{Name: u.Username, Email: u.Username + "@" + commitEmailTLD, Unix: s.Now().Unix()}
+		c := gitobj.Commit{Tree: tree, Author: sig, Committer: sig, Message: msg}
+		if tip != "" {
+			c.Parents = []string{tip}
+		}
+		body, err := gitobj.SerializeCommit(c)
+		if err != nil {
+			return err
+		}
+		// Blobs, trees and the commit go in with the ref move in one statement.
+		oid = gitobj.Hash(gitobj.TypeCommit, body)
+		newObjs = append(newObjs, treebuild.Object{Type: gitobj.TypeCommit, Body: body})
+		return ts.PutObjectsMoveRef(ctx, repo.ID, newObjs, req.Branch, tip, oid)
+	})
 	var verr *treebuild.Error
-	if errors.As(err, &verr) {
+	var moved *tipMovedError
+	switch {
+	case errors.As(err, &verr):
 		writeError(w, http.StatusBadRequest, verr.Error())
 		return
-	}
-	if err != nil {
-		fail(err)
+	case errors.As(err, &moved):
+		writeTipMoved(w, moved.current)
 		return
-	}
-	if req.ExpectedTip != tip {
-		writeTipMoved(w, tip)
-		return
-	}
-
-	sig := gitobj.Signature{Name: u.Username, Email: u.Username + "@" + commitEmailTLD, Unix: s.Now().Unix()}
-	c := gitobj.Commit{Tree: tree, Author: sig, Committer: sig, Message: msg}
-	if tip != "" {
-		c.Parents = []string{tip}
-	}
-	body, err := gitobj.SerializeCommit(c)
-	if err != nil {
-		internalError(w, err)
-		return
-	}
-	// Blobs, trees and the commit go in with the ref move in one statement.
-	oid := gitobj.Hash(gitobj.TypeCommit, body)
-	newObjs = append(newObjs, treebuild.Object{Type: gitobj.TypeCommit, Body: body})
-	err = ts.PutObjectsMoveRef(ctx, newObjs, req.Branch, tip, oid)
-	if errors.Is(err, ErrRefMoved) {
-		_ = tx.Rollback(ctx)
-		current, gerr := NewRepoStore(s.DB, repo.ID).GetRef(ctx, req.Branch)
-		if gerr != nil && !errors.Is(gerr, ErrRefNotFound) {
+	case errors.Is(err, ErrConflict):
+		// The swap lost and the transaction rolled back with it.
+		current, gerr := s.Store.GetRef(ctx, repo.ID, req.Branch)
+		if gerr != nil && !errors.Is(gerr, ErrNotFound) {
 			internalError(w, gerr)
 			return
 		}
 		writeTipMoved(w, current)
 		return
-	}
-	if err != nil {
+	case err != nil:
 		fail(err)
-		return
-	}
-	if err := tx.Commit(ctx); err != nil {
-		internalError(w, err)
 		return
 	}
 	resp := commitResponse{OID: oid, Tree: tree, Branch: req.Branch}

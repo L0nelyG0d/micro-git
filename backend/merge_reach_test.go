@@ -58,7 +58,7 @@ func TestMergeStatementCountConstant(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	s := NewServer(pool)
+	s := NewServer(newPgxStore(pool))
 	s.JWTSecret = f.s.JWTSecret
 	rec := do(s, "POST", mergeURL(f.owner, f.repo), mergeBody("main", "long"), f.c)
 	if rec.Code != 200 {

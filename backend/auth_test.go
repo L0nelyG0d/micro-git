@@ -51,7 +51,7 @@ func testServer(t *testing.T) *Server {
 	if poolErr != nil {
 		t.Fatalf("connect: %v", poolErr)
 	}
-	srv := NewServer(testPool)
+	srv := NewServer(newPgxStore(testPool))
 	srv.JWTSecret = []byte("test-secret")
 	return srv
 }
@@ -101,7 +101,7 @@ func wantError(t *testing.T, rec *httptest.ResponseRecorder, status int, msg str
 func TestRegisterSuccess(t *testing.T) {
 	s := testServer(t)
 	name := uniqueName(t)
-	cleanupUser(t, s.DB, name)
+	cleanupUser(t, rawDB(s), name)
 
 	rec := post(s, regBody(name, "correct horse"))
 	if rec.Code != http.StatusCreated {
@@ -129,7 +129,7 @@ func TestRegisterSuccess(t *testing.T) {
 	}
 
 	var dbName, hash string
-	err := s.DB.QueryRow(context.Background(), `SELECT username, password_hash FROM users WHERE id = $1`, int64(id)).Scan(&dbName, &hash)
+	err := rawDB(s).QueryRow(context.Background(), `SELECT username, password_hash FROM users WHERE id = $1`, int64(id)).Scan(&dbName, &hash)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +144,7 @@ func TestRegisterSuccess(t *testing.T) {
 func TestRegisterLowercases(t *testing.T) {
 	s := testServer(t)
 	name := uniqueName(t)
-	cleanupUser(t, s.DB, name)
+	cleanupUser(t, rawDB(s), name)
 
 	rec := post(s, regBody(strings.ToUpper(name), "correct horse"))
 	if rec.Code != http.StatusCreated {
@@ -156,7 +156,7 @@ func TestRegisterLowercases(t *testing.T) {
 		t.Errorf("username = %q, want %q", got.Username, name)
 	}
 	var stored string
-	if err := s.DB.QueryRow(context.Background(), `SELECT username FROM users WHERE id = $1`, got.ID).Scan(&stored); err != nil || stored != name {
+	if err := rawDB(s).QueryRow(context.Background(), `SELECT username FROM users WHERE id = $1`, got.ID).Scan(&stored); err != nil || stored != name {
 		t.Errorf("stored = %q, err %v", stored, err)
 	}
 }
@@ -164,7 +164,7 @@ func TestRegisterLowercases(t *testing.T) {
 func TestRegisterDuplicate(t *testing.T) {
 	s := testServer(t)
 	name := uniqueName(t)
-	cleanupUser(t, s.DB, name)
+	cleanupUser(t, rawDB(s), name)
 
 	if rec := post(s, regBody(name, "correct horse")); rec.Code != http.StatusCreated {
 		t.Fatalf("first register: %d %s", rec.Code, rec.Body)
@@ -182,7 +182,7 @@ func TestRegisterDuplicate(t *testing.T) {
 func TestRegisterConcurrentDuplicate(t *testing.T) {
 	s := testServer(t)
 	name := uniqueName(t)
-	cleanupUser(t, s.DB, name)
+	cleanupUser(t, rawDB(s), name)
 
 	const n = 6
 	codes := make([]int, n)
@@ -227,7 +227,7 @@ func TestRegisterPasswordLength(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			name := uniqueName(t)
-			cleanupUser(t, s.DB, name)
+			cleanupUser(t, rawDB(s), name)
 			rec := post(s, regBody(name, tc.password))
 			if tc.wantOK {
 				if rec.Code != http.StatusCreated {
@@ -262,7 +262,7 @@ func TestRegisterLengthBoundaries(t *testing.T) {
 	s := testServer(t)
 	for _, n := range []int{3, 32} {
 		name := "z" + strings.Repeat("9", n-1)
-		cleanupUser(t, s.DB, name)
+		cleanupUser(t, rawDB(s), name)
 		if rec := post(s, regBody(name, "correct horse")); rec.Code != http.StatusCreated {
 			t.Errorf("len %d: status %d body %s", n, rec.Code, rec.Body)
 		}
@@ -305,4 +305,10 @@ func TestRegisterWrongMethod(t *testing.T) {
 		NewHandler().ServeHTTP(rec, httptest.NewRequest(m, "/auth/register", nil))
 		wantError(t, rec, http.StatusMethodNotAllowed, "method not allowed")
 	}
+}
+
+// rawDB returns the pgx pool behind a test server, for tests that seed or
+// inspect rows directly. Handlers never use it; they go through Server.Store.
+func rawDB(s *Server) *pgxpool.Pool {
+	return s.Store.(*pgxStore).pool
 }

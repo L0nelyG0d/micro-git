@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/L0nelyG0d/micro-git/backend/gitobj"
@@ -11,6 +13,7 @@ import (
 	"github.com/L0nelyG0d/micro-git/backend/treebuild"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // querier is the part of *pgxpool.Pool and pgx.Tx the stores need, so a store
@@ -19,22 +22,6 @@ type querier interface {
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
-// Ref errors. Check with errors.Is.
-var (
-	ErrRefNotFound = errors.New("ref not found")
-	ErrRefExists   = errors.New("ref already exists")
-	// ErrRefMoved is returned by UpdateRef when the compare-and-swap lost: the
-	// ref no longer has the expected oid (or already exists, for a first
-	// commit). The ref is left unchanged.
-	ErrRefMoved = errors.New("ref has moved")
-)
-
-// Ref is a branch: a name pointing at a commit oid.
-type Ref struct {
-	Name string
-	OID  string
 }
 
 // RepoStore gives access to one repository's objects and refs. Handlers
@@ -153,7 +140,7 @@ func (o *objectStore) GetObjects(oids []string) (map[string]treebuild.Object, er
 }
 
 // GetRefCommit returns the oid a branch points at together with that commit
-// object's body, in one statement. ErrRefNotFound if there is no such branch.
+// object's body, in one statement. ErrNotFound if there is no such branch.
 func (rs *RepoStore) GetRefCommit(ctx context.Context, name string) (string, []byte, error) {
 	var oid string
 	var body []byte
@@ -162,14 +149,14 @@ func (rs *RepoStore) GetRefCommit(ctx context.Context, name string) (string, []b
 		 JOIN objects o ON o.repo_id = r.repo_id AND o.oid = r.oid
 		 WHERE r.repo_id = $1 AND r.name = $2`, rs.repoID, name).Scan(&oid, &body)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil, ErrRefNotFound
+		return "", nil, ErrNotFound
 	}
 	return oid, body, err
 }
 
 // PutObjectsMoveRef stores objs and moves the branch like UpdateRef (a
 // compare-and-swap from oldOID to newOID, empty oldOID = create) in one
-// statement. It returns ErrRefMoved when the swap lost; the caller must then
+// statement. It returns ErrConflict when the swap lost; the caller must then
 // roll back its transaction so the objects are not kept.
 func (rs *RepoStore) PutObjectsMoveRef(ctx context.Context, objs []treebuild.Object, name, oldOID, newOID string) error {
 	oids, types, data := objectArrays(objs)
@@ -193,18 +180,18 @@ func (rs *RepoStore) PutObjectsMoveRef(ctx context.Context, objs []treebuild.Obj
 		return err
 	}
 	if moved == 0 {
-		return ErrRefMoved
+		return ErrConflict
 	}
 	return nil
 }
 
-// GetRef returns the oid of a branch, or ErrRefNotFound.
+// GetRef returns the oid of a branch, or ErrNotFound.
 func (rs *RepoStore) GetRef(ctx context.Context, name string) (string, error) {
 	var oid string
 	err := rs.db.QueryRow(ctx,
 		`SELECT oid FROM refs WHERE repo_id = $1 AND name = $2`, rs.repoID, name).Scan(&oid)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", ErrRefNotFound
+		return "", ErrNotFound
 	}
 	return oid, err
 }
@@ -228,7 +215,7 @@ func (rs *RepoStore) ListRefs(ctx context.Context) ([]Ref, error) {
 	return refs, rows.Err()
 }
 
-// CreateRef adds a new branch; ErrRefExists if the name is taken.
+// CreateRef adds a new branch; ErrConflict if the name is taken.
 func (rs *RepoStore) CreateRef(ctx context.Context, name, oid string) error {
 	tag, err := rs.db.Exec(ctx,
 		`INSERT INTO refs (repo_id, name, oid) VALUES ($1, $2, $3)
@@ -237,12 +224,12 @@ func (rs *RepoStore) CreateRef(ctx context.Context, name, oid string) error {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrRefExists
+		return ErrConflict
 	}
 	return nil
 }
 
-// DeleteRef removes a branch; ErrRefNotFound if it does not exist.
+// DeleteRef removes a branch; ErrNotFound if it does not exist.
 func (rs *RepoStore) DeleteRef(ctx context.Context, name string) error {
 	tag, err := rs.db.Exec(ctx,
 		`DELETE FROM refs WHERE repo_id = $1 AND name = $2`, rs.repoID, name)
@@ -250,14 +237,14 @@ func (rs *RepoStore) DeleteRef(ctx context.Context, name string) error {
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrRefNotFound
+		return ErrNotFound
 	}
 	return nil
 }
 
 // UpdateRef is a compare-and-swap: it moves the branch to newOID only if it
 // currently points at oldOID. An empty oldOID means "must not exist" (the first
-// commit) and creates the branch. Otherwise it returns ErrRefMoved and leaves
+// commit) and creates the branch. Otherwise it returns ErrConflict and leaves
 // the ref unchanged.
 func (rs *RepoStore) UpdateRef(ctx context.Context, name, oldOID, newOID string) error {
 	var tag pgconn.CommandTag
@@ -275,43 +262,35 @@ func (rs *RepoStore) UpdateRef(ctx context.Context, name, oldOID, newOID string)
 		return err
 	}
 	if tag.RowsAffected() == 0 {
-		return ErrRefMoved
+		return ErrConflict
 	}
 	return nil
 }
 
 // ResolveCommit resolves a branch name or a full 40-char lowercase-hex commit
 // oid of this repository to a commit oid. A branch with that name wins. An oid
-// that is missing or not a commit gives ErrRefNotFound.
+// that is missing or not a commit gives ErrNotFound.
 func (rs *RepoStore) ResolveCommit(ctx context.Context, ref string) (string, error) {
 	oid, err := rs.GetRef(ctx, ref)
 	if err == nil {
 		return oid, nil
 	}
-	if !errors.Is(err, ErrRefNotFound) {
+	if !errors.Is(err, ErrNotFound) {
 		return "", err
 	}
 	if !gitobj.ValidOID(ref) {
-		return "", ErrRefNotFound
+		return "", ErrNotFound
 	}
 	var t string
 	err = rs.db.QueryRow(ctx,
 		`SELECT type FROM objects WHERE repo_id = $1 AND oid = $2`, rs.repoID, ref).Scan(&t)
 	if errors.Is(err, pgx.ErrNoRows) || err == nil && t != string(gitobj.TypeCommit) {
-		return "", ErrRefNotFound
+		return "", ErrNotFound
 	}
 	if err != nil {
 		return "", err
 	}
 	return ref, nil
-}
-
-// CommitRow is one commit of a first-parent walk: its oid, raw body and the
-// first parent named in its header ("" for a root).
-type CommitRow struct {
-	OID    string
-	Data   []byte
-	Parent string
 }
 
 // WalkFirstParents returns the first-parent chain starting at tip, newest
@@ -363,13 +342,6 @@ SELECT oid, data, COALESCE(parent, '') FROM walk ORDER BY depth`,
 		return nil, fmt.Errorf("%w: %s", treebuild.ErrNotFound, last.Parent)
 	}
 	return out, nil
-}
-
-// Reachability tells, for two commits a and b, whether each is reachable from
-// the other (a commit is reachable from itself).
-type Reachability struct {
-	AFromB bool // a is reachable from b
-	BFromA bool // b is reachable from a
 }
 
 // CommitReachability walks the parents of a and of b together, following every
@@ -445,16 +417,6 @@ func primed(s treebuild.Store, objs map[string]linediff.Object) treebuild.Store 
 	return &primedStore{Store: s, objs: objs}
 }
 
-// ReadHead is what the tree and blob endpoints need up front, fetched in one
-// statement: the repository, the branch tip named by the ref (HasRef false if
-// there is no such branch), and the tip commit with its root tree.
-type ReadHead struct {
-	Repo    Repo
-	HasRef  bool
-	Tip     string
-	Objects map[string]linediff.Object // tip commit and its root tree, when found
-}
-
 // Header patterns: a commit body starts "tree <40 hex>\n".
 const (
 	treeHeaderRE   = `^tree ([0-9a-f]{40})\n`
@@ -485,7 +447,7 @@ SELECT r.id, r.owner_id, u.username, r.name, r.description, r.default_branch, r.
 		&h.Repo.ID, &h.Repo.OwnerID, &h.Repo.Owner, &h.Repo.Name, &h.Repo.Description,
 		&h.Repo.DefaultBranch, &h.Repo.Private, &created, &h.Repo.Empty, &tip, &commitData, &treeOID, &treeData)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return ReadHead{}, errRepoNotFound
+		return ReadHead{}, ErrNotFound
 	}
 	if err != nil {
 		return ReadHead{}, err
@@ -544,4 +506,268 @@ UNION ALL SELECT 'tree', o.oid, o.data FROM objects o
 		}
 	}
 	return objs, found, rows.Err()
+}
+
+// DeleteNonDefaultRef deletes a branch unless it is the repo's default, checked
+// inside the DELETE so a concurrent set-default cannot slip in between.
+// ErrNotFound if the branch does not exist, errDefaultBranch if it is the default.
+func (rs *RepoStore) DeleteNonDefaultRef(ctx context.Context, name string) error {
+	tag, err := rs.db.Exec(ctx,
+		`DELETE FROM refs WHERE repo_id = $1 AND name = $2
+		 AND NOT EXISTS (SELECT 1 FROM repos WHERE id = $1 AND default_branch = $2)`, rs.repoID, name)
+	if err != nil {
+		return err
+	}
+	if tag.RowsAffected() > 0 {
+		return nil
+	}
+	if _, err := rs.GetRef(ctx, name); err != nil {
+		return err // ErrNotFound, or a real error
+	}
+	return errDefaultBranch
+}
+
+const repoSelect = `SELECT r.id, r.owner_id, u.username, r.name, r.description, r.default_branch,
+	r.private, r.created_at, NOT EXISTS (SELECT 1 FROM refs WHERE repo_id = r.id)
+	FROM repos r JOIN users u ON u.id = r.owner_id`
+
+// returningRepo wraps an INSERT/UPDATE (without RETURNING) so it yields the
+// full repo row, joined like repoSelect, in one round trip.
+func returningRepo(stmt string) string {
+	return `WITH r AS (` + stmt + ` RETURNING *) ` +
+		strings.Replace(repoSelect, "FROM repos r", "FROM r", 1)
+}
+
+func scanRepo(row pgx.Row) (Repo, error) {
+	var r Repo
+	var created time.Time
+	err := row.Scan(&r.ID, &r.OwnerID, &r.Owner, &r.Name, &r.Description, &r.DefaultBranch, &r.Private, &created, &r.Empty)
+	r.CreatedAt = created.UTC().Format(time.RFC3339)
+	return r, err
+}
+
+// storeError carries a Store sentinel together with the driver error that
+// caused it, so errors.Is matches the sentinel while logs keep the cause.
+type storeError struct {
+	sentinel error
+	cause    error
+}
+
+func (e *storeError) Error() string        { return e.sentinel.Error() + ": " + e.cause.Error() }
+func (e *storeError) Is(target error) bool { return target == e.sentinel }
+func (e *storeError) Unwrap() error        { return e.cause }
+
+// mapErr translates pgx errors into the Store sentinels: no row is
+// ErrNotFound, a unique violation ErrConflict, a foreign-key violation
+// ErrForeignKey. Other errors pass through unchanged.
+func mapErr(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, pgx.ErrNoRows):
+		return &storeError{ErrNotFound, err}
+	case isUniqueViolation(err):
+		return &storeError{ErrConflict, err}
+	case isForeignKeyViolation(err):
+		return &storeError{ErrForeignKey, err}
+	}
+	return err
+}
+
+// pgxStore is the Postgres implementation of Store, and the only one. It runs
+// on the pool, or inside a transaction when made by InTx.
+type pgxStore struct {
+	pool *pgxpool.Pool // nil inside a transaction
+	q    querier
+}
+
+var _ Store = (*pgxStore)(nil)
+
+func newPgxStore(pool *pgxpool.Pool) *pgxStore { return &pgxStore{pool: pool, q: pool} }
+
+func (p *pgxStore) rs(repoID int64) *RepoStore { return NewRepoStore(p.q, repoID) }
+
+func (p *pgxStore) InTx(ctx context.Context, fn func(Store) error) error {
+	if p.pool == nil { // already in a transaction: join it
+		return fn(p)
+	}
+	tx, err := p.pool.Begin(ctx)
+	if err != nil {
+		return mapErr(err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := fn(&pgxStore{q: tx}); err != nil {
+		return mapErr(err)
+	}
+	return mapErr(tx.Commit(ctx))
+}
+
+func (p *pgxStore) CreateUser(ctx context.Context, username, passwordHash string) (int64, error) {
+	var id int64
+	err := p.q.QueryRow(ctx,
+		`INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id`,
+		username, passwordHash).Scan(&id)
+	return id, mapErr(err)
+}
+
+func (p *pgxStore) UsernameByID(ctx context.Context, id int64) (string, error) {
+	var name string
+	err := p.q.QueryRow(ctx, `SELECT username FROM users WHERE id = $1`, id).Scan(&name)
+	return name, mapErr(err)
+}
+
+func (p *pgxStore) UserForLogin(ctx context.Context, username string) (int64, string, error) {
+	var id int64
+	var hash string
+	err := p.q.QueryRow(ctx,
+		`SELECT id, password_hash FROM users WHERE lower(username) = $1`, username).Scan(&id, &hash)
+	return id, hash, mapErr(err)
+}
+
+func (p *pgxStore) FindRepo(ctx context.Context, owner, name string) (Repo, error) {
+	r, err := scanRepo(p.q.QueryRow(ctx,
+		repoSelect+` WHERE lower(u.username) = lower($1) AND lower(r.name) = lower($2)`, owner, name))
+	return r, mapErr(err)
+}
+
+func (p *pgxStore) FindRepoRef(ctx context.Context, owner, name, ref string) (ReadHead, error) {
+	return FindRepoRef(ctx, p.q, owner, name, ref)
+}
+
+func (p *pgxStore) CreateRepo(ctx context.Context, ownerID int64, name, description string, private bool, createdAt time.Time) (Repo, error) {
+	r, err := scanRepo(p.q.QueryRow(ctx, returningRepo(
+		`INSERT INTO repos (owner_id, name, description, private, created_at) VALUES ($1, $2, $3, $4, $5)`),
+		ownerID, name, description, private, createdAt.UTC()))
+	return r, mapErr(err)
+}
+
+func (p *pgxStore) UpdateRepo(ctx context.Context, repoID int64, patch RepoPatch) (Repo, error) {
+	var sets []string
+	var args []any
+	arg := func(col string, v any) int {
+		args = append(args, v)
+		sets = append(sets, col+" = $"+strconv.Itoa(len(args)))
+		return len(args)
+	}
+	if patch.Name != nil {
+		arg("name", *patch.Name)
+	}
+	if patch.Description != nil {
+		arg("description", *patch.Description)
+	}
+	branchArg := 0
+	if patch.DefaultBranch != nil {
+		branchArg = arg("default_branch", *patch.DefaultBranch)
+	}
+	if patch.Private != nil {
+		arg("private", *patch.Private)
+	}
+	if len(sets) == 0 {
+		return Repo{}, errors.New("UpdateRepo: nothing to update")
+	}
+	args = append(args, repoID)
+	where := "id = $" + strconv.Itoa(len(args))
+	if branchArg > 0 { // the branch must still exist when the row is written
+		where += " AND EXISTS (SELECT 1 FROM refs WHERE repo_id = repos.id AND name = $" + strconv.Itoa(branchArg) + ")"
+	}
+	r, err := scanRepo(p.q.QueryRow(ctx,
+		returningRepo(`UPDATE repos SET `+strings.Join(sets, ", ")+` WHERE `+where), args...))
+	return r, mapErr(err)
+}
+
+func (p *pgxStore) DeleteRepo(ctx context.Context, repoID int64) error {
+	_, err := p.q.Exec(ctx, `DELETE FROM repos WHERE id = $1`, repoID)
+	return mapErr(err)
+}
+
+func (p *pgxStore) RepoExists(ctx context.Context, repoID int64) (bool, error) {
+	var one int
+	err := p.q.QueryRow(ctx, `SELECT 1 FROM repos WHERE id = $1`, repoID).Scan(&one)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+func (p *pgxStore) ListRepos(ctx context.Context, viewerID int64, owner *string, limit, offset int) ([]Repo, error) {
+	q := repoSelect + ` WHERE (NOT r.private OR r.owner_id = $1)`
+	args := []any{viewerID}
+	if owner != nil {
+		q += ` AND lower(u.username) = lower($2)`
+		args = append(args, *owner)
+	}
+	q += fmt.Sprintf(` ORDER BY r.created_at DESC, r.id DESC LIMIT %d OFFSET %d`, limit, offset)
+	rows, err := p.q.Query(ctx, q, args...)
+	if err != nil {
+		return nil, mapErr(err)
+	}
+	defer rows.Close()
+	repos := []Repo{}
+	for rows.Next() {
+		r, err := scanRepo(rows)
+		if err != nil {
+			return nil, mapErr(err)
+		}
+		repos = append(repos, r)
+	}
+	return repos, mapErr(rows.Err())
+}
+
+func (p *pgxStore) Objects(ctx context.Context, repoID int64) treebuild.Store {
+	return p.rs(repoID).Objects(ctx)
+}
+
+func (p *pgxStore) CommitBundle(ctx context.Context, repoID int64, oid string) (map[string]linediff.Object, bool, error) {
+	objs, found, err := p.rs(repoID).CommitBundle(ctx, oid)
+	return objs, found, mapErr(err)
+}
+
+func (p *pgxStore) GetRef(ctx context.Context, repoID int64, name string) (string, error) {
+	oid, err := p.rs(repoID).GetRef(ctx, name)
+	return oid, mapErr(err)
+}
+
+func (p *pgxStore) GetRefCommit(ctx context.Context, repoID int64, name string) (string, []byte, error) {
+	oid, body, err := p.rs(repoID).GetRefCommit(ctx, name)
+	return oid, body, mapErr(err)
+}
+
+func (p *pgxStore) ListRefs(ctx context.Context, repoID int64) ([]Ref, error) {
+	refs, err := p.rs(repoID).ListRefs(ctx)
+	return refs, mapErr(err)
+}
+
+func (p *pgxStore) CreateRef(ctx context.Context, repoID int64, name, oid string) error {
+	return mapErr(p.rs(repoID).CreateRef(ctx, name, oid))
+}
+
+func (p *pgxStore) DeleteRef(ctx context.Context, repoID int64, name string) error {
+	return mapErr(p.rs(repoID).DeleteRef(ctx, name))
+}
+
+func (p *pgxStore) DeleteNonDefaultRef(ctx context.Context, repoID int64, name string) error {
+	return mapErr(p.rs(repoID).DeleteNonDefaultRef(ctx, name))
+}
+
+func (p *pgxStore) UpdateRef(ctx context.Context, repoID int64, name, oldOID, newOID string) error {
+	return mapErr(p.rs(repoID).UpdateRef(ctx, name, oldOID, newOID))
+}
+
+func (p *pgxStore) ResolveCommit(ctx context.Context, repoID int64, ref string) (string, error) {
+	oid, err := p.rs(repoID).ResolveCommit(ctx, ref)
+	return oid, mapErr(err)
+}
+
+func (p *pgxStore) PutObjectsMoveRef(ctx context.Context, repoID int64, objs []treebuild.Object, name, oldOID, newOID string) error {
+	return mapErr(p.rs(repoID).PutObjectsMoveRef(ctx, objs, name, oldOID, newOID))
+}
+
+func (p *pgxStore) WalkFirstParents(ctx context.Context, repoID int64, tip string, limit int) ([]CommitRow, error) {
+	rows, err := p.rs(repoID).WalkFirstParents(ctx, tip, limit)
+	return rows, mapErr(err)
+}
+
+func (p *pgxStore) CommitReachability(ctx context.Context, repoID int64, a, b string) (Reachability, error) {
+	r, err := p.rs(repoID).CommitReachability(ctx, a, b)
+	return r, mapErr(err)
 }

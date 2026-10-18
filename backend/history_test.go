@@ -159,7 +159,7 @@ func newHistFixture(t *testing.T, withLong bool) *histFixture {
 	}
 	lr := createRepo(t, s, c, `{"name":"long"}`)
 	f.longBase = "/repos/" + owner + "/long"
-	rs := NewRepoStore(s.DB, lr.ID)
+	rs := NewRepoStore(rawDB(s), lr.ID)
 	st := rs.Objects(t.Context())
 	treeOID, err := st.PutObject(gitobj.TypeTree, nil)
 	if err != nil {
@@ -183,7 +183,7 @@ func newHistFixture(t *testing.T, withLong bool) *histFixture {
 		bodies = append(bodies, body)
 	}
 	// One round trip for all 120 commits instead of 120 PutObject calls.
-	_, err = s.DB.Exec(t.Context(),
+	_, err = rawDB(s).Exec(t.Context(),
 		`INSERT INTO objects (repo_id, oid, type, data)
 		 SELECT $1, o, 'commit', d FROM unnest($2::text[], $3::bytea[]) AS u(o, d)
 		 ON CONFLICT (repo_id, oid) DO NOTHING`, lr.ID, f.long, bodies)
@@ -623,7 +623,7 @@ func TestCommitLogStatementCount(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(pool.Close)
-	s := NewServer(pool)
+	s := NewServer(newPgxStore(pool))
 	s.JWTSecret = f.s.JWTSecret
 	for _, q := range []string{"", "?page=3", "?page=2&per_page=100"} {
 		counter.n.Store(0)
@@ -658,7 +658,7 @@ func TestCommitLogHeaderOnly(t *testing.T) {
 	f := newHistFixture(t, false)
 	name, c := newUserCookie(t, f.s)
 	repo := createRepo(t, f.s, c, `{"name":"hdr"}`)
-	rs := NewRepoStore(f.s.DB, repo.ID)
+	rs := NewRepoStore(rawDB(f.s), repo.ID)
 	st := rs.Objects(t.Context())
 	treeOID, err := st.PutObject(gitobj.TypeTree, nil)
 	if err != nil {

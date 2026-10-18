@@ -146,7 +146,7 @@ func TestBaseline(t *testing.T) {
 	measure("GET commit detail", get("/commits/"+tip))
 	measure("POST merge (50-commit history)", func(i int) *httptest.ResponseRecorder {
 		name := fmt.Sprint("target", i)
-		if err := NewRepoStore(s.DB, repo.ID).CreateRef(context.Background(), name, root); err != nil {
+		if err := NewRepoStore(rawDB(s), repo.ID).CreateRef(context.Background(), name, root); err != nil {
 			t.Fatal(err)
 		}
 		buf.Reset()

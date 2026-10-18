@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -48,11 +49,8 @@ func (s *Server) register(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	var id int64
-	err = s.DB.QueryRow(r.Context(),
-		`INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id`,
-		username, string(hash)).Scan(&id)
-	if isUniqueViolation(err) {
+	id, err := s.Store.CreateUser(r.Context(), username, string(hash))
+	if errors.Is(err, ErrConflict) {
 		writeError(w, http.StatusConflict, "username already taken")
 		return
 	}
