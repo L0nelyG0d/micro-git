@@ -12,7 +12,7 @@ Rules
 
 - Dependencies are tracked in `go.mod` (backend) and `frontend/package.json` (frontend). 
 - Pre-approved frontend packages: those listed under "Approved packages" in `_docs/design-system.md`
-- Pre-approved Go modules: `github.com/jackc/pgx/v5`, `golang.org/x/crypto` (bcrypt), `github.com/golang-jwt/jwt/v5`. Everything else comes from the standard library: routing uses `net/http` patterns (no chi or other router)
+- Pre-approved Go modules: `github.com/jackc/pgx/v5`, `golang.org/x/crypto` (bcrypt), `github.com/golang-jwt/jwt/v5`. Also approved for the SQLite/ORM iteration (teacher's requirement, user decision 2026-10-19): `gorm.io/gorm`, `gorm.io/driver/postgres`, `github.com/glebarez/sqlite` (pure Go, no cgo). Everything else comes from the standard library: routing uses `net/http` patterns (no chi or other router)
 - Never commit tokens, passwords, or connection strings, and never paste a secret into a doc, an issue, or a commit message. Keep `JWT_SECRET`, `DATABASE_URL`, and `TEST_DATABASE_URL` in environment variables or a git-ignored `.env`
 - For design questions, consult the user before changing anything: give several options and show how they would look
 
