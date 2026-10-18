@@ -1,6 +1,7 @@
+import { MemoryRouter } from "@/test-utils"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { MemoryRouter, useLocation } from "react-router-dom"
+import { useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { cacheClear } from "@/lib/fetchCache"
@@ -57,9 +58,14 @@ afterEach(() => vi.unstubAllGlobals())
 function Loc() {
   return <div data-testid="loc">{useLocation().pathname}</div>
 }
-function renderAt(path: string) {
+let router: { navigate: (to: number) => Promise<void> } | undefined
+function renderAt(path: string, history: string[] = []) {
   return render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter
+      initialEntries={[...history, path]}
+      initialIndex={history.length}
+      routerRef={(r) => (router = r)}
+    >
       <App />
       <Loc />
     </MemoryRouter>,
@@ -394,4 +400,51 @@ it("closing the leave dialog returns focus to the activated control, else the te
   const dlg = await screen.findByRole("alertdialog")
   await userEvent.click(within(dlg).getByRole("button", { name: "Keep editing" }))
   await waitFor(() => expect(link).toHaveFocus())
+})
+
+const TREE = "/alice/hello/tree/main"
+const EDIT = "/alice/hello/edit/main/a.txt"
+
+it("dirty editor: browser Back (history pop) asks first; Keep editing stays, Discard goes back", async () => {
+  setup()
+  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
+  renderAt(EDIT, [TREE])
+  await screen.findByLabelText("File content")
+  await type("File content", "changed")
+  void router!.navigate(-1)
+  const dlg = await screen.findByRole("alertdialog")
+  expect(screen.getByTestId("loc")).toHaveTextContent(EDIT)
+  await userEvent.click(within(dlg).getByRole("button", { name: "Keep editing" }))
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument())
+  expect(screen.getByTestId("loc")).toHaveTextContent(EDIT)
+  expect(screen.getByLabelText("File content")).toHaveValue("changed")
+  void router!.navigate(-1)
+  await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard changes" }))
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(/^\/alice\/hello\/tree\/main$/))
+})
+
+it("clean editor: browser Back leaves without a prompt", async () => {
+  setup()
+  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
+  renderAt(EDIT, [TREE])
+  await screen.findByLabelText("File content")
+  void router!.navigate(-1)
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(/^\/alice\/hello\/tree\/main$/))
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+})
+
+it("dirty editor: an in-app link asks first, Back after typing then reverting is silent", async () => {
+  setup()
+  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
+  renderAt(EDIT, [TREE])
+  await screen.findByLabelText("File content")
+  await type("File content", "changed")
+  await userEvent.click(screen.getByRole("link", { name: "hello" }))
+  await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Keep editing" }))
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument())
+  await type("File content", "hello\n")
+  expect(unload().defaultPrevented).toBe(false)
+  void router!.navigate(-1)
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(/^\/alice\/hello\/tree\/main$/))
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
 })
