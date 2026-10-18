@@ -1,13 +1,15 @@
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
-import { readPath, type Blob } from "@/lib/git"
+import type { Blob } from "@/lib/git"
 import { renderMarkdown } from "@/lib/markdown"
-import { useFetch } from "@/lib/useFetch"
+import type { FetchState } from "@/lib/useFetch"
 
-/** README.md of the repo root at `ref_`; render only when the tree lists it. */
-export function ReadmeCard({ owner, repo, ref_ }: { owner: string; repo: string; ref_: string }) {
-  const q = useFetch<Blob>(readPath("blob", owner, repo, ref_, "README.md"))
+/**
+ * README.md of the repo root. The page fetches it alongside the tree and
+ * renders this card only when the tree lists the file.
+ */
+export function ReadmeCard({ q }: { q: FetchState<Blob> }) {
   return (
     <Card className="gap-2 py-3" data-testid="readme">
       <h2 className="px-3 text-sm font-semibold">README.md</h2>

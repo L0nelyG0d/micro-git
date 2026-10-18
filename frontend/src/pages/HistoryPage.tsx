@@ -19,10 +19,8 @@ export function HistoryPage() {
   const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
 
   const repoQ = useFetch<Repo>(base)
-  const live = repoQ.data && !repoQ.data.empty
-  const q = useFetch<CommitsPage>(
-    live ? `${base}/commits?ref=${encodeURIComponent(ref)}&page=${page}` : null,
-  )
+  // The ref is in the URL, so the history does not wait for the repo request.
+  const q = useFetch<CommitsPage>(`${base}/commits?ref=${encodeURIComponent(ref)}&page=${page}`)
 
   const repoMissing = repoQ.error instanceof ApiError && repoQ.error.status === 404
   if (repoMissing) {

@@ -3,6 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
+import { cacheClear } from "@/lib/fetchCache"
 import { formatDate } from "@/lib/format"
 
 type Res = { status: number; body?: unknown } | Error
@@ -24,6 +25,7 @@ const repo = (o: Partial<Record<string, unknown>> = {}) => ({
 })
 
 beforeEach(() => {
+  cacheClear()
   calls = []
   routes = {}
   vi.stubGlobal(

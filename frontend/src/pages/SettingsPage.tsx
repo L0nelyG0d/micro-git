@@ -116,7 +116,7 @@ export function SettingsPage() {
   const { user, loading: sessionLoading, expireSession } = useAuth()
   const base = `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
   const repoQ = useFetch<Repo>(base)
-  const branchesQ = useFetch<{ branches: Branch[] }>(repoQ.data && !repoQ.data.empty ? `${base}/branches` : null)
+  const branchesQ = useFetch<{ branches: Branch[] }>(`${base}/branches`) // parallel with the repo request
   const [historyRef, setHistoryRef] = useState("")
 
   if (repoQ.error instanceof ApiError && repoQ.error.status === 404) {

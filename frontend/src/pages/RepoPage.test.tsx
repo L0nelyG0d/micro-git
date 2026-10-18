@@ -4,6 +4,7 @@ import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { nextTask } from "@/test-utils"
+import { cacheClear } from "@/lib/fetchCache"
 import { formatDate } from "@/lib/format"
 
 type Res = { status: number; body?: unknown } | Error
@@ -50,10 +51,12 @@ function setupRepo(user: "alice" | "bob" | null = "alice") {
   routes["GET /api/repos/alice/hello"] = () => json(200, repo())
   routes["GET /api/repos/alice/hello/branches"] = () => json(200, branches)
   routes["GET /api/repos/alice/hello/tree/main"] = () => json(200, tree())
+  routes["GET /api/repos/alice/hello/commits?page=1"] = () => json(200, commits)
   routes["GET /api/repos/alice/hello/commits?ref=main&page=1"] = () => json(200, commits)
 }
 
 beforeEach(() => {
+  cacheClear()
   calls = []
   routes = {}
   vi.stubGlobal(
@@ -107,13 +110,13 @@ it("shows the latest commit bar from the first commits item", async () => {
   expect(main().getByText(formatDate("2026-01-02T15:04:05Z"))).toBeInTheDocument()
 })
 
-it("empty repo: no tree or commits calls; visitor sees a plain message", async () => {
+it("empty repo: no tree or README calls; visitor sees a plain message", async () => {
   setupRepo(null)
   routes["GET /api/repos/alice/hello"] = () => json(200, repo({ empty: true }))
   renderAt("/alice/hello")
   expect(await screen.findByText(/repository is empty/i)).toBeInTheDocument()
   expect(screen.queryByRole("link", { name: "Add file" })).not.toBeInTheDocument()
-  expect(calls.filter((c) => /tree|commits/.test(c))).toEqual([])
+  expect(calls.filter((c) => /\/(tree|blob)\//.test(c))).toEqual([])
 })
 
 it("empty repo: owner sees Add file for the default branch", async () => {
@@ -124,7 +127,7 @@ it("empty repo: owner sees Add file for the default branch", async () => {
     "href",
     "/alice/hello/new/main",
   )
-  expect(calls.filter((c) => /tree|commits/.test(c))).toEqual([])
+  expect(calls.filter((c) => /\/(tree|blob)\//.test(c))).toEqual([])
 })
 
 it("unknown repo shows not found; other failures show retry", async () => {
@@ -198,8 +201,7 @@ it("matches the owner case-insensitively", async () => {
   routes["GET /api/repos/Alice/hello"] = routes["GET /api/repos/alice/hello"]
   routes["GET /api/repos/Alice/hello/branches"] = routes["GET /api/repos/alice/hello/branches"]
   routes["GET /api/repos/Alice/hello/tree/main"] = routes["GET /api/repos/alice/hello/tree/main"]
-  routes["GET /api/repos/Alice/hello/commits?ref=main&page=1"] =
-    routes["GET /api/repos/alice/hello/commits?ref=main&page=1"]
+  routes["GET /api/repos/Alice/hello/commits?page=1"] = routes["GET /api/repos/alice/hello/commits?page=1"]
   renderAt("/Alice/hello")
   expect(await screen.findByRole("button", { name: "Delete repository" })).toBeInTheDocument()
 })
@@ -471,4 +473,38 @@ it("file viewer: loading and error with retry", async () => {
   routes["GET /api/repos/alice/hello/blob/main/x"] = () => json(200, blob({ name: "x", path: "x" }))
   await userEvent.click(screen.getByRole("button", { name: "Retry" }))
   expect(await screen.findByRole("heading", { name: "x" })).toBeInTheDocument()
+})
+
+it("starts branches, tree, commits and README without waiting for the repo", async () => {
+  setupRepo(null)
+  let release: () => void = () => {}
+  const gate = new Promise<void>((r) => (release = r))
+  routes["GET /api/repos/alice/hello"] = async () => {
+    await gate
+    return json(200, repo())
+  }
+  routes["GET /api/repos/alice/hello/blob/main/README.md"] = () => json(404, { error: "file not found" })
+  renderAt("/alice/hello/tree/main")
+  await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(5))
+  for (const k of ["/branches", "/tree/main", "/commits?ref=main&page=1", "/blob/main/README.md"]) {
+    expect(calls.some((c) => c.endsWith(k))).toBe(true)
+  }
+  release()
+  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
+})
+
+it("without a ref in the URL, branches and commits still do not wait for the repo", async () => {
+  setupRepo(null)
+  let release: () => void = () => {}
+  const gate = new Promise<void>((r) => (release = r))
+  routes["GET /api/repos/alice/hello"] = async () => {
+    await gate
+    return json(200, repo())
+  }
+  renderAt("/alice/hello")
+  await vi.waitFor(() => expect(calls.some((c) => c.endsWith("/commits?page=1"))).toBe(true))
+  expect(calls.some((c) => c.endsWith("/branches"))).toBe(true)
+  expect(calls.some((c) => c.includes("/tree/"))).toBe(false) // needs the default branch
+  release()
+  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
 })

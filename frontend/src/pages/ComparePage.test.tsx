@@ -4,9 +4,10 @@ import { MemoryRouter, useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { nextTask } from "@/test-utils"
+import { cacheClear } from "@/lib/fetchCache"
 
 type Res = { status: number; body?: unknown } | Error
-let routes: Record<string, () => Res>
+let routes: Record<string, () => Res | Promise<Res>>
 let calls: string[]
 
 const json = (status: number, body?: unknown): Res => ({ status, body })
@@ -30,6 +31,7 @@ const file = (o: Record<string, unknown>) => ({
 const Q = `${API}/compare?base=main&head=dev.1`
 
 beforeEach(() => {
+  cacheClear()
   calls = []
   routes = {
     "GET /api/auth/me": () => json(401, { error: "authentication required" }),
@@ -42,7 +44,7 @@ beforeEach(() => {
     await nextTask()
     const h = routes[key]
     if (!h) throw new Error(`unexpected fetch ${key}`)
-    const r = h()
+    const r = await h()
     if (r instanceof Error) throw r
     return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
   }))
@@ -58,6 +60,14 @@ const renderAt = (p: string) =>
 const main = () => within(screen.getByRole("main"))
 
 it("renders summary and the shared diff, prefilled selects, truncated note", async () => {
+  // Hold the repo answer so the loading state is observable (requests start in parallel and are fast).
+  let release: () => void = () => {}
+  const gate = new Promise<void>((r) => (release = r))
+  const repoRoute = routes[API]
+  routes[API] = async () => {
+    await gate
+    return repoRoute()
+  }
   routes[Q] = () => json(200, cmp([
     file({ path: "a.txt", additions: 1, deletions: 1, hunks: [{ old_start: 1, old_lines: 1, new_start: 1, new_lines: 1,
       lines: [{ type: "del", text: "old" }, { type: "add", text: "new" }] }] }),
@@ -65,6 +75,7 @@ it("renders summary and the shared diff, prefilled selects, truncated note", asy
   ]))
   renderAt("/alice/hello/compare?base=main&head=dev.1")
   expect(await main().findByRole("status", { name: "Loading repository" })).toBeInTheDocument()
+  release()
   expect(await screen.findByTestId("summary")).toHaveTextContent("2 files changed, +4 -1")
   expect(screen.getByRole("combobox", { name: "Base" })).toHaveTextContent("main")
   expect(screen.getByRole("combobox", { name: "Compare" })).toHaveTextContent("dev.1")

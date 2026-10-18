@@ -4,9 +4,10 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { nextTask } from "@/test-utils"
+import { cacheClear } from "@/lib/fetchCache"
 
 type Res = { status: number; body?: unknown } | Error
-let routes: Record<string, () => Res>
+let routes: Record<string, () => Res | Promise<Res>>
 let calls: string[]
 
 const json = (status: number, body?: unknown): Res => ({ status, body })
@@ -41,11 +42,13 @@ function setup(withReadme = true) {
   routes["GET /api/repos/alice/hello/tree/dev"] = () => json(200, tree("", entries(withReadme)))
   routes["GET /api/repos/alice/hello/tree/main/src"] = () =>
     json(200, tree("src", [{ name: "README.md", type: "blob", oid: OID }]))
+  routes["GET /api/repos/alice/hello/commits?page=1"] = () => json(200, { commits: [] })
   routes["GET /api/repos/alice/hello/commits?ref=main&page=1"] = () => json(200, { commits: [] })
   routes["GET /api/repos/alice/hello/commits?ref=dev&page=1"] = () => json(200, { commits: [] })
 }
 
 beforeEach(() => {
+  cacheClear()
   calls = []
   routes = {}
   vi.stubGlobal(
@@ -56,7 +59,7 @@ beforeEach(() => {
       await nextTask()
       const h = routes[key]
       if (!h) throw new Error(`unexpected fetch ${key}`)
-      const r = h()
+      const r = await h()
       if (r instanceof Error) throw r
       return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
     }),
@@ -86,18 +89,23 @@ it("shows the README rendered below the file tree, markup as text", async () => 
 
 it("shows a skeleton while the README loads", async () => {
   setup()
-  routes["GET /api/repos/alice/hello/blob/main/README.md"] = () => json(200, blob("x"))
+  let release: () => void = () => {}
+  const gate = new Promise<void>((r) => (release = r))
+  routes["GET /api/repos/alice/hello/blob/main/README.md"] = async () => {
+    await gate
+    return json(200, blob("x"))
+  }
   renderAt("/alice/hello")
   expect(await screen.findByRole("status", { name: "Loading README" })).toBeInTheDocument()
+  release()
   expect(await screen.findByText("x")).toBeInTheDocument()
 })
 
-it("has no card and no fetch when the tree has no README.md", async () => {
+it("has no card when the tree has no README.md, even though the file is requested in parallel", async () => {
   setup(false)
   renderAt("/alice/hello")
   await screen.findByRole("table", { name: "Files" })
   expect(screen.queryByTestId("readme")).not.toBeInTheDocument()
-  expect(calls.some((c) => c.includes("/blob/"))).toBe(false)
 })
 
 it("has no card in a subdirectory", async () => {

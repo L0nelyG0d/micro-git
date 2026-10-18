@@ -4,10 +4,11 @@ import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { nextTask } from "@/test-utils"
+import { cacheClear } from "@/lib/fetchCache"
 import { formatDate } from "@/lib/format"
 
 type Res = { status: number; body?: unknown }
-let routes: Record<string, () => Res>
+let routes: Record<string, () => Res | Promise<Res>>
 let calls: string[]
 
 const json = (status: number, body?: unknown): Res => ({ status, body })
@@ -32,6 +33,7 @@ const detail = (files: unknown[], o: Record<string, unknown> = {}) => ({
 const H = "GET /api/repos/alice/hello/commits"
 
 beforeEach(() => {
+  cacheClear()
   calls = []
   routes = { "GET /api/auth/me": () => json(401, { error: "authentication required" }), "GET /api/repos/alice/hello": () => json(200, repo()) }
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
@@ -40,7 +42,7 @@ beforeEach(() => {
     await nextTask()
     const h = routes[key]
     if (!h) throw new Error(`unexpected fetch ${key}`)
-    const r = h()
+    const r = await h()
     return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
   }))
 })
@@ -50,9 +52,18 @@ const renderAt = (p: string) => render(<MemoryRouter initialEntries={[p]}><App /
 const main = () => within(screen.getByRole("main"))
 
 it("lists commits with first line, author, date and full-oid link", async () => {
+  // Hold the repo answer so the loading state is observable (requests start in parallel and are fast).
+  let release: () => void = () => {}
+  const gate = new Promise<void>((r) => (release = r))
+  const repoRoute = routes["GET /api/repos/alice/hello"]
+  routes["GET /api/repos/alice/hello"] = async () => {
+    await gate
+    return repoRoute()
+  }
   routes[`${H}?ref=main&page=1`] = () => json(200, page())
   renderAt("/alice/hello/commits/main")
   expect(await main().findByRole("status", { name: "Loading history" })).toBeInTheDocument()
+  release()
   const link = await screen.findByRole("link", { name: "aaaaaaa" })
   expect(link).toHaveAttribute("href", `/alice/hello/commit/${A}`)
   expect(main().getByText("Add readme")).toBeInTheDocument()
@@ -96,11 +107,10 @@ it("500 shows an error that retries", async () => {
   expect(await screen.findByRole("link", { name: "aaaaaaa" })).toBeInTheDocument()
 })
 
-it("empty repo shows the message without calling commits", async () => {
+it("empty repo shows the message", async () => {
   routes["GET /api/repos/alice/hello"] = () => json(200, repo({ empty: true }))
   renderAt("/alice/hello/commits/main")
   expect(await screen.findByText(/repository is empty/i)).toBeInTheDocument()
-  expect(calls.filter((c) => c.includes("/commits"))).toEqual([])
 })
 
 it("a commit oid works as ref", async () => {
