@@ -68,3 +68,6 @@ Now that we discussed the questions start closing the issues with the qa commiti
 - [ ] (#61) `_docs/design-system.md` is marked superseded by `DESIGN.md` + `frontend/src/index.css`; its primary/ring token rows and the card-shadow sentence were updated to the Primer values, other historical values (backgrounds, radius, p-3 density) are left with the banner. Default: simplest reversible edit, no look change. Want the whole file rewritten to match DESIGN.md instead? 
 - [ ] (#61) Stray transcript files (`frontend/*local-command-caveat*.txt`) do not exist; `resolving the issues.txt` is already git-ignored and untracked. Default: nothing deleted.
 - [ ] (#61) shadcn form controls (`select.tsx`, `textarea.tsx`) and dialogs keep their own `shadow-xs`/`shadow-lg`; the issue names only surfaces/cards. Default: left unchanged.
+
+## #103 openapi checks: YAML parser?
+Asked 2026-10-19 (PM). No YAML parser or JSON-schema validator is approved. Default used: extend the existing line scanner in `frontend/src/lib/openapi.test.ts`. Say if a parser dependency is wanted.
