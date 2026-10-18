@@ -14,7 +14,7 @@ import (
 //
 //	postgres (default)  the local Postgres in TEST_DATABASE_URL; tests skip when it is unset
 //	memory              a new memStore per test, no database needed
-//	sqlite              not built yet (#93); every test skips
+//	sqlite              gormStore on a temp file; only the groups in sqliteGroups run, the rest skip until #86 to #92
 //
 // Tests reach the store through Server.Store. What the interface cannot do
 // (seed a row, drop objects, count rows) goes through the helpers below, which
@@ -77,6 +77,10 @@ func deleteUser(t *testing.T, s *Server, name string) {
 	switch st := s.Store.(type) {
 	case *pgxStore:
 		if _, err := st.pool.Exec(context.Background(), `DELETE FROM users WHERE username = $1`, name); err != nil {
+			t.Fatal(err)
+		}
+	case *gormStore:
+		if err := st.db.Exec(`DELETE FROM users WHERE username = ?`, name).Error; err != nil {
 			t.Fatal(err)
 		}
 	case *memStore:

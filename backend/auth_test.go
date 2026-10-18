@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -50,7 +52,7 @@ func testServer(t *testing.T) *Server {
 		srv.JWTSecret = []byte("test-secret")
 		return srv
 	case "sqlite":
-		t.Skip("TEST_STORE=sqlite: the SQLite store does not exist yet (#93)")
+		return newSQLiteServer(t)
 	case "postgres":
 	default:
 		t.Fatalf("TEST_STORE=%q: want memory, sqlite or postgres", kind)
@@ -64,6 +66,28 @@ func testServer(t *testing.T) *Server {
 		t.Fatalf("connect: %v", poolErr)
 	}
 	srv := NewServer(newPgxStore(testPool))
+	srv.JWTSecret = []byte("test-secret")
+	return srv
+}
+
+// sqliteGroups are the test files whose store methods gormStore has ported;
+// every other file still skips under TEST_STORE=sqlite. Each issue that ports
+// a group adds its files here (users: #85).
+var sqliteGroups = map[string]string{"auth_test.go": "users", "session_test.go": "users"}
+
+// newSQLiteServer builds a Server on a gormStore over a temp SQLite file, or
+// skips the test when its group is not ported yet. testServer is the caller.
+func newSQLiteServer(t *testing.T) *Server {
+	t.Helper()
+	_, file, _, _ := runtime.Caller(2)
+	if _, ok := sqliteGroups[filepath.Base(file)]; !ok {
+		t.Skip("TEST_STORE=sqlite: gormStore does not implement this group yet (#86 to #92)")
+	}
+	db := openSQLiteForTest(t)
+	if err := Migrate(db); err != nil {
+		t.Fatalf("migrate: %v", err)
+	}
+	srv := NewServer(newGormStore(db))
 	srv.JWTSecret = []byte("test-secret")
 	return srv
 }
