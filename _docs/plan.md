@@ -121,6 +121,15 @@ Repo   = {"id": 1, "owner": "alice", "name": "hello", "description": "", "defaul
 Branch = {"name": "main", "oid": "<40 hex>", "is_default": true}
 ```
 
+### HTTP caching and gzip (issue #51)
+
+Code: `backend/httpcache.go`; headers are set in `reading.go` and `history.go`.
+
+- `tree`, `blob` and `commits/{oid}` addressed by a full 40-hex commit id answer `Cache-Control: public, max-age=31536000, immutable`.
+- `tree`/`blob` addressed by a branch name answer `Cache-Control: no-cache` and a strong `ETag` (hash of endpoint, resolved commit oid and path, so it changes whenever the tip moves). `If-None-Match` gets `304` after the single repo+ref lookup statement, before any object is read; unknown repository or ref is still `404`. Errors carry no cache headers; `/auth/*` stays `no-store`.
+- JSON bodies over 1 KB are gzip-compressed for `Accept-Encoding: gzip` (errors and 404s too); every response has `Vary: Accept-Encoding`; not for `HEAD`, `304`, small or already-encoded bodies. A compressed response sends its ETag weak (`W/`).
+- Known limit: a 304 for a branch read is decided from commit+path alone, so a client that forges the ETag of a path that does not exist gets 304 instead of 404 (it learns nothing and no cache holds such an ETag).
+
 ### Rate limiting (login and register, issue #44)
 
 In-memory, standard library only; constants and their meaning are at the top of `backend/ratelimit.go`.

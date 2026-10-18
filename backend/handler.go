@@ -49,7 +49,7 @@ func NewHandler() http.Handler {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.routes(mux)
-	return timing(mux, safeHeaders(mux))
+	return timing(mux, safeHeaders(gzipJSON(mux)))
 }
 
 // safeHeaders sets the basic safe response headers before any handler runs, so

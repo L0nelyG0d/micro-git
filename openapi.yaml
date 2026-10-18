@@ -526,6 +526,13 @@ paths:
       responses:
         '200':
           description: The commit and its changed files, sorted by path.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlRead'
+            Vary:
+              $ref: '#/components/headers/VaryAcceptEncoding'
+            Content-Encoding:
+              $ref: '#/components/headers/ContentEncodingGzip'
           content:
             application/json:
               schema:
@@ -776,10 +783,21 @@ paths:
       responses:
         '200':
           description: Directory entries, directories first, each sorted bytewise by name.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlRead'
+            ETag:
+              $ref: '#/components/headers/ETagRead'
+            Vary:
+              $ref: '#/components/headers/VaryAcceptEncoding'
+            Content-Encoding:
+              $ref: '#/components/headers/ContentEncodingGzip'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Tree'
+        '304':
+          $ref: '#/components/responses/NotModified'
         '307':
           $ref: '#/components/responses/CleanedRedirect'
         '400':
@@ -804,10 +822,21 @@ paths:
       responses:
         '200':
           description: Directory entries, directories first, each sorted bytewise by name.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlRead'
+            ETag:
+              $ref: '#/components/headers/ETagRead'
+            Vary:
+              $ref: '#/components/headers/VaryAcceptEncoding'
+            Content-Encoding:
+              $ref: '#/components/headers/ContentEncodingGzip'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Tree'
+        '304':
+          $ref: '#/components/responses/NotModified'
         '307':
           $ref: '#/components/responses/CleanedRedirect'
         '400':
@@ -853,10 +882,21 @@ paths:
       responses:
         '200':
           description: The file. Only UTF-8 text is ever stored.
+          headers:
+            Cache-Control:
+              $ref: '#/components/headers/CacheControlRead'
+            ETag:
+              $ref: '#/components/headers/ETagRead'
+            Vary:
+              $ref: '#/components/headers/VaryAcceptEncoding'
+            Content-Encoding:
+              $ref: '#/components/headers/ContentEncodingGzip'
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/Blob'
+        '304':
+          $ref: '#/components/responses/NotModified'
         '307':
           $ref: '#/components/responses/CleanedRedirect'
         '400':
@@ -909,7 +949,43 @@ components:
       allowReserved: true
       schema:
         type: string
+  headers:
+    CacheControlRead:
+      description: >-
+        On a 200 of `tree`, `blob` and `commits/{oid}`: `public, max-age=31536000, immutable` when the
+        `{ref}`/`{oid}` is a full 40-hex commit id (objects are content-addressed, so the answer never changes),
+        and `no-cache` when `{ref}` is a branch name (revalidate with `If-None-Match`). Errors carry no cache
+        headers. `/auth/*` responses are always `no-store`.
+      schema:
+        type: string
+    ETagRead:
+      description: >-
+        Branch-named requests only: a strong validator, a hash of the endpoint, the resolved commit oid and the
+        path. It changes whenever the branch tip moves. When the body is gzip-compressed it is sent weak
+        (`W/"..."`); `If-None-Match` matches either form.
+      schema:
+        type: string
+    VaryAcceptEncoding:
+      description: '`Accept-Encoding`. Sent on every GET response, compressed or not.'
+      schema:
+        type: string
+    ContentEncodingGzip:
+      description: >-
+        `gzip` when the client sent `Accept-Encoding: gzip` and the JSON body is over 1 KB. Never on `HEAD`,
+        `304`, small bodies or an already-encoded body. Applies to error responses and 404s too.
+      schema:
+        type: string
   responses:
+    NotModified:
+      description: >-
+        `If-None-Match` matched the current `ETag` of a branch-named request: the branch still resolves to the same
+        commit. No body. The repository and the ref are still resolved first, so an unknown repository or ref is
+        still a 404.
+      headers:
+        ETag:
+          $ref: '#/components/headers/ETagRead'
+        Cache-Control:
+          $ref: '#/components/headers/CacheControlRead'
     TooManyRequests:
       description: >-
         `too many attempts, try again later`. Login: failures are counted per client IP and username (and per IP
