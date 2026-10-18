@@ -25,8 +25,9 @@ type querier interface {
 }
 
 // RepoStore gives access to one repository's objects and refs. Handlers
-// build it with NewRepoStore(s.DB, repo.ID) (or a pgx.Tx). It holds no state
-// besides the connection and the repo id, so it is cheap to create per request.
+// pgxStore builds it per call with NewRepoStore(p.q, repoID), where p.q is the
+// pool or the current pgx.Tx. It holds no state besides that querier and the
+// repo id, so it is cheap to create per request.
 type RepoStore struct {
 	db     querier
 	repoID int64

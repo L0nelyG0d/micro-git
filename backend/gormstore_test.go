@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"gorm.io/gorm"
 )
 
 func TestGormStoreUsers(t *testing.T) {
@@ -67,5 +69,58 @@ func TestGormStoreUnportedMethods(t *testing.T) {
 	}
 	if got := errNotPorted.Error(); got != "not implemented in gormStore yet" {
 		t.Errorf("message = %q", got)
+	}
+}
+
+// The sqlite driver reports constraint failures as text; pin the wording we
+// match so a driver upgrade that changes it fails here.
+func TestMapGormErrDriverMessages(t *testing.T) {
+	tests := []struct {
+		name string
+		in   error
+		want error
+	}{
+		{"sqlite unique", errors.New("constraint failed: UNIQUE constraint failed: users.username (2067)"), ErrConflict},
+		{"sqlite foreign key", errors.New("constraint failed: FOREIGN KEY constraint failed (787)"), ErrForeignKey},
+		{"gorm not found", gorm.ErrRecordNotFound, ErrNotFound},
+		{"gorm duplicated", gorm.ErrDuplicatedKey, ErrConflict},
+		{"gorm foreign key", gorm.ErrForeignKeyViolated, ErrForeignKey},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mapGormErr(tc.in); !errors.Is(got, tc.want) {
+				t.Errorf("mapGormErr(%v) = %v, want %v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestIsTestFuncName(t *testing.T) {
+	for name, want := range map[string]bool{
+		"TestFoo": true, "Test": true, "TestFoo.func1": true, "Test_x": true,
+		"TestimonyHelper": false, "testFoo": false, "limitedServer": false,
+	} {
+		if got := isTestFuncName(name); got != want {
+			t.Errorf("isTestFuncName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+// A real foreign-key failure on each dialect must map to ErrForeignKey.
+func TestMapGormErrRealForeignKey(t *testing.T) {
+	for _, d := range dialects {
+		t.Run(d.name, func(t *testing.T) {
+			db := d.open(t)
+			if err := Migrate(db); err != nil {
+				t.Fatal(err)
+			}
+			err := db.Exec(`INSERT INTO repos (owner_id, name) VALUES (999999, 'x')`).Error
+			if err == nil {
+				t.Fatal("insert with unknown owner succeeded")
+			}
+			if got := mapGormErr(err); !errors.Is(got, ErrForeignKey) {
+				t.Errorf("mapGormErr(%v) = %v, want ErrForeignKey", err, got)
+			}
+		})
 	}
 }

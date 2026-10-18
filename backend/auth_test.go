@@ -77,7 +77,10 @@ var sqliteGroups = map[string]string{"auth_test.go": "users", "session_test.go":
 
 // testSourceFile returns the base name of the file that holds the running
 // Test function, found by walking the stack, so a helper in another file
-// (limitedServer in ratelimit_test.go, ...) does not change the group.
+// (limitedServer in ratelimit_test.go, ...) does not change the group. A frame
+// counts as a test when its name is "Test" followed by an uppercase letter or
+// the end of the name (or a closure inside such a function); a helper named
+// like TestFoo that is not a test would fool it, so do not name helpers so.
 func testSourceFile() string {
 	pcs := make([]uintptr, 32)
 	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
@@ -85,13 +88,27 @@ func testSourceFile() string {
 		f, more := frames.Next()
 		name := f.Function[strings.LastIndex(f.Function, "/")+1:]
 		name = name[strings.Index(name, ".")+1:]
-		if strings.HasPrefix(name, "Test") && strings.HasSuffix(f.File, "_test.go") {
+		if isTestFuncName(name) && strings.HasSuffix(f.File, "_test.go") {
 			return filepath.Base(f.File)
 		}
 		if !more {
 			return ""
 		}
 	}
+}
+
+// isTestFuncName reports whether a function name (package stripped) has the
+// shape of a Test function: "Test" then an uppercase letter, an underscore
+// or the end, ignoring a closure suffix such as ".func1".
+func isTestFuncName(name string) bool {
+	if i := strings.Index(name, "."); i >= 0 {
+		name = name[:i]
+	}
+	rest, ok := strings.CutPrefix(name, "Test")
+	if !ok {
+		return false
+	}
+	return rest == "" || rest[0] == '_' || (rest[0] >= 'A' && rest[0] <= 'Z')
 }
 
 // newSQLiteServer builds a Server on a gormStore over a temp SQLite file, or
