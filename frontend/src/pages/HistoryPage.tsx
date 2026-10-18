@@ -58,7 +58,7 @@ export function HistoryPage() {
       <div className="flex flex-col gap-3">
         {toolbar}
         {heading}
-        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground shadow-xs ring-1 ring-border">
+        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground border border-border">
           This repository is empty. Nothing has been committed yet.
         </p>
       </div>
@@ -81,7 +81,7 @@ export function HistoryPage() {
     body = <LoadingBlock label="Loading commits" />
   } else if (q.data.commits.length === 0) {
     body = (
-      <div className="flex flex-col items-start gap-2 rounded-md bg-card p-3 text-sm shadow-xs ring-1 ring-border">
+      <div className="flex flex-col items-start gap-2 rounded-md bg-card p-3 text-sm border border-border">
         <p className="text-muted-foreground">
           {page > 1 ? "There are no more commits on this page." : "There are no commits here yet."}
         </p>

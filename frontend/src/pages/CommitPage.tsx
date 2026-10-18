@@ -38,7 +38,7 @@ export function CommitPage() {
           {owner}/{repo}
         </Link>
       </PageToolbar>
-      <div className="flex flex-col gap-1 rounded-md bg-card p-3 shadow-xs ring-1 ring-border">
+      <div className="flex flex-col gap-1 rounded-md bg-card p-3 border border-border">
         <h1 className="text-xl font-semibold whitespace-pre-wrap break-words">{c.message}</h1>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <span>{c.author}</span>
@@ -65,7 +65,7 @@ export function CommitPage() {
         {dels} {dels === 1 ? "deletion" : "deletions"}
       </p>
       {count === 0 ? (
-        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground shadow-xs ring-1 ring-border">
+        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground border border-border">
           no files changed
         </p>
       ) : (

@@ -340,7 +340,7 @@ function Editor({
         />
       </div>
 
-      <div className="flex flex-col gap-3 rounded-md bg-card p-3 shadow-xs ring-1 ring-border">
+      <div className="flex flex-col gap-3 rounded-md bg-card p-3 border border-border">
         <div className="flex flex-col gap-1.5">
           <Label htmlFor="commit-message">Commit message</Label>
           <Input

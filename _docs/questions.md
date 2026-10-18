@@ -63,3 +63,8 @@ and add OpenApi.yaml so that code knows what frontend expects from the backend a
 - [ ] (#57) The browser's own Back/Forward buttons cannot be intercepted by the editor's unsaved-changes guard: the app uses `BrowserRouter`, where the URL has already changed when `popstate` fires and undoing it is racy. Reload, tab close, in-app links, Cancel/Back/Up and breadcrumbs are guarded. Proper fix: migrate to a data router (`createBrowserRouter`) so `useBlocker` works - a routing change across the app. Default used: not migrated; limitation documented on #57. - 2026-10-18 - yes do the fix and start closing the issues. 
 
 Now that we discussed the questions start closing the issues with the qa commiting and pushing the changes and merging them into main
+
+## UI polish/cleanup (#58, #61), stashed 2026-10-19
+- [ ] (#61) `_docs/design-system.md` is marked superseded by `DESIGN.md` + `frontend/src/index.css`; its primary/ring token rows and the card-shadow sentence were updated to the Primer values, other historical values (backgrounds, radius, p-3 density) are left with the banner. Default: simplest reversible edit, no look change. Want the whole file rewritten to match DESIGN.md instead? 
+- [ ] (#61) Stray transcript files (`frontend/*local-command-caveat*.txt`) do not exist; `resolving the issues.txt` is already git-ignored and untracked. Default: nothing deleted.
+- [ ] (#61) shadcn form controls (`select.tsx`, `textarea.tsx`) and dialogs keep their own `shadow-xs`/`shadow-lg`; the issue names only surfaces/cards. Default: left unchanged.

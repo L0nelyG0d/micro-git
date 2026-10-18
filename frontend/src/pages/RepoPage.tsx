@@ -73,7 +73,7 @@ export function RepoPage() {
     return (
       <div className="flex flex-col gap-3">
         {header}
-        <div className="flex flex-col items-start gap-2 rounded-md bg-card p-3 text-sm shadow-xs ring-1 ring-border">
+        <div className="flex flex-col items-start gap-2 rounded-md bg-card p-3 text-sm border border-border">
           {owns ? (
             <>
               <p className="text-muted-foreground">This repository is empty. Add the first file to create the {repo.default_branch} branch.</p>

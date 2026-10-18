@@ -136,7 +136,7 @@ export function SettingsPage() {
       <div className="flex flex-col gap-3">
         {toolbar}
         <h1 className="text-xl font-semibold">Settings</h1>
-        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground shadow-xs ring-1 ring-border">
+        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground border border-border">
           Only the owner of {owner}/{name} can change its settings.{" "}
           {!user && (
             <Link to="/login" state={{ from: `${repoHome}/settings` }} className="text-primary underline underline-offset-2">
