@@ -109,7 +109,9 @@ func Migrate(db *gorm.DB) error {
 
 // makeIdentity turns the serial id GORM creates on Postgres into
 // GENERATED ALWAYS AS IDENTITY, as in schema.sql, so an explicit id is rejected.
-// It does nothing when the column is already an identity.
+// It does nothing when the column is already an identity. It drops the serial
+// sequence, which resets the id counter, so it is only safe on empty tables
+// (Migrate calls it straight after AutoMigrate on a fresh schema).
 func makeIdentity(db *gorm.DB, table string) error {
 	var ident string
 	err := db.Raw(`SELECT a.attidentity::text FROM pg_attribute a
