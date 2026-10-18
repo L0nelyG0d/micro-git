@@ -5,7 +5,7 @@ import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { api, ApiError } from "@/lib/api"
+import { apiService, ApiError } from "@/services"
 import { validateDescription, validateRepoName } from "@/lib/repos"
 import type { Repo } from "@/lib/repos"
 
@@ -46,7 +46,7 @@ export function NewRepoForm({ onCreated, onCancel, onUnauthorized }: Props) {
     }
     setBusy(true)
     try {
-      const repo = await api<Repo>("/repos", { method: "POST", body: { name, description, private: isPrivate } })
+      const repo = await apiService.createRepo({ name, description, private: isPrivate })
       onCreated(repo)
     } catch (err) {
       if (err instanceof ApiError && err.status === 401) {

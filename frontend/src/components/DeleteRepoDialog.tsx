@@ -12,7 +12,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { api, ApiError } from "@/lib/api"
+import { apiService, ApiError } from "@/services"
 import { errorMessage } from "@/lib/useFetch"
 
 export function DeleteRepoDialog({
@@ -35,9 +35,7 @@ export function DeleteRepoDialog({
     setBusy(true)
     setError("")
     try {
-      await api(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
-        method: "DELETE",
-      })
+      await apiService.deleteRepo(owner, repo)
       setOpen(false)
       toast.success(`Repository ${owner}/${repo} deleted.`)
       onDeleted()

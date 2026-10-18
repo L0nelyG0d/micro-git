@@ -98,3 +98,9 @@ export function historyPath(owner: string, repo: string, ref: string, page = 1):
   const base = `/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/commits/${encodeURIComponent(ref)}`
   return page > 1 ? `${base}?page=${page}` : base
 }
+
+/** Response of `GET /repos/{owner}/{repo}/compare`. */
+export type Compare = { base: string; head: string; base_commit: string; head_commit: string; files: FileDiff[] }
+
+/** One file change in a commit request. */
+export type Change = { path: string; content: string } | { path: string; delete: true }

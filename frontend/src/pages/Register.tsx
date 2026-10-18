@@ -1,6 +1,6 @@
 import { Navigate, useNavigate } from "react-router-dom"
 import { useAuth } from "@/auth/AuthContext"
-import { api } from "@/lib/api"
+import { apiService } from "@/services"
 import { AuthForm, FormLink } from "./AuthForm"
 
 export function Register() {
@@ -13,7 +13,7 @@ export function Register() {
       submitLabel="Register"
       onSubmit={async (username, password) => {
         // Usernames are lower-cased by the server; no client-side rejection.
-        await api("/auth/register", { method: "POST", body: { username, password } })
+        await apiService.register(username, password)
         try {
           await login(username, password)
         } catch {

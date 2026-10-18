@@ -14,7 +14,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { api, ApiError } from "@/lib/api"
+import { apiService, ApiError } from "@/services"
 import type { Branch } from "@/lib/git"
 import { errorMessage } from "@/lib/useFetch"
 
@@ -100,10 +100,7 @@ export function MergeDialog({
     setBusy(true)
     setError("")
     try {
-      await api(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/merge`, {
-        method: "POST",
-        body: { base: into, head: from },
-      })
+      await apiService.mergeBranches(owner, repo, { base: into, head: from })
       setOpen(false)
       toast.success(`${into} now points to the tip of ${from}.`)
       onMerged(into)

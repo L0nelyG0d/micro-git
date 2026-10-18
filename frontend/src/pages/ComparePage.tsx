@@ -3,13 +3,12 @@ import { FileView } from "@/components/DiffView"
 import { PageToolbar } from "@/components/PageToolbar"
 import { ErrorBlock, LoadingBlock, NotFoundBlock } from "@/components/StateViews"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { ApiError } from "@/lib/api"
+import { ApiError } from "@/services"
 import { shortOid } from "@/lib/format"
-import { isOidRef, uiPath, type Branch, type FileDiff } from "@/lib/git"
+import { isOidRef, uiPath, type Branch, type Compare } from "@/lib/git"
 import type { Repo } from "@/lib/repos"
 import { useFetch } from "@/lib/useFetch"
 
-type Compare = { base: string; head: string; base_commit: string; head_commit: string; files: FileDiff[] }
 
 function RefSelect({ label, value, branches, onChange }: {
   label: string

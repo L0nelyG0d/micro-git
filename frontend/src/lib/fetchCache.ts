@@ -1,6 +1,6 @@
 /**
  * Small in-memory GET cache keyed by API path (stale-while-revalidate is done
- * by useFetch). Writes through `api()` drop the affected entries.
+ * by useFetch). Writes through the service drop the affected entries.
  */
 const MAX_ENTRIES = 200
 const entries = new Map<string, unknown>()

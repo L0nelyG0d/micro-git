@@ -13,7 +13,7 @@ import { Button } from "@/components/ui/button"
 import { Textarea } from "@/components/ui/textarea"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { api, ApiError } from "@/lib/api"
+import { apiService, ApiError } from "@/services"
 import { formatDate } from "@/lib/format"
 import { historyPath, uiPath, type Branch } from "@/lib/git"
 import type { Repo } from "@/lib/repos"
@@ -46,12 +46,9 @@ function DetailsForm({
     setBusy(true)
     setError("")
     try {
-      await api(`/repos/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}`, {
-        method: "PATCH",
-        body: {
-          ...(description !== repo.description && { description }),
-          ...(defaultBranch !== repo.default_branch && { default_branch: defaultBranch }),
-        },
+      await apiService.updateRepo(repo.owner, repo.name, {
+        ...(description !== repo.description && { description }),
+        ...(defaultBranch !== repo.default_branch && { default_branch: defaultBranch }),
       })
       toast.success("Settings saved.")
       onSaved()

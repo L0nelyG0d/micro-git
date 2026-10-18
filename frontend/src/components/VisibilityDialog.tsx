@@ -12,7 +12,7 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
-import { api, ApiError } from "@/lib/api"
+import { apiService, ApiError } from "@/services"
 import { errorMessage } from "@/lib/useFetch"
 
 /** Danger-zone control that flips a repository between public and private (PATCH `private`). */
@@ -39,10 +39,7 @@ export function VisibilityDialog({
     setBusy(true)
     setError("")
     try {
-      await api(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`, {
-        method: "PATCH",
-        body: { private: !isPrivate },
-      })
+      await apiService.updateRepo(owner, repo, { private: !isPrivate })
       setOpen(false)
       toast.success(`${owner}/${repo} is now ${target}.`)
       onChanged()

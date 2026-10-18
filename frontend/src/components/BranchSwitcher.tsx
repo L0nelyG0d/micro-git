@@ -23,7 +23,7 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { api, ApiError } from "@/lib/api"
+import { apiService, ApiError } from "@/services"
 import { isOidRef, validateBranchName, type Branch } from "@/lib/git"
 import { shortOid } from "@/lib/format"
 import { errorMessage } from "@/lib/useFetch"
@@ -105,10 +105,7 @@ function CreateBranch({ owner, repo, current, onCreated, onUnauthorized }: Props
     setBusy(true)
     setError("")
     try {
-      await api(`/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches`, {
-        method: "POST",
-        body: { name: trimmed, from: current },
-      })
+      await apiService.createBranch(owner, repo, { name: trimmed, from: current })
       reset(false)
       onCreated(trimmed)
     } catch (e) {
@@ -185,10 +182,7 @@ function DeleteBranch({ owner, repo, branches, onDeleted, onUnauthorized }: Prop
     setBusy(true)
     setError("")
     try {
-      await api(
-        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}/branches/${encodeURIComponent(target)}`,
-        { method: "DELETE" },
-      )
+      await apiService.deleteBranch(owner, repo, target)
       const name = target
       setTarget(null)
       toast.success(`Branch ${name} deleted.`)

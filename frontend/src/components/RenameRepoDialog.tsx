@@ -13,8 +13,8 @@ import {
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
-import { api, ApiError } from "@/lib/api"
-import { validateRepoName, type Repo } from "@/lib/repos"
+import { apiService, ApiError } from "@/services"
+import { validateRepoName } from "@/lib/repos"
 import { errorMessage } from "@/lib/useFetch"
 
 const NAME_RULE = "Use 1-100 letters, digits, dots, hyphens or underscores."
@@ -43,10 +43,7 @@ export function RenameRepoDialog({
     if (invalid) return
     setBusy(true)
     try {
-      const updated = await api<Repo>(
-        `/repos/${encodeURIComponent(owner)}/${encodeURIComponent(repo)}`,
-        { method: "PATCH", body: { name } },
-      )
+      const updated = await apiService.updateRepo(owner, repo, { name })
       setOpen(false)
       toast.success(`Repository renamed to ${owner}/${updated.name}.`)
       onRenamed(updated.name)
