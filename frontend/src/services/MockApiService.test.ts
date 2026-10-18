@@ -257,6 +257,19 @@ describe("commits", () => {
     expect(await status(svc.createCommit("ann", "r", { ...base, branch: "nope" }))).toBe(404)
   })
 
+  it("answers 400, not a TypeError, for a change entry that is not an object", async () => {
+    const tip = await seeded()
+    for (const bad of [null, 5, "x"]) {
+      const input = { branch: "main", expected_tip: tip, message: "m", changes: [bad] } as unknown as Parameters<typeof svc.createCommit>[2]
+      expect(await status(svc.createCommit("ann", "r", input))).toBe(400)
+    }
+  })
+
+  it("lists tree entries in UTF-8 byte order", async () => {
+    await seeded("ann", "r", [{ path: "\u{1F600}", content: "a" }, { path: "\uFF5E", content: "b" }])
+    expect((await svc.getTreeRoot("ann", "r", "main")).entries.map((e) => e.name)).toEqual(["\uFF5E", "\u{1F600}", "README.md"].sort((a, b) => (a === "README.md" ? 1 : b === "README.md" ? -1 : 0)))
+  })
+
   it("history is computed from the stored commits: parents, order, paging", async () => {
     const c1 = await seeded()
     const c2 = (await svc.createCommit("ann", "r", { branch: "main", expected_tip: c1, message: "second", changes: [{ path: "a.txt", content: "x\n" }] })).oid

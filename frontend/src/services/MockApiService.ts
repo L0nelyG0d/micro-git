@@ -8,6 +8,7 @@ import type { ApiService, CommitInput, ReadOptions, RepoPatch } from "./ApiServi
 import { ApiError } from "./http"
 import {
   applyChanges,
+  compareBytes,
   decodeText,
   diffTrees,
   getCommit,
@@ -358,6 +359,7 @@ export class MockApiService implements ApiService {
     if (!Array.isArray(changes) || changes.length < 1 || changes.length > MAX_CHANGES) {
       fail(400, "changes must contain 1-50 entries")
     }
+    if (changes.some((c) => typeof c !== "object" || c === null)) fail(400, "invalid JSON body")
     if (isEmpty && branch !== r.defaultBranch) fail(400, "first commit must target the default branch")
 
     const tip = r.refs.get(branch) ?? ""
@@ -413,7 +415,7 @@ export class MockApiService implements ApiService {
     checkSignal(options)
     const r = this.findRepo(owner, repo)
     const branches = [...r.refs]
-      .sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0))
+      .sort(([x], [y]) => compareBytes(x, y))
       .map(([name, oid]) => ({ name, oid, is_default: name === r.defaultBranch }))
     return { branches }
   }
@@ -492,7 +494,7 @@ export class MockApiService implements ApiService {
         oid: e.oid,
       }))
       // Directories first, then files, each bytewise by name.
-      entries.sort((x, y) => (x.type !== y.type ? (x.type === "tree" ? -1 : 1) : x.name < y.name ? -1 : x.name > y.name ? 1 : 0))
+      entries.sort((x, y) => (x.type !== y.type ? (x.type === "tree" ? -1 : 1) : compareBytes(x.name, y.name)))
       return { ref, commit, path, entries }
     }
     if (isDir || path === "") fail(400, "not a file")

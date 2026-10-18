@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest"
 import {
   applyChanges,
+  compareBytes,
   diffText,
   diffTrees,
   encodeText,
@@ -30,6 +31,20 @@ describe("git objects", () => {
       { mode: "100644", name: "foo.txt", oid },
     ])
     expect(parseTree(body).map((e) => e.name)).toEqual(["foo.txt", "foo"])
+  })
+
+  it("sorts by UTF-8 bytes, not UTF-16 code units", async () => {
+    // U+FF5E is EF BD 9E in UTF-8 but FF5E in UTF-16; U+1F600 is F0 9F 98 80 / D83D DE00.
+    const wide = "\uFF5E"
+    const emoji = "\u{1F600}"
+    expect(wide > emoji).toBe(true) // UTF-16 order
+    expect(compareBytes(wide, emoji)).toBeLessThan(0) // byte order
+    const oid = "a".repeat(40)
+    const body = serializeTree([
+      { mode: "100644", name: emoji, oid },
+      { mode: "100644", name: wide, oid },
+    ])
+    expect(parseTree(body).map((e) => e.name)).toEqual([wide, emoji])
   })
 
   it("round-trips commits", () => {

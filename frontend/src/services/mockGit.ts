@@ -47,10 +47,18 @@ export async function putObject(store: ObjectStore, type: ObjType, body: Uint8Ar
 
 export type TreeEntry = { mode: "100644" | "40000"; name: string; oid: string }
 
-/** Git tree order: bytewise by name, a directory compares as name + "/". */
+/** Compares strings by their UTF-8 bytes, as the backend does (JS `<` compares UTF-16 code units). */
+export function compareBytes(a: string, b: string): number {
+  const x = enc.encode(a)
+  const y = enc.encode(b)
+  for (let i = 0; i < x.length && i < y.length; i++) if (x[i] !== y[i]) return x[i] - y[i]
+  return x.length - y.length
+}
+
+/** Git tree order: bytewise (UTF-8) by name, a directory compares as name + "/". */
 function sortEntries(entries: TreeEntry[]): TreeEntry[] {
   const key = (e: TreeEntry) => (e.mode === "40000" ? e.name + "/" : e.name)
-  return [...entries].sort((a, b) => (key(a) < key(b) ? -1 : key(a) > key(b) ? 1 : 0))
+  return [...entries].sort((a, b) => compareBytes(key(a), key(b)))
 }
 
 export function serializeTree(entries: TreeEntry[]): Uint8Array {
@@ -333,7 +341,7 @@ export function diffTrees(store: ObjectStore, oldTree: string, newTree: string):
   const before = flattenTree(store, oldTree)
   const after = flattenTree(store, newTree)
   const text = (oid: string | undefined) => (oid ? decodeText((store.get(oid) as GitObject).body) : "")
-  const paths = [...new Set([...before.keys(), ...after.keys()])].sort()
+  const paths = [...new Set([...before.keys(), ...after.keys()])].sort(compareBytes)
   const out: FileDiff[] = []
   for (const path of paths) {
     const o = before.get(path)

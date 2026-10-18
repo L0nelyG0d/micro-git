@@ -114,6 +114,17 @@ Run these steps in order.
    cd frontend && npm run dev
    ```
 
+   No backend or database? Run the UI against an in-browser mock instead:
+
+   ```sh
+   cd frontend && VITE_USE_MOCK=true npm run dev
+   ```
+
+   The mock keeps its data in memory, so everything is lost on reload. To set
+   the flag without typing it each time, copy `frontend/.env.example` to
+   `frontend/.env.local` and edit `VITE_USE_MOCK`. The default build
+   (`npm run build` without the flag) contains no mock code.
+
 The Vite dev server on port 5173 proxies `/api/*` to `http://localhost:8080`,
 stripping the `/api` prefix (`/api/repos` reaches the backend as `/repos`). If
 the backend listens elsewhere (a different `PORT`), start the frontend with the
