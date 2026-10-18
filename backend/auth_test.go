@@ -73,7 +73,27 @@ func testServer(t *testing.T) *Server {
 // sqliteGroups are the test files whose store methods gormStore has ported;
 // every other file still skips under TEST_STORE=sqlite. Each issue that ports
 // a group adds its files here (users: #85).
-var sqliteGroups = map[string]string{"auth_test.go": "users", "session_test.go": "users", "ratelimit_test.go": "users"}
+var sqliteGroups = map[string]string{
+	"auth_test.go": "users", "session_test.go": "users", "ratelimit_test.go": "users",
+	"repos_test.go": "repos", "rename_test.go": "repos", "delete_race_test.go": "repos",
+}
+
+// sqlitePending names the tests inside an enabled file that still need store
+// methods from a later issue; they skip under TEST_STORE=sqlite with that
+// issue in the message. An issue that ports the methods deletes the entry.
+var sqlitePending = map[string]string{
+	"TestRenameRepo": "#88 (commits)",
+	"TestUpdateRepoDescriptionAndDefaultBranch": "#88 (commits) and #91 (branches)",
+	"TestEmptyFlag":                           "#88 (refs)",
+	"TestDeleteRepo":                          "#87 (objects) and #88 (refs)",
+	"TestListRepos":                           "#92 (ListRepos)",
+	"TestListReposPagination":                 "#92 (ListRepos)",
+	"TestListReposDefaultPageBoundary":        "#92 (ListRepos)",
+	"TestListReposTieBreaker":                 "#92 (ListRepos)",
+	"TestListReposValidationOrder":            "#92 (ListRepos)",
+	"TestReadsRacingRepoDeleteAre404":         "#87 and #88 (reads, commits)",
+	"TestMissingObjectInExistingRepoStays500": "#87 and #88 (reads, commits)",
+}
 
 // testSourceFile returns the base name of the file that holds the running
 // Test function, found by walking the stack, so a helper in another file
@@ -82,6 +102,17 @@ var sqliteGroups = map[string]string{"auth_test.go": "users", "session_test.go":
 // the end of the name (or a closure inside such a function); a helper named
 // like TestFoo that is not a test would fool it, so do not name helpers so.
 func testSourceFile() string {
+	_, file := testFrame()
+	return file
+}
+
+// testFuncName returns the name of the running top-level Test function.
+func testFuncName() string {
+	name, _ := testFrame()
+	return name
+}
+
+func testFrame() (fn, file string) {
 	pcs := make([]uintptr, 32)
 	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
 	for {
@@ -89,10 +120,13 @@ func testSourceFile() string {
 		name := f.Function[strings.LastIndex(f.Function, "/")+1:]
 		name = name[strings.Index(name, ".")+1:]
 		if isTestFuncName(name) && strings.HasSuffix(f.File, "_test.go") {
-			return filepath.Base(f.File)
+			if i := strings.Index(name, "."); i >= 0 {
+				name = name[:i]
+			}
+			return name, filepath.Base(f.File)
 		}
 		if !more {
-			return ""
+			return "", ""
 		}
 	}
 }
@@ -118,6 +152,9 @@ func newSQLiteServer(t *testing.T) *Server {
 	file := testSourceFile()
 	if _, ok := sqliteGroups[file]; !ok {
 		t.Skip("TEST_STORE=sqlite: gormStore does not implement this group yet (#86 to #92)")
+	}
+	if issue, ok := sqlitePending[testFuncName()]; ok {
+		t.Skipf("TEST_STORE=sqlite: needs store methods ported in %s", issue)
 	}
 	db := openSQLiteForTest(t)
 	if err := Migrate(db); err != nil {
