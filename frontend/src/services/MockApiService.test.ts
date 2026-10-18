@@ -27,23 +27,32 @@ async function message(p: Promise<unknown>): Promise<string> {
 }
 
 const PW = "password1"
+/** Register and log in: register alone starts no session. */
+async function signUp(name: string) {
+  const u = await svc.register(name, PW)
+  await svc.login(name, PW)
+  return u
+}
 /** Registers `name`, creates repo `r` and makes a first commit; returns the commit oid. */
 async function seeded(name = "ann", repo = "r", files = [{ path: "README.md", content: "hello\n" }]) {
-  await svc.register(name, PW)
+  await signUp(name)
   await svc.createRepo({ name: repo })
   const { oid } = await svc.createCommit(name, repo, { branch: "main", expected_tip: "", message: "first", changes: files })
   return oid
 }
 
 describe("auth", () => {
-  it("register and login set the user, logout clears it, me needs a session", async () => {
+  it("login sets the user, register does not, logout clears it, me needs a session", async () => {
     expect(await status(svc.me())).toBe(401)
     const u = await svc.register("Ann", PW)
     expect(u.username).toBe("ann")
+    // Like the backend, register starts no session: log in next.
+    expect(await status(svc.me())).toBe(401)
+    expect((await svc.login("ANN", PW)).id).toBe(u.id)
     expect(await svc.me()).toEqual(u)
     await svc.logout()
     expect(await status(svc.me())).toBe(401)
-    expect((await svc.login("ANN", PW)).id).toBe(u.id)
+    await svc.login("ann", PW)
     expect(await svc.me()).toEqual(u)
   })
 
@@ -70,7 +79,7 @@ describe("auth", () => {
 
 describe("repositories", () => {
   it("creates, lists, updates and deletes", async () => {
-    await svc.register("ann", PW)
+    await signUp("ann")
     const repo = await svc.createRepo({ name: "demo", description: "d" })
     expect(repo).toMatchObject({ owner: "ann", name: "demo", description: "d", default_branch: "main", private: false, empty: true })
     expect((await svc.listRepos()).repos.map((r) => r.name)).toEqual(["demo"])
@@ -82,17 +91,17 @@ describe("repositories", () => {
   })
 
   it("repo names are unique per owner, case-insensitively, and may repeat across owners", async () => {
-    await svc.register("ann", PW)
+    await signUp("ann")
     await svc.createRepo({ name: "Demo" })
     expect(await status(svc.createRepo({ name: "demo" }))).toBe(409)
     await svc.createRepo({ name: "other" })
     expect(await status(svc.updateRepo("ann", "other", { name: "DEMO" }))).toBe(409)
-    await svc.register("bob", PW)
+    await signUp("bob")
     await expect(svc.createRepo({ name: "demo" })).resolves.toMatchObject({ owner: "bob" })
   })
 
   it("validates names and description", async () => {
-    await svc.register("ann", PW)
+    await signUp("ann")
     for (const name of ["", ".", "..", "a b", "x".repeat(101)]) expect(await status(svc.createRepo({ name }))).toBe(400)
     expect(await status(svc.createRepo({ name: "ok", description: "x".repeat(501) }))).toBe(400)
     await svc.createRepo({ name: "ok" })
@@ -100,13 +109,13 @@ describe("repositories", () => {
   })
 
   it("matches owner and repo case-insensitively", async () => {
-    await svc.register("ann", PW)
+    await signUp("ann")
     await svc.createRepo({ name: "Demo" })
     expect((await svc.getRepo("ANN", "demo")).name).toBe("Demo")
   })
 
   it("paginates the list", async () => {
-    await svc.register("ann", PW)
+    await signUp("ann")
     for (const n of ["a", "b", "c"]) await svc.createRepo({ name: n })
     const p1 = await svc.listRepos({ per_page: 2 })
     expect(p1).toMatchObject({ page: 1, per_page: 2, has_more: true })
@@ -130,7 +139,7 @@ describe("write access", () => {
     expect(await status(svc.deleteBranch("ann", "r", "main"))).toBe(401)
     expect(await status(svc.mergeBranches("ann", "r", { base: "main", head: "b" }))).toBe(401)
 
-    await svc.register("bob", PW)
+    await signUp("bob")
     expect(await status(svc.updateRepo("ann", "r", { description: "x" }))).toBe(403)
     expect(await status(svc.deleteRepo("ann", "r"))).toBe(403)
     expect(await status(svc.createCommit("ann", "r", input))).toBe(403)
@@ -165,7 +174,7 @@ describe("visibility", () => {
 
     for (const who of ["bob", null]) {
       await svc.logout()
-      if (who) await svc.register(who, PW)
+      if (who) await signUp(who)
       expect(await Promise.all(reads().map(status))).toEqual(Array(10).fill(404))
       expect((await svc.listRepos()).repos).toEqual([])
       expect((await svc.listRepos({ owner: "ann" })).repos).toEqual([])
@@ -177,7 +186,7 @@ describe("visibility", () => {
   })
 
   it("createRepo accepts private", async () => {
-    await svc.register("ann", PW)
+    await signUp("ann")
     expect((await svc.createRepo({ name: "p", private: true })).private).toBe(true)
   })
 })
@@ -219,7 +228,7 @@ describe("branches", () => {
 
 describe("commits", () => {
   it("first commit goes to the default branch with an empty expected_tip", async () => {
-    await svc.register("ann", PW)
+    await signUp("ann")
     await svc.createRepo({ name: "r" })
     const input = { branch: "dev", expected_tip: "", message: "m", changes: [{ path: "a", content: "b" }] }
     expect(await status(svc.createCommit("ann", "r", input))).toBe(400)

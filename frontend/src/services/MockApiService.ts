@@ -203,7 +203,7 @@ export class MockApiService implements ApiService {
     if (this.users.some((u) => u.username === name)) fail(409, "username already taken")
     const user = { id: this.nextUserId++, username: name, password }
     this.users.push(user)
-    this.session = user.id
+    // Like the backend, register sets no session: the caller logs in next.
     invalidateAfterWrite("/auth/register")
     return { id: user.id, username: user.username }
   }
