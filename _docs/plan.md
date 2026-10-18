@@ -338,3 +338,16 @@ Styling follows `_docs/design-system.md`.
 
 - Tree rebuild (nested paths, deletes, empty directories) is the hardest part. Keep it a pure function and test it without the database
 - Hashing must match real git. Verify with the vectors above before building on it
+
+## Storage
+
+Decision (user, 2026-10-19): the backend gets three interchangeable stores behind one Go interface, so the app runs without a database (memory), on a single file (SQLite) and on Postgres. Issues #79-#99.
+
+- Interface: `Store` (extracted from the pgx code in `backend/store.go`) with groups for users, repos, objects, refs (compare-and-swap commit), history walk, ancestry (ahead/behind, merge base), branches and visibility. Handlers use only the interface. Store errors are sentinels (`ErrNotFound`, `ErrConflict`, `ErrForeignKey`); each store translates its own driver errors.
+- Implementations: `pgxStore` (today's code, kept until GORM reaches parity), `memStore` (maps and a mutex, for tests and the mock iteration), `gormStore` (GORM, one code path for SQLite and Postgres).
+- ORM and drivers: `gorm.io/gorm`, `gorm.io/driver/postgres`, `github.com/glebarez/sqlite` (pure Go, no cgo, `CGO_ENABLED=0` builds). Raw SQL is allowed only where portability needs it (the recursive CTEs for history and ancestry, written once and tested on both dialects).
+- Config: `STORE=memory` (no database), else `DB_DRIVER=postgres` (default, needs `DATABASE_URL`) or `DB_DRIVER=sqlite` (needs `SQLITE_PATH`, default `./data/mg.db`, git-ignored). Unknown values stop startup with a message. Connection strings are never logged or documented.
+- Schema: GORM models create the same logical tables on both drivers (users, repos, objects, refs; composite keys, unique constraints, ON DELETE CASCADE, BLOB/BYTEA bodies). `backend/db/schema.sql` stays the Postgres reference, guarded by a parity test. Migrations are idempotent at startup.
+- SQLite specifics: `foreign_keys=ON`, WAL, busy timeout, a single writer connection; the object batch reads chunk below SQLite's variable limit.
+- Tests: one shared API suite selected by `TEST_STORE=memory|sqlite|postgres`. Default is the fast local Postgres on :54329 (`TEST_DATABASE_URL`); sqlite uses `t.TempDir()` files; `make test-all` runs all three and CI runs sqlite and memory beside Postgres.
+- Frontend side of the same assignment: all network access through one `ApiService`; `MockApiService` selected by `VITE_USE_MOCK=true`; `openapi.yaml` is the contract both sides are tested against.

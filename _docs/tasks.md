@@ -207,3 +207,42 @@ Frontend
 - #78 session revalidation on focus/visibilitychange - implemented; jsdom only
 
 Open decisions are in `_docs/questions.md` under "Testing/optimization round".
+
+## Teacher-assignment round (issues #79+)
+
+Created 2026-10-19 from the teacher's assignment: close all mvp issues, persistent SQLite storage through an ORM (Postgres kept working), delivery in iterations (frontend + mock -> openapi.yaml -> backend in-memory -> backend SQLite -> connect), all .md in the repo, brainstorm history as .md, real running and testing with bugs filed as `user-test-bug` issues. The issue count is not padded: more issues come from real bugs found while testing. Issues #80, #83, #94, #96, #108 were merged into #79, #82, #93, #84, #107; #109, #110, #112, #114, #115 were closed as padding.
+
+Backend storage (in order)
+- #79 Store interface extracted from pgx code + sentinel errors (no dependency)
+- #81 config DB_DRIVER / SQLITE_PATH / STORE (none)
+- #82 in-memory Store + whole API suite on STORE=memory (#79, #81)
+- #84 GORM models + portable migrations + Postgres schema parity test (#81)
+- #85 GORM users/auth (#79, #84)
+- #86 GORM repos (#85)
+- #87 GORM objects (#86)
+- #88 GORM refs and CAS commits (#87)
+- #89 portable recursive CTE history (#88)
+- #90 portable merge/compare ancestry (#89)
+- #91 GORM branches (#88)
+- #92 GORM visibility / private repos (#86, #91)
+- #93 SQLite driver wired, data survives restart + restart test (#85-#92)
+- #95 SQLite pragmas, busy handling (#93)
+- #97 test matrix memory/sqlite/postgres (#82, #88, #93)
+- #98 CI job for sqlite and memory (#97)
+- #99 Makefile run-sqlite, run-memory, test-all, clean-data (#81, #93)
+
+Frontend and contract
+- #100 single services/API layer audit (none)
+- #101 mock service + VITE_USE_MOCK (#100)
+- #102 frontend tests against the mock (#101)
+- #103 openapi.yaml updated + sync tests (#100)
+- #111 backend-unreachable banner and error boundary (#100)
+
+Docs, e2e, connect
+- #104 _docs/brainstorm-history.md, secrets scrubbed (none)
+- #105 README / plan / AGENTS / process updated (#97, #99)
+- #106 _docs/iterations.md (#82, #93, #101, #103)
+- #107 browser e2e journey on SQLite, then Postgres and mock (#93, #99, #101)
+- #113 connect real frontend to backend on SQLite, smoke (#93, #99, #102, #103)
+
+Suggested order: #79, #81 and #100, #104 in parallel; then #82, #84, #101, #103; GORM areas #85-#92 in sequence; #93, #95, #99; #97, #98, #102; #111, #105, #106; #113, #107.
