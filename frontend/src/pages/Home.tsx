@@ -37,14 +37,13 @@ export function Home() {
   }, [user?.id, sessionLoading, reload])
 
   // Stays open after a 401 so the expiry message remains visible.
-  const showForm = formOpen
 
   return (
     <div className="flex flex-col gap-3">
       <div className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold">Repositories</h1>
         {sessionLoading ? null : user ? (
-          !showForm && <Button onClick={() => setFormOpen(true)}>New repository</Button>
+          !formOpen && <Button onClick={() => setFormOpen(true)}>New repository</Button>
         ) : (
           <Link to="/login" state={{ from: "/" }} className="text-sm text-primary underline underline-offset-2">
             Log in to create a repository
@@ -52,7 +51,7 @@ export function Home() {
         )}
       </div>
 
-      {showForm && (
+      {formOpen && (
         <NewRepoForm
           onCancel={() => setFormOpen(false)}
           onUnauthorized={expireSession}
