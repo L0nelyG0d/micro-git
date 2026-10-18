@@ -53,6 +53,10 @@ type node struct {
 	change   *Change // set on leaves
 }
 
+type objectGetter interface {
+	GetObject(oid string) (gitobj.Type, []byte, error)
+}
+
 type pending struct {
 	t    gitobj.Type
 	body []byte
@@ -67,24 +71,106 @@ type pending struct {
 // The result does not depend on the order of changes. Store failures are
 // returned as-is.
 func Apply(store Store, root string, changes []Change) (string, error) {
-	top, err := plan(changes)
+	oid, objs, err := Build(store, root, changes)
 	if err != nil {
 		return "", err
 	}
-	var writes []pending
-	oid, _, changed, err := rebuild(store, root, top, true, &writes)
-	if err != nil {
-		return "", err
+	if bs, ok := store.(BatchStore); ok {
+		if err := bs.PutObjects(objs); err != nil {
+			return "", err
+		}
+		return oid, nil
 	}
-	if !changed {
-		return "", newErr(ErrNoChanges, "")
-	}
-	for _, w := range writes {
-		if _, err := store.PutObject(w.t, w.body); err != nil {
+	for _, o := range objs {
+		if _, err := store.PutObject(o.Type, o.Body); err != nil {
 			return "", err
 		}
 	}
 	return oid, nil
+}
+
+// Build is Apply without the writes: it returns the new root tree oid and the
+// new objects (blobs and trees) the caller must store. Existing trees are read
+// level by level with one GetObjects call per level when store is a
+// BatchStore, one GetObject per tree otherwise.
+func Build(store Store, root string, changes []Change) (string, []Object, error) {
+	top, err := plan(changes)
+	if err != nil {
+		return "", nil, err
+	}
+	var writes []pending
+	g := &getter{store: store, cache: map[string]Object{}}
+	if bs, ok := store.(BatchStore); ok && root != "" {
+		if err := prefetch(bs, g, root, top); err != nil {
+			return "", nil, err
+		}
+	}
+	oid, _, changed, err := rebuild(g, root, top, true, &writes)
+	if err != nil {
+		return "", nil, err
+	}
+	if !changed {
+		return "", nil, newErr(ErrNoChanges, "")
+	}
+	objs := make([]Object, len(writes))
+	for i, w := range writes {
+		objs[i] = Object{Type: w.t, Body: w.body}
+	}
+	return oid, objs, nil
+}
+
+// getter serves GetObject from a prefetched cache, falling back to the store.
+type getter struct {
+	store Store
+	cache map[string]Object
+}
+
+func (g *getter) GetObject(oid string) (gitobj.Type, []byte, error) {
+	if o, ok := g.cache[oid]; ok {
+		return o.Type, o.Body, nil
+	}
+	return g.store.GetObject(oid)
+}
+
+type frontier struct {
+	oid string
+	n   *node
+}
+
+// prefetch loads the existing trees the changes will touch, one GetObjects
+// call per directory depth. Anything it misses is read lazily by rebuild, so
+// errors surface exactly as before.
+func prefetch(bs BatchStore, g *getter, root string, top *node) error {
+	level := []frontier{{root, top}}
+	for len(level) > 0 {
+		oids := make([]string, 0, len(level))
+		for _, f := range level {
+			oids = append(oids, f.oid)
+		}
+		got, err := bs.GetObjects(oids)
+		if err != nil {
+			return err
+		}
+		var next []frontier
+		for _, f := range level {
+			o, ok := got[f.oid]
+			if !ok || o.Type != gitobj.TypeTree {
+				continue
+			}
+			g.cache[f.oid] = o
+			entries, err := gitobj.ParseTree(o.Body)
+			if err != nil {
+				continue // rebuild reports it
+			}
+			for _, e := range entries {
+				if child, ok := f.n.children[e.Name]; ok && child.change == nil && e.IsDir() {
+					next = append(next, frontier{e.OID, child})
+				}
+			}
+		}
+		level = next
+	}
+	return nil
 }
 
 // plan validates the changes themselves and builds a path trie.
@@ -161,7 +247,7 @@ func sortedNames(n *node) []string {
 // rebuild applies the trie n to the tree treeOID ("" = empty). It returns the
 // new tree oid, whether the tree is empty, and whether anything changed.
 // New objects are queued in writes, not stored.
-func rebuild(store Store, treeOID string, n *node, isRoot bool, writes *[]pending) (oid string, empty, changed bool, err error) {
+func rebuild(store objectGetter, treeOID string, n *node, isRoot bool, writes *[]pending) (oid string, empty, changed bool, err error) {
 	var entries []gitobj.TreeEntry
 	if treeOID != "" {
 		t, body, err := store.GetObject(treeOID)

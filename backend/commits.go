@@ -85,9 +85,14 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 	jsonOK := dec.Decode(&req) == nil && dec.Decode(&struct{}{}) == io.EOF
 
 	rs := NewRepoStore(s.DB, repo.ID)
-	// 404 for a missing branch comes before 403, so it needs the body.
+	// 404 for a missing branch comes before 403, so it needs the body. The
+	// same statement reads the tip and its commit, which the transaction below
+	// reuses: a tip that moves in between is caught by the compare-and-swap.
+	var tip string
+	var tipBody []byte
 	if jsonOK && validBranchName(req.Branch) && !repo.Empty {
-		if _, err := rs.GetRef(r.Context(), req.Branch); errors.Is(err, ErrRefNotFound) {
+		var err error
+		if tip, tipBody, err = rs.GetRefCommit(r.Context(), req.Branch); errors.Is(err, ErrRefNotFound) {
 			writeError(w, http.StatusNotFound, "branch not found")
 			return
 		} else if err != nil {
@@ -138,7 +143,10 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 	// A repository deleted since the lookup shows up as a foreign-key violation
 	// on the objects/refs inserts: answer 404 instead of 500.
 	fail := func(err error) {
-		if isForeignKeyViolation(err) {
+		// The tip was read before the transaction, so a repository deleted
+		// since then shows up as missing trees, not only as a foreign key.
+		if isForeignKeyViolation(err) ||
+			errors.Is(err, treebuild.ErrNotFound) && s.repoGone(r, repo) {
 			writeError(w, http.StatusNotFound, "repository not found")
 			return
 		}
@@ -154,22 +162,16 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 	ts := NewRepoStore(tx, repo.ID)
 	objs := ts.Objects(ctx)
 
-	tip, err := ts.GetRef(ctx, req.Branch)
-	if errors.Is(err, ErrRefNotFound) {
-		tip, err = "", nil
-	}
-	if err != nil {
-		internalError(w, err)
-		return
-	}
 	root := ""
 	if tip != "" {
-		if root, err = commitTree(objs, tip); err != nil {
+		pc, err := gitobj.ParseCommit(tipBody)
+		if err != nil {
 			internalError(w, err)
 			return
 		}
+		root = pc.Tree
 	}
-	tree, err := treebuild.Apply(objs, root, changes)
+	tree, newObjs, err := treebuild.Build(objs, root, changes)
 	var verr *treebuild.Error
 	if errors.As(err, &verr) {
 		writeError(w, http.StatusBadRequest, verr.Error())
@@ -194,12 +196,10 @@ func (s *Server) createCommit(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	oid, err := objs.PutObject(gitobj.TypeCommit, body)
-	if err != nil {
-		fail(err)
-		return
-	}
-	err = ts.UpdateRef(ctx, req.Branch, tip, oid)
+	// Blobs, trees and the commit go in with the ref move in one statement.
+	oid := gitobj.Hash(gitobj.TypeCommit, body)
+	newObjs = append(newObjs, treebuild.Object{Type: gitobj.TypeCommit, Body: body})
+	err = ts.PutObjectsMoveRef(ctx, newObjs, req.Branch, tip, oid)
 	if errors.Is(err, ErrRefMoved) {
 		_ = tx.Rollback(ctx)
 		current, gerr := NewRepoStore(s.DB, repo.ID).GetRef(ctx, req.Branch)

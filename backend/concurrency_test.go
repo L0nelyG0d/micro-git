@@ -123,6 +123,21 @@ func TestConcurrentCreateSameBranch(t *testing.T) {
 	oneWinner(t, recs, http.StatusCreated, "branch already exists")
 }
 
+func TestConcurrentRepoDeletedMidCommitNonEmpty(t *testing.T) {
+	s := testServer(t)
+	owner, c := newUserCookie(t, s)
+	repo := createRepo(t, s, c, `{"name":"cc-gone2"}`)
+	tip := mustCommit(t, s, owner, c, repo, commitJSON("main", "", "base", up("a/x.txt", "1"))).OID
+	beforeCommitTx = func() {
+		if _, err := s.DB.Exec(context.Background(), `DELETE FROM repos WHERE id = $1`, repo.ID); err != nil {
+			t.Error(err)
+		}
+	}
+	t.Cleanup(func() { beforeCommitTx = nil })
+	rec := do(s, http.MethodPost, commitsURL(owner, repo), commitJSON("main", tip, "next", up("a/y.txt", "2")), c)
+	wantError(t, rec, http.StatusNotFound, "repository not found")
+}
+
 func TestConcurrentRepoDeletedMidCommit(t *testing.T) {
 	s := testServer(t)
 	owner, c := newUserCookie(t, s)

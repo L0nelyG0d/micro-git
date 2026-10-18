@@ -28,6 +28,24 @@ type Store interface {
 	PutObject(t gitobj.Type, body []byte) (string, error)
 }
 
+// Object is a typed object body, for BatchStore.PutObjects.
+type Object struct {
+	Type gitobj.Type
+	Body []byte
+}
+
+// BatchStore is an optional extension of Store: PutObjects stores all the
+// objects at once (one round trip for a database store). Apply uses it when
+// the store implements it and falls back to PutObject per object otherwise.
+type BatchStore interface {
+	Store
+	PutObjects(objs []Object) error
+
+	// GetObjects returns the objects with the given oids in one round trip.
+	// Unknown oids are simply absent from the result.
+	GetObjects(oids []string) (map[string]Object, error)
+}
+
 // MemStore is an in-memory Store, for tests and for composing in-memory
 // repositories.
 type MemStore struct {
@@ -63,6 +81,27 @@ func (m *MemStore) PutObject(t gitobj.Type, body []byte) (string, error) {
 		m.objs[oid] = memObj{t: t, body: append([]byte(nil), body...)}
 	}
 	return oid, nil
+}
+
+// PutObjects implements BatchStore.
+func (m *MemStore) PutObjects(objs []Object) error {
+	for _, o := range objs {
+		if _, err := m.PutObject(o.Type, o.Body); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// GetObjects implements BatchStore.
+func (m *MemStore) GetObjects(oids []string) (map[string]Object, error) {
+	out := map[string]Object{}
+	for _, oid := range oids {
+		if t, b, err := m.GetObject(oid); err == nil {
+			out[oid] = Object{Type: t, Body: b}
+		}
+	}
+	return out, nil
 }
 
 // Len returns the number of stored objects.
