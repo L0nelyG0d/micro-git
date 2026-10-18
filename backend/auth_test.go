@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -70,99 +68,81 @@ func testServer(t *testing.T) *Server {
 	return srv
 }
 
-// sqliteGroups are the test files whose store methods gormStore has ported;
-// every other file still skips under TEST_STORE=sqlite. Each issue that ports
-// a group adds its files here (users: #85).
-var sqliteGroups = map[string]string{
-	"auth_test.go": "users", "session_test.go": "users", "ratelimit_test.go": "users",
-	"atomic_test.go": "repos", "repos_test.go": "repos", "rename_test.go": "repos", "delete_race_test.go": "repos",
-}
-
-// sqlitePending names the tests inside an enabled file that still need store
-// methods from a later issue; they skip under TEST_STORE=sqlite with that
-// issue in the message. An issue that ports the methods deletes the entry.
-// Each entry was checked by removing it and running under TEST_STORE=sqlite;
-// the stated issue is where that run first fails ("run"). Issues named only
-// after the first failure are by reading the test ("read").
+// sqlitePending lists the tests that do not run under TEST_STORE=sqlite yet:
+// each needs store methods a later issue ports (#87 to #93) or is about
+// Postgres itself. Every other test runs on gormStore. The key is the
+// top-level Test function name; the reason must name the issue
+// ("#87".."#93") or say "needs Postgres" (checked by TestSqlitePendingIsValid).
+// "run" in a reason: the failure was seen by running the test with its entry
+// removed; "read": found by reading the test. An issue that ports methods
+// deletes the entries it unblocks.
 var sqlitePending = map[string]string{
-	// run: first failure is mustCommit (500, errNotPorted in Objects/PutObjectsMoveRef)
-	"TestRenameRepo": "#87 and #88 (commit; run)",
-	"TestUpdateRepoDescriptionAndDefaultBranch":       "#87 and #88 (commit; run), #91 (branches; read)",
-	"TestReadsRacingRepoDeleteAre404":                 "#87 and #88 (commit; run)",
+	"TestBranchInvalidNames":                          "#87 and #88 (commit; run), #91 (branches; read)",
+	"TestBranchWriteAuth":                             "#87 and #88 (commit; run), #91 (branches; read)",
+	"TestBranchesLifecycle":                           "#91 (ListRefs; run)",
+	"TestCommitBodyLimitByRole":                       "#87 and #88 (commit; run)",
+	"TestCommitDetail":                                "#87 and #88 (commit; run), #89 (history; read)",
+	"TestCommitErrors":                                "#87 and #88 (commit; run)",
+	"TestCommitFiftyChanges":                          "#87 and #88 (commit; run)",
+	"TestCommitFirstAndSecond":                        "#87 and #88 (commit; run)",
+	"TestCommitFirstParentNull":                       "#87 and #88 (commit; run)",
+	"TestCommitLog":                                   "#87 and #88 (commit; run), #89 (history; read)",
+	"TestCommitLogDepthCap":                           "#87 and #88 (commit; run), #89 (history; read)",
+	"TestCommitLogHeaderOnly":                         "#87 and #88 (commit; run), #89 (history; read)",
+	"TestCommitRace":                                  "#87 and #88 (commit; run)",
+	"TestCommitReachabilityParents":                   "#87 and #88 (commit; run), #90 (ancestry; read)",
+	"TestCommitStatementBudget":                       "#87 and #88 (commit; run)",
+	"TestCommitTipConflicts":                          "#87 and #88 (commit; run)",
+	"TestCompare":                                     "#87 and #88 (commit; run), #90 (ancestry; read)",
+	"TestConcurrentCommitsSameTip":                    "#87 and #88 (commit; run)",
+	"TestConcurrentCreateSameBranch":                  "#87 and #88 (commit; run), #91 (branches; read)",
+	"TestConcurrentFirstCommits":                      "#87 and #88 (commit; run)",
+	"TestConcurrentRepoDeletedMidCommit":              "#87 and #88 (commit; run)",
+	"TestConcurrentRepoDeletedMidCommitNonEmpty":      "#87 and #88 (commit; run)",
+	"TestDeleteBranchRacingSetDefault":                "#87 and #88 (commit; run), #91 (branches; read)",
+	"TestDeleteRepo":                                  "#87 (PutObject; run) and #88 (refs; read)",
+	"TestEmptyFlag":                                   "#87 (PutObject; run) and #88 (refs; read)",
+	"TestListRepos":                                   "#92 (ListRepos; run)",
+	"TestListReposDefaultPageBoundary":                "#92 (ListRepos; run)",
+	"TestListReposPagination":                         "#92 (ListRepos; run)",
+	"TestListReposTieBreaker":                         "#92 (ListRepos; run)",
+	"TestMergeEqualTipsUpToDate":                      "#87 and #88 (commit; run), #90 (ancestry; read)",
+	"TestMergeErrors":                                 "#87 and #88 (commit; run), #90 (ancestry; read)",
+	"TestMergeFastForward":                            "#87 and #88 (commit; run), #90 (ancestry; read)",
+	"TestMergeTipMoved":                               "#87 and #88 (commit; run), #90 (ancestry; read)",
 	"TestMissingObjectInExistingRepoStays500":         "#87 and #88 (commit; run)",
-	"TestDeleteBranchRacingSetDefault":                "#87 and #88 (fixture commit; run), #91 (branches; read)",
-	"TestPatchDefaultBranchMissingAndRepoGone":        "#87 and #88 (fixture commit; run)",
-	"TestPatchDefaultBranchNotSkippedByStaleSnapshot": "#87 and #88 (fixture commit; run), #91 (branches; read)",
-	// run: first failure is PutObject (objects), then CreateRef/ListRefs (refs)
-	"TestEmptyFlag":  "#87 (PutObject; run) and #88 (refs; read)",
-	"TestDeleteRepo": "#87 (PutObject; run) and #88 (refs; read)",
-	// run: the list endpoint returns 500 (ListRepos errNotPorted)
-	"TestListRepos":                    "#92 (ListRepos; run)",
-	"TestListReposPagination":          "#92 (ListRepos; run)",
-	"TestListReposDefaultPageBoundary": "#92 (ListRepos; run)",
-	"TestListReposTieBreaker":          "#92 (ListRepos; run)",
-}
-
-// testSourceFile returns the base name of the file that holds the running
-// Test function, found by walking the stack, so a helper in another file
-// (limitedServer in ratelimit_test.go, ...) does not change the group. A frame
-// counts as a test when its name is "Test" followed by an uppercase letter or
-// the end of the name (or a closure inside such a function); a helper named
-// like TestFoo that is not a test would fool it, so do not name helpers so.
-func testSourceFile() string {
-	_, file := testFrame()
-	return file
-}
-
-// testFuncName returns the name of the running top-level Test function.
-func testFuncName() string {
-	name, _ := testFrame()
-	return name
-}
-
-func testFrame() (fn, file string) {
-	pcs := make([]uintptr, 32)
-	frames := runtime.CallersFrames(pcs[:runtime.Callers(2, pcs)])
-	for {
-		f, more := frames.Next()
-		name := f.Function[strings.LastIndex(f.Function, "/")+1:]
-		name = name[strings.Index(name, ".")+1:]
-		if isTestFuncName(name) && strings.HasSuffix(f.File, "_test.go") {
-			if i := strings.Index(name, "."); i >= 0 {
-				name = name[:i]
-			}
-			return name, filepath.Base(f.File)
-		}
-		if !more {
-			return "", ""
-		}
-	}
-}
-
-// isTestFuncName reports whether a function name (package stripped) has the
-// shape of a Test function: "Test" then an uppercase letter, an underscore
-// or the end, ignoring a closure suffix such as ".func1".
-func isTestFuncName(name string) bool {
-	if i := strings.Index(name, "."); i >= 0 {
-		name = name[:i]
-	}
-	rest, ok := strings.CutPrefix(name, "Test")
-	if !ok {
-		return false
-	}
-	return rest == "" || rest[0] == '_' || (rest[0] >= 'A' && rest[0] <= 'Z')
+	"TestPatchDefaultBranchMissingAndRepoGone":        "#87 and #88 (commit; run)",
+	"TestPatchDefaultBranchNotSkippedByStaleSnapshot": "#87 and #88 (commit; run), #91 (branches; read)",
+	"TestPrivateRepoCacheControl":                     "#87 and #88 (commit; run), #92 (visibility; read)",
+	"TestPrivateRepoConditionalGet":                   "#87 and #88 (commit; run), #92 (visibility; read)",
+	"TestPrivateRepoOwnerPatchToPublic":               "#87 and #88 (commit; run), #92 (visibility; read)",
+	"TestPrivateRepoPaginationHides":                  "#92 (ListRepos; run)",
+	"TestPrivateRepoReadShapes":                       "#87 and #88 (commit; run), #92 (visibility; read)",
+	"TestPrivateRepoVisibility":                       "#87 and #88 (commit; run), #92 (visibility; read)",
+	"TestPrivateRepoWritesByNonOwner":                 "#87 and #88 (commit; run), #92 (visibility; read)",
+	"TestRead304":                                     "#87 and #88 (commit; run)",
+	"TestReadCacheHeaders":                            "#87 and #88 (commit; run)",
+	"TestReadEndpointsGolden":                         "#87 and #88 (commit; run)",
+	"TestReadGzipEndToEnd":                            "#87 and #88 (commit; run)",
+	"TestReadStatementCounts":                         "#87 and #88 (commit; run)",
+	"TestReadingBlob":                                 "#87 and #88 (commit; run)",
+	"TestReadingOtherReposCommit":                     "#87 and #88 (commit; run)",
+	"TestReadingTree":                                 "#87 and #88 (commit; run)",
+	"TestReadingUncleanPathRedirects":                 "#87 and #88 (commit; run)",
+	"TestReadsRacingRepoDeleteAre404":                 "#87 and #88 (commit; run)",
+	"TestRenameRepo":                                  "#87 and #88 (commit; run)",
+	"TestStoreInTxAtomic":                             "#88 (InTx; run)",
+	"TestStoreSentinels":                              "#88 (FindRepoRef; run)",
+	"TestUpdateRepoDescriptionAndDefaultBranch":       "#87 and #88 (commit; run), #91 (branches; read)",
 }
 
 // newSQLiteServer builds a Server on a gormStore over a temp SQLite file, or
-// skips the test when its group is not ported yet. testServer is the caller.
+// skips the test when it is in sqlitePending. testServer is the caller.
 func newSQLiteServer(t *testing.T) *Server {
 	t.Helper()
-	file := testSourceFile()
-	if _, ok := sqliteGroups[file]; !ok {
-		t.Skip("TEST_STORE=sqlite: gormStore does not implement this group yet (#86 to #92)")
-	}
-	if issue, ok := sqlitePending[testFuncName()]; ok {
-		t.Skipf("TEST_STORE=sqlite: needs store methods ported in %s", issue)
+	name, _, _ := strings.Cut(t.Name(), "/")
+	if why, ok := sqlitePending[name]; ok {
+		t.Skipf("TEST_STORE=sqlite: %s", why)
 	}
 	db := openSQLiteForTest(t)
 	if err := Migrate(db); err != nil {

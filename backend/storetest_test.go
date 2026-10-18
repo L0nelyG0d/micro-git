@@ -14,7 +14,7 @@ import (
 //
 //	postgres (default)  the local Postgres in TEST_DATABASE_URL; tests skip when it is unset
 //	memory              a new memStore per test, no database needed
-//	sqlite              gormStore on a temp file; only the groups in sqliteGroups run (a few tests inside them wait in sqlitePending), the rest skip until #86 to #92
+//	sqlite              gormStore on a temp file; every test runs except those named in sqlitePending (auth_test.go), which wait for #87 to #93 or need Postgres
 //
 // Tests reach the store through Server.Store. What the interface cannot do
 // (seed a row, drop objects, count rows) goes through the helpers below, which

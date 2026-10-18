@@ -3,6 +3,9 @@ package main
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -208,13 +211,28 @@ func TestMapGormErrDriverMessages(t *testing.T) {
 	}
 }
 
-func TestIsTestFuncName(t *testing.T) {
-	for name, want := range map[string]bool{
-		"TestFoo": true, "Test": true, "TestFoo.func1": true, "Test_x": true,
-		"TestimonyHelper": false, "testFoo": false, "limitedServer": false,
-	} {
-		if got := isTestFuncName(name); got != want {
-			t.Errorf("isTestFuncName(%q) = %v, want %v", name, got, want)
+// Every sqlitePending key must be a Test function that exists, and every
+// reason must name a later issue or Postgres, so stale entries are caught.
+func TestSqlitePendingIsValid(t *testing.T) {
+	files, err := filepath.Glob("*_test.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var src strings.Builder
+	for _, f := range files {
+		b, err := os.ReadFile(f)
+		if err != nil {
+			t.Fatal(err)
+		}
+		src.Write(b)
+	}
+	reason := regexp.MustCompile(`#8[7-9]|#9[0-3]|needs Postgres`)
+	for name, why := range sqlitePending {
+		if !strings.Contains(src.String(), "\nfunc "+name+"(t *testing.T)") {
+			t.Errorf("sqlitePending[%q]: no such Test function", name)
+		}
+		if !reason.MatchString(why) {
+			t.Errorf("sqlitePending[%q] = %q: reason must name #87 to #93 or say needs Postgres", name, why)
 		}
 	}
 }
