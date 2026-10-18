@@ -15,7 +15,7 @@ export function Pagination({
   nextTo: string
 }) {
   return (
-    <nav aria-label="Pagination" className="flex items-center justify-between gap-3 rounded-xl bg-card p-2 shadow-xs ring-1 ring-border">
+    <nav aria-label="Pagination" className="flex items-center justify-between gap-3 rounded-md bg-card p-2 shadow-xs ring-1 ring-border">
       {page > 1 ? (
         <Button asChild variant="outline" size="sm">
           <Link to={prevTo}>

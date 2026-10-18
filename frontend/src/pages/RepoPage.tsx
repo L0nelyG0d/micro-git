@@ -2,14 +2,12 @@ import { Link, useNavigate, useParams } from "react-router-dom"
 import { useAuth, isOwner } from "@/auth/AuthContext"
 import { BranchSwitcher } from "@/components/BranchSwitcher"
 import { Breadcrumbs } from "@/components/Breadcrumbs"
-import { DeleteRepoDialog } from "@/components/DeleteRepoDialog"
 import { FileTree } from "@/components/FileTree"
 import { LatestCommitBar } from "@/components/LatestCommitBar"
 import { MergeDialog } from "@/components/MergeDialog"
 import { ReadmeCard } from "@/components/ReadmeCard"
-import { RenameRepoDialog } from "@/components/RenameRepoDialog"
+import { RepoHeader } from "@/components/RepoHeader"
 import { ErrorBlock,LoadingBlock, NotFoundBlock } from "@/components/StateViews"
-import { PageToolbar } from "@/components/PageToolbar"
 import { Section } from "@/components/Section"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -38,11 +36,14 @@ export function RepoPage() {
   // The default branch is only used once the repo is known to have commits.
   const fetchRef = refParam ?? (repo && !repo.empty ? repo.default_branch : "")
   const treeQ = useFetch<Tree>(fetchRef ? readPath("tree", owner, name, fetchRef, path) : null)
+  // An empty repo has no commits (404), so wait for repo.empty; without a ref the
+  // API answers for the default branch.
   const commitsQ = useFetch<{ commits: CommitSummary[] }>(
-    // Without a ref the API answers for the default branch.
-    `${base}/commits?${refParam ? `ref=${encodeURIComponent(refParam)}&` : ""}page=1`,
+    (refParam ? !repo?.empty : repo && !repo.empty) ? `${base}/commits?${refParam ? `ref=${encodeURIComponent(refParam)}&` : ""}page=1` : null,
   )
-  const readmeQ = useFetch<Blob>(fetchRef && !path ? readPath("blob", owner, name, fetchRef, "README.md") : null)
+  // Only fetch the README when the root listing already shows one.
+  const hasReadme = !path && !!treeQ.data?.entries.some((e) => e.type === "blob" && e.name === "README.md")
+  const readmeQ = useFetch<Blob>(hasReadme ? readPath("blob", owner, name, fetchRef, "README.md") : null)
 
   const retryAll = () => {
     repoQ.reload()
@@ -66,39 +67,13 @@ export function RepoPage() {
   const owns = isOwner(user, owner)
   const writable = canWrite(user, owner, ref)
 
-  const header = (
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
-        <h1 className="text-xl font-semibold break-all">
-          {repo.owner}/{repo.name}
-        </h1>
-        {repo.description && <p className="text-sm text-muted-foreground">{repo.description}</p>}
-      </div>
-      {owns && (
-        <div className="flex flex-wrap gap-2">
-          <RenameRepoDialog
-            owner={owner}
-            repo={name}
-            onUnauthorized={expireSession}
-            onRenamed={(n) => navigate(`/${encodeURIComponent(owner)}/${encodeURIComponent(n)}`, { replace: true })}
-          />
-          <DeleteRepoDialog
-            owner={owner}
-            repo={name}
-            onUnauthorized={expireSession}
-            onDeleted={() => navigate("/")}
-          />
-        </div>
-      )}
-    </div>
-  )
+  const header = <RepoHeader repo={repo} active="code" owns={owns} />
 
   if (repo.empty) {
     return (
       <div className="flex flex-col gap-3">
-        <PageToolbar up={{ to: "/", label: "all repositories" }} />
         {header}
-        <div className="flex flex-col items-start gap-2 rounded-xl bg-card p-3 text-sm shadow-xs ring-1 ring-border">
+        <div className="flex flex-col items-start gap-2 rounded-md bg-card p-3 text-sm shadow-xs ring-1 ring-border">
           {owns ? (
             <>
               <p className="text-muted-foreground">This repository is empty. Add the first file to create the {repo.default_branch} branch.</p>
@@ -146,25 +121,17 @@ export function RepoPage() {
         <Section title="Files" className="[&>div]:p-0">
           <FileTree owner={owner} repo={name} ref_={ref} path={path} entries={treeQ.data.entries} />
         </Section>
-        {!path && treeQ.data.entries.some((e) => e.type === "blob" && e.name === "README.md") && (
-          <ReadmeCard q={readmeQ} />
-        )}
+        {hasReadme && <ReadmeCard q={readmeQ} />}
       </>
     )
   }
 
   const repoBase = `/${encodeURIComponent(owner)}/${encodeURIComponent(name)}`
-  const parentDir = path.includes("/") ? path.slice(0, path.lastIndexOf("/")) : ""
-  const up = path
-    ? { to: uiPath("tree", owner, name, ref, parentDir), label: parentDir || name }
-    : { to: "/", label: "all repositories" }
 
   return (
     <div className="flex flex-col gap-3">
-      <PageToolbar up={up}>
-        <Breadcrumbs owner={owner} repo={name} ref_={ref} path={path} />
-      </PageToolbar>
       {header}
+      <Breadcrumbs owner={owner} repo={name} ref_={ref} path={path} />
       <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_14rem]">
         <div className="flex min-w-0 flex-col gap-3">{body}</div>
         <aside aria-label="Repository details" className="order-first flex min-w-0 flex-col gap-3 md:order-last">
@@ -203,14 +170,6 @@ export function RepoPage() {
               {writable && (
                 <Button asChild size="sm">
                   <Link to={`${repoBase}/new/${encodeURIComponent(ref)}`}>Add file</Link>
-                </Button>
-              )}
-              <Button asChild size="sm" variant="outline">
-                <Link to={`${repoBase}/compare`}>Compare</Link>
-              </Button>
-              {owns && (
-                <Button asChild size="sm" variant="outline">
-                  <Link to={`${repoBase}/settings`}>Settings</Link>
                 </Button>
               )}
               {owns && branchesQ.data && branchesQ.data.branches.length >= 2 && (

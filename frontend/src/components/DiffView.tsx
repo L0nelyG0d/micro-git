@@ -69,7 +69,7 @@ export function FileView({ file }: { file: FileDiff }) {
     )
   }
   return (
-    <section aria-label={file.path} className="overflow-hidden rounded-xl bg-card shadow-xs ring-1 ring-border">
+    <section aria-label={file.path} className="overflow-hidden rounded-md border border-border bg-card">
       <header className="flex flex-wrap items-center gap-2 border-b border-border px-3 py-1.5 text-sm">
         <span className="font-mono break-all">{file.path}</span>
         <span className="rounded-md px-1.5 text-xs ring-1 ring-border" data-testid="file-status">

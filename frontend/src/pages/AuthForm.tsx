@@ -1,4 +1,4 @@
-import { useState } from "react"
+import { useRef, useState } from "react"
 import type { FormEvent, ReactNode } from "react"
 import { Link } from "react-router-dom"
 import { ApiError } from "@/lib/api"
@@ -28,12 +28,24 @@ export function AuthForm({ title, submitLabel, notice, footer, onSubmit }: Props
   const [password, setPassword] = useState("")
   const [error, setError] = useState("")
   const [busy, setBusy] = useState(false)
+  const [invalid, setInvalid] = useState<"" | "username" | "password">("")
+  const usernameRef = useRef<HTMLInputElement>(null)
+  const passwordRef = useRef<HTMLInputElement>(null)
+  const errorId = "auth-error"
 
   async function handle(e: FormEvent) {
     e.preventDefault()
     if (busy) return
+    if (!username.trim() || !password) {
+      const missingUser = !username.trim()
+      setError(missingUser ? "Enter your username." : "Enter your password.")
+      setInvalid(missingUser ? "username" : "password")
+      ;(missingUser ? usernameRef : passwordRef).current?.focus()
+      return
+    }
     setBusy(true)
     setError("")
+    setInvalid("")
     try {
       await onSubmit(username, password)
     } catch (err) {
@@ -45,13 +57,17 @@ export function AuthForm({ title, submitLabel, notice, footer, onSubmit }: Props
             : "Something went wrong. Try again.",
       )
       setPassword("") // the password is always cleared after a failure
+      // A taken username (409 on register) is the username's fault; anything else points at the password.
+      const field = err instanceof ApiError && err.status === 409 ? "username" : "password"
+      setInvalid(field)
       setBusy(false)
+      ;(field === "username" ? usernameRef : passwordRef).current?.focus()
     }
   }
 
   return (
-    <Card className="mx-auto w-full max-w-sm p-3">
-      <form onSubmit={handle} className="flex flex-col gap-3">
+    <Card className="mx-auto mt-6 w-full max-w-sm bg-muted p-4">
+      <form onSubmit={handle} noValidate className="flex flex-col gap-3">
         <h1 className="text-xl font-semibold">{title}</h1>
         {notice && (
           <p role="status" className="text-sm text-success">
@@ -63,6 +79,10 @@ export function AuthForm({ title, submitLabel, notice, footer, onSubmit }: Props
           <Input
             id="username"
             name="username"
+            ref={usernameRef}
+            spellCheck={false}
+            aria-invalid={invalid === "username"}
+            aria-describedby={invalid === "username" ? errorId : undefined}
             autoComplete="username"
             autoCapitalize="none"
             required
@@ -75,6 +95,9 @@ export function AuthForm({ title, submitLabel, notice, footer, onSubmit }: Props
           <Input
             id="password"
             name="password"
+            ref={passwordRef}
+            aria-invalid={invalid === "password"}
+            aria-describedby={invalid === "password" ? errorId : undefined}
             type="password"
             autoComplete={title === "Log in" ? "current-password" : "new-password"}
             required
@@ -83,7 +106,7 @@ export function AuthForm({ title, submitLabel, notice, footer, onSubmit }: Props
           />
         </div>
         {error && (
-          <p role="alert" className="text-sm text-destructive">
+          <p id={errorId} role="alert" className="text-sm text-destructive">
             {error}
           </p>
         )}

@@ -18,10 +18,10 @@ export function Section({
   return (
     <section
       aria-labelledby={id}
-      className={`flex min-w-0 flex-col overflow-hidden rounded-xl bg-card shadow-xs ring-1 ring-border ${className}`}
+      className={`flex min-w-0 flex-col overflow-hidden rounded-md border border-border bg-card ${className}`}
     >
-      <header className="flex items-center justify-between gap-2 border-b border-border bg-muted px-3 py-1.5">
-        <h2 id={id} className="text-xs font-semibold text-muted-foreground">
+      <header className="flex items-center justify-between gap-2 border-b border-border bg-muted px-3 py-2">
+        <h2 id={id} className="text-sm font-semibold">
           {title}
         </h2>
         {actions}

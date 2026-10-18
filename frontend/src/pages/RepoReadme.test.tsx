@@ -136,3 +136,11 @@ it("follows the ref: a branch route fetches that branch's README", async () => {
   expect(await screen.findByText("dev readme")).toBeInTheDocument()
   expect(calls).toContain("GET /api/repos/alice/hello/blob/dev/README.md")
 })
+
+it("does not request the README when the tree lists none", async () => {
+  setup(false)
+  renderAt("/alice/hello")
+  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
+  expect(screen.queryByTestId("readme")).not.toBeInTheDocument()
+  expect(calls.some((c) => c.includes("/blob/"))).toBe(false)
+})

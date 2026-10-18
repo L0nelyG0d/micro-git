@@ -123,7 +123,7 @@ it("creates a repo: toast, form closed, list updated without reload", async () =
   routes["GET /api/auth/me"] = me
   routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo({ id: 1, name: "old" })] })
   routes["POST /api/repos"] = (b) => {
-    expect(b).toEqual({ name: "new-one", description: "Hi" })
+    expect(b).toEqual({ name: "new-one", description: "Hi", private: false })
     return json(201, repo({ id: 2, name: "new-one", description: "Hi" }))
   }
   renderHome()
@@ -303,4 +303,93 @@ it("creating on a full page 1 keeps the page size and enables Next", async () =>
   expect(links[0].textContent).toBe("alice/fresh")
   expect(screen.queryByRole("link", { name: "alice/r49" })).not.toBeInTheDocument()
   expect(screen.getByRole("link", { name: "Next" })).toHaveAttribute("href", "/?page=2")
+})
+
+it("moves focus to the Name input when the New repository form opens", async () => {
+  routes["GET /api/auth/me"] = me
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
+  renderHome()
+  await openForm()
+  expect(screen.getByLabelText("Name")).toHaveFocus()
+  expect(screen.getByLabelText("Name")).toHaveAttribute("name", "name")
+  expect(screen.getByLabelText("Name")).toHaveAttribute("spellcheck", "false")
+})
+
+it("focuses the invalid Name after a failed submit and links it to the error", async () => {
+  routes["GET /api/auth/me"] = me
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
+  renderHome()
+  await openForm()
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  const alert = await screen.findByRole("alert")
+  const name = screen.getByLabelText("Name")
+  expect(name).toHaveFocus()
+  expect(name).toHaveAttribute("aria-invalid", "true")
+  expect(name).toHaveAttribute("aria-describedby", alert.id)
+})
+
+it("focuses the Description when only it is invalid", async () => {
+  routes["GET /api/auth/me"] = me
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
+  renderHome()
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "ok")
+  await userEvent.click(screen.getByLabelText(/Description/))
+  await userEvent.paste("x".repeat(501))
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  expect(await screen.findByLabelText(/Description/)).toHaveFocus()
+})
+
+it("focuses Name after the server rejects it with 409", async () => {
+  routes["GET /api/auth/me"] = me
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
+  routes["POST /api/repos"] = () => json(409, { error: "repository already exists" })
+  renderHome()
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "hello")
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  await screen.findByRole("alert")
+  expect(screen.getByLabelText("Name")).toHaveFocus()
+})
+
+it("shows the cached list at once on a revisit while it revalidates", async () => {
+  routes["GET /api/auth/me"] = loggedOut
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo()] })
+  const first = renderHome()
+  await screen.findByRole("link", { name: "alice/hello" })
+  first.unmount()
+  routes["GET /api/repos?page=1"] = () => new Promise<Res>(() => {})
+  renderHome()
+  expect(await screen.findByRole("link", { name: "alice/hello" })).toBeInTheDocument()
+  expect(screen.queryByRole("status", { name: "Loading repositories" })).not.toBeInTheDocument()
+})
+
+it("does not show a stale list on a revisit after creating a repo", async () => {
+  routes["GET /api/auth/me"] = me
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo()] })
+  routes["POST /api/repos"] = () => json(201, repo({ id: 2, name: "fresh" }))
+  const first = renderHome()
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "fresh")
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  await screen.findAllByText(/alice\/fresh created/i)
+  first.unmount()
+  routes["GET /api/repos?page=1"] = () =>
+    json(200, { repos: [repo({ id: 2, name: "fresh" }), repo()] })
+  renderHome()
+  expect(await screen.findByRole("link", { name: "alice/fresh" })).toBeInTheDocument()
+  expect(screen.getAllByRole("link", { name: /^alice\// })).toHaveLength(2)
+})
+
+it("refetches the list when the user logs out", async () => {
+  routes["GET /api/auth/me"] = me
+  routes["GET /api/repos?page=1"] = () =>
+    json(200, { repos: [repo({ name: "secret", private: true })] })
+  routes["POST /api/auth/logout"] = () => json(204)
+  renderHome()
+  await screen.findByRole("link", { name: "alice/secret" })
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo({ name: "public" })] })
+  await userEvent.click(screen.getByRole("button", { name: /log ?out/i }))
+  expect(await screen.findByRole("link", { name: "alice/public" })).toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "alice/secret" })).not.toBeInTheDocument()
 })

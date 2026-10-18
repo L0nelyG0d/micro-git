@@ -34,11 +34,11 @@ export function CommitPage() {
   return (
     <div className="flex flex-col gap-3">
       <PageToolbar up={{ to: uiPath("tree", owner, repo, c.oid, ""), label: "files at this commit" }}>
-        <Link to={uiPath("tree", owner, repo, c.oid, "")} className="text-sm text-primary hover:underline">
+        <Link to={uiPath("tree", owner, repo, c.oid, "")} className="text-sm text-primary hover:underline max-sm:break-all">
           {owner}/{repo}
         </Link>
       </PageToolbar>
-      <div className="flex flex-col gap-1 rounded-xl bg-card p-3 shadow-xs ring-1 ring-border">
+      <div className="flex flex-col gap-1 rounded-md bg-card p-3 shadow-xs ring-1 ring-border">
         <h1 className="text-xl font-semibold whitespace-pre-wrap break-words">{c.message}</h1>
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
           <span>{c.author}</span>
@@ -65,7 +65,7 @@ export function CommitPage() {
         {dels} {dels === 1 ? "deletion" : "deletions"}
       </p>
       {count === 0 ? (
-        <p className="rounded-xl bg-card p-3 text-sm text-muted-foreground shadow-xs ring-1 ring-border">
+        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground shadow-xs ring-1 ring-border">
           no files changed
         </p>
       ) : (

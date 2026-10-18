@@ -64,7 +64,7 @@ async function openDialog() {
 it("rename: prefilled field, success navigates to the new name with a toast", async () => {
   setup()
   routes["PATCH /api/repos/alice/hello"] = () => json(200, repo("renamed"))
-  renderAt("/alice/hello")
+  renderAt("/alice/hello/settings")
   const dlg = await openDialog()
   const input = within(dlg).getByLabelText("Repository name")
   expect(input).toHaveValue("hello")
@@ -80,20 +80,20 @@ it("rename: prefilled field, success navigates to the new name with a toast", as
 it("rename: 409 shows the duplicate message inline and stays", async () => {
   setup()
   routes["PATCH /api/repos/alice/hello"] = () => json(409, { error: "repository already exists" })
-  renderAt("/alice/hello")
+  renderAt("/alice/hello/settings")
   const dlg = await openDialog()
   await userEvent.type(within(dlg).getByLabelText("Repository name"), "2")
   await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
   expect(await within(dlg).findByRole("alert")).toHaveTextContent(
     "A repository with this name already exists. Choose another name.",
   )
-  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
 })
 
 it("rename: 400 shows the name rule; invalid names are rejected before any request", async () => {
   setup()
   routes["PATCH /api/repos/alice/hello"] = () => json(400, { error: "invalid repository name" })
-  renderAt("/alice/hello")
+  renderAt("/alice/hello/settings")
   const dlg = await openDialog()
   const input = within(dlg).getByLabelText("Repository name")
   await userEvent.clear(input)
@@ -106,12 +106,12 @@ it("rename: 400 shows the name rule; invalid names are rejected before any reque
   await userEvent.type(input, "ok")
   await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
   expect(await within(dlg).findByRole("alert")).toHaveTextContent("Use 1-100 letters, digits, dots, hyphens or underscores.")
-  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
 })
 
 it.each([["bob"], [null]])("rename: button hidden for non-owner (%s)", async (u) => {
   setup(u)
-  renderAt("/alice/hello")
+  renderAt("/alice/hello/settings")
   await screen.findByRole("heading", { name: "alice/hello" })
   expect(screen.queryByRole("button", { name: "Rename" })).not.toBeInTheDocument()
 })
@@ -119,7 +119,7 @@ it.each([["bob"], [null]])("rename: button hidden for non-owner (%s)", async (u)
 it("old URL after a rename shows the repository not found state", async () => {
   setup()
   routes["GET /api/repos/alice/hello"] = () => json(404, { error: "repository not found" })
-  renderAt("/alice/hello")
+  renderAt("/alice/hello/settings")
   expect(await screen.findByText("Repository not found")).toBeInTheDocument()
 })
 
@@ -129,13 +129,13 @@ function expectToast() {
 }
 function expectLoggedOut() {
   expectToast()
-  expect(screen.getByRole("link", { name: "Log in" })).toBeInTheDocument()
+  expect(within(screen.getByRole("main")).getByRole("link", { name: "Log in" })).toBeInTheDocument()
 }
 
 it("rename: 401 expires the session with a toast and hides owner actions", async () => {
   setup()
   routes["PATCH /api/repos/alice/hello"] = () => json(401, { error: "authentication required" })
-  renderAt("/alice/hello")
+  renderAt("/alice/hello/settings")
   const dlg = await openDialog()
   await userEvent.type(within(dlg).getByLabelText("Repository name"), "2")
   await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
@@ -144,5 +144,5 @@ it("rename: 401 expires the session with a toast and hides owner actions", async
   expectLoggedOut()
   expect(screen.queryByRole("button", { name: "Rename" })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "Delete repository" })).not.toBeInTheDocument()
-  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
 })

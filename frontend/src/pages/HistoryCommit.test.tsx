@@ -66,6 +66,7 @@ it("lists commits with first line, author, date and full-oid link", async () => 
   release()
   const link = await screen.findByRole("link", { name: "aaaaaaa" })
   expect(link).toHaveAttribute("href", `/alice/hello/commit/${A}`)
+  expect(main().getByText("main", { selector: "span.font-mono" })).toHaveClass("max-sm:break-all")
   expect(main().getByText("Add readme")).toBeInTheDocument()
   expect(main().queryByText(/long body/)).not.toBeInTheDocument()
   expect(main().getByText(formatDate(T))).toBeInTheDocument()
@@ -141,6 +142,7 @@ it("commit detail: header, parent link, summary, modified file with hunk and mar
   expect(main().getByText(/body text/)).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "bbbbbbb" })).toHaveAttribute("href", `/alice/hello/commit/${B}`)
   expect(main().getByTestId("summary")).toHaveTextContent("3 files changed, 2 additions, 2 deletions")
+  expect(screen.getByRole("link", { name: "alice/hello" })).toHaveClass("max-sm:break-all")
 
   const mod = within(screen.getByRole("region", { name: "src/a.txt" }))
   expect(mod.getByTestId("file-status")).toHaveTextContent("modified")
