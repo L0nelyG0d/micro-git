@@ -12,16 +12,15 @@ export class ApiError extends Error {
   }
 }
 
+export type RequestOptions = { method?: string; body?: unknown; signal?: AbortSignal }
+
 /**
- * Calls the backend through the /api proxy with the session cookie.
- * Returns the parsed JSON body (undefined for 204). Non-2xx responses throw
- * ApiError carrying the server's `error` message; network failures throw the
- * original TypeError from fetch.
+ * The only place that calls fetch. Calls the backend through the /api proxy
+ * with the session cookie. Returns the parsed JSON body (undefined for 204 or a
+ * body that is not JSON). Non-2xx responses throw ApiError carrying the
+ * server's `error` message; network failures throw the original TypeError.
  */
-export async function api<T = unknown>(
-  path: string,
-  options: { method?: string; body?: unknown; signal?: AbortSignal } = {},
-): Promise<T> {
+export async function request<T = unknown>(path: string, options: RequestOptions = {}): Promise<T> {
   const init: RequestInit = {
     method: options.method ?? "GET",
     credentials: "include",
@@ -36,7 +35,7 @@ export async function api<T = unknown>(
     res = await fetch(`/api${path}`, init)
   } finally {
     // Dropped once the answer is in, success or not: a failed write may still have changed the repo.
-    if (init.method !== "GET") invalidateAfterWrite(path)
+    if (init.method !== "GET" && init.method !== "HEAD") invalidateAfterWrite(path)
   }
   if (res.status === 204) return undefined as T
   let data: unknown

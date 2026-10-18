@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
-import { api, ApiError } from "@/lib/api"
+import { apiService, ApiError } from "@/services"
 import { cacheGet, cacheHas, cacheSet, cacheSubscribe, cacheToken, isImmutablePath } from "@/lib/fetchCache"
 
 export type FetchState<T> = {
@@ -38,7 +38,7 @@ export function useFetch<T>(path: string | null): FetchState<T> {
     if (!force && skip) return
     const ctl = new AbortController()
     const token = cacheToken()
-    api<T>(path, { signal: ctl.signal })
+    apiService.get<T>(path, { signal: ctl.signal })
       .then((data) => {
         if (ctl.signal.aborted) return
         cacheSet(path, data, token)

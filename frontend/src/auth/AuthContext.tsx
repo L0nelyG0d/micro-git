@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react"
 import type { ReactNode } from "react"
 import { toast } from "sonner"
-import { api, ApiError } from "@/lib/api"
+import { apiService, ApiError } from "@/services"
 import { cacheClear } from "@/lib/fetchCache"
 
 export type User = { id: number; username: string }
@@ -37,7 +37,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let active = true
-    api<User>("/auth/me")
+    apiService.me()
       .then((u) => active && setUser(u))
       .catch((e) => {
         if (!active) return
@@ -67,7 +67,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       busy = true
       last = Date.now()
       const started = generation.current
-      api<User>("/auth/me")
+      apiService.me()
         .then((u) => u, (e) => (e instanceof ApiError && e.status === 401 ? null : undefined))
         .then((u) => {
           // undefined = network/5xx: keep what we have.
@@ -92,14 +92,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [loading, setUser, expireSession])
 
   const login = useCallback(async (username: string, password: string) => {
-    const u = await api<User>("/auth/login", { method: "POST", body: { username, password } })
+    const u = await apiService.login(username, password)
     setUser(u)
     setSessionError(false)
     return u
   }, [setUser])
 
   const logout = useCallback(async () => {
-    await api("/auth/logout", { method: "POST" })
+    await apiService.logout()
     setUser(null)
   }, [setUser])
 

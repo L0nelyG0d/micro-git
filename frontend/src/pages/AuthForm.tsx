@@ -1,7 +1,7 @@
 import { useRef, useState } from "react"
 import type { FormEvent, ReactNode } from "react"
 import { Link } from "react-router-dom"
-import { ApiError } from "@/lib/api"
+import { ApiError } from "@/services"
 import { Button } from "@/components/ui/button"
 import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"

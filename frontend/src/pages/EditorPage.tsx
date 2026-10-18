@@ -20,13 +20,12 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
-import { api, ApiError } from "@/lib/api"
-import { canWrite, commitPath, readPath, uiPath, type Blob, type Branch, type Tree } from "@/lib/git"
+import { apiService, ApiError } from "@/services"
+import { canWrite, commitPath, readPath, uiPath, type Blob, type Branch, type Change, type Tree } from "@/lib/git"
 import type { Repo } from "@/lib/repos"
 import { clearDraft, draftKey, loadDraft, saveDraft } from "@/lib/editorDraft"
 import { errorMessage, useFetch } from "@/lib/useFetch"
 
-type Change = { path: string; content: string } | { path: string; delete: true }
 
 /**
  * `/:owner/:repo/edit/:ref/*` (existing file) and `/:owner/:repo/new/:ref`
@@ -254,9 +253,11 @@ function Editor({
     setError("")
     setConflict(false)
     try {
-      const res = await api<{ oid: string }>(`${base}/commits`, {
-        method: "POST",
-        body: { branch: effectiveBranch, expected_tip: tip, message: trimmed, changes: [change] },
+      const res = await apiService.createCommit(owner, name, {
+        branch: effectiveBranch,
+        expected_tip: tip ?? "",
+        message: trimmed,
+        changes: [change],
       })
       committed.current = true
       clearDraft(key)

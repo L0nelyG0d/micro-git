@@ -1,6 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { api } from "@/lib/api"
+import { request as api } from "@/services/http"
 import { cacheClear, invalidateAfterWrite, isImmutablePath } from "@/lib/fetchCache"
 import { useFetch } from "@/lib/useFetch"
 
