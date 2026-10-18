@@ -1,10 +1,9 @@
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { MemoryRouter } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { cacheClear } from "@/lib/fetchCache"
-import { nextTask } from "@/test-utils"
+import { MemoryRouter, nextTask } from "@/test-utils"
 
 // Starting point for the ProfilePage suite (#56): extend here.
 let routes: Record<string, () => { status: number; body?: unknown }>
