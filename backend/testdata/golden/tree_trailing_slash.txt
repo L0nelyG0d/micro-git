@@ -1,0 +1,2 @@
+OK
+{"ref":"main","commit":"{c2}","path":"a/b","entries":[{"name":"c","type":"tree","oid":"786db88cc116bac032b233224e18ee29271d375f"},{"name":"x.txt","type":"blob","oid":"587be6b4c3f93f93c489c0111bba5596147a26cb"}]}

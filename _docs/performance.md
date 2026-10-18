@@ -12,19 +12,21 @@ Fixture: `main` has 50 commits; the tree has `README.md`, `a/b/x.txt`, `a/b/c/de
 
 ## Backend
 
-| Request | Statements | Statements after #48 | Local Postgres, median ms | Neon, estimated ms |
-|---|---|---|---|---|
-| GET tree (root) | 4 | | 0.1 | 800 |
-| GET tree (3 levels deep) | 7 | | 0.2 | 1400 |
-| GET blob | 8 | | 0.3 | 1600 |
-| GET commits | 3 | | 4.0 | 600 |
-| GET commit detail | 6 | | 0.4 | 1200 |
-| POST commit (1 change) | 12 | 7 | 0.7 | 2400 (after: 1400) |
-| POST commit (10 changes) | 21 | 7 | 1.0 | 4200 (after: 1400) |
-| POST commit (10 changes, 3 folders) | 27 | 8 | | 5400 (after: 1600) |
-| POST merge (50-commit history) | 56 | | 2.6 | 11200 |
+| Request | Statements | After #48 | After #49 | Local Postgres, median ms | Neon, estimated ms (after) |
+|---|---|---|---|---|---|
+| GET tree (root) | 4 | - | 1 | 0.1 | 800 (200) |
+| GET tree (3 levels deep) | 7 | - | 4 | 0.2 | 1400 (800) |
+| GET blob | 8 | - | 5 | 0.3 | 1600 (1000) |
+| GET commits | 3 | - | 3 | 4.0 | 600 (600) |
+| GET commit detail | 6 | - | 3 | 0.4 | 1200 (600) |
+| POST commit (1 change) | 12 | 7 | - | 0.7 | 2400 (1400) |
+| POST commit (10 changes) | 21 | 7 | - | 1.0 | 4200 (1400) |
+| POST commit (10 changes, 3 folders) | 27 | 8 | - | | 5400 (1600) |
+| POST merge (50-commit history) | 56 | - | - | 2.6 | 11200 (see After #50) |
 
 #48: POST commit reads the tip and its commit in one statement, reads existing trees one statement per directory depth, and writes all new blobs, trees, the commit and the ref move in one statement inside the transaction. The "3 folders" row (10 new files spread over `a/`, `b/`, `c/`, which already exist) was added in #48; its "before" was measured on the pre-#48 code. A test (`TestCommitStatementBudget`) fails if that case exceeds 8 statements.
+
+#49 (read endpoints, branch `issue-49-fewer-reads`): the repo, the branch tip, the tip commit and its root tree come from one joined statement (`FindRepoRef`); every further path segment is one tree read; `GET commits/{oid}` loads the commit, its first parent and both root trees in one statement (`CommitBundle`); `linediff.Trees` reads each tree level, and each chunk of up to 50 changed files' blobs, with one `oid = ANY($2)` query. The 404 order (repo, then ref) is unchanged. A `-` means #49 does not touch the row. Bodies are byte-identical (`TestReadEndpointsGolden`); the counts are guarded by `TestReadStatementCounts`. Compare still takes 11 statements on that test's fixture (its ancestry work is #50) but already gets the batched diff.
 
 Local Postgres: Postgres 16 on localhost:54329, fsync off, in-process `httptest` (no network hop, no TLS). Times are therefore almost pure server work.
 

@@ -173,8 +173,21 @@ func (s *Server) getCommit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid commit id")
 		return
 	}
-	store := NewRepoStore(s.DB, repo.ID).Objects(r.Context())
-	c, err := loadCommit(store, oid)
+	rs := NewRepoStore(s.DB, repo.ID)
+	// commit, first parent and both root trees in one statement; anything it
+	// misses is read on demand through the same store
+	objs, found, err := rs.CommitBundle(r.Context(), oid)
+	if err != nil {
+		s.readError(w, r, repo, err)
+		return
+	}
+	store := primed(rs.Objects(r.Context()), objs)
+	var c gitobj.Commit
+	if found {
+		c, err = loadCommit(store, oid)
+	} else {
+		err = treebuild.ErrNotFound
+	}
 	if errors.Is(err, treebuild.ErrNotFound) {
 		if s.repoGone(r, repo) {
 			writeError(w, http.StatusNotFound, "repository not found")

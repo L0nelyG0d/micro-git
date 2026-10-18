@@ -1,0 +1,2 @@
+Bad Request
+{"error":"not a file"}
