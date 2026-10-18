@@ -54,11 +54,11 @@ export function BlobPage() {
         )}
       </div>
       {f.size === 0 ? (
-        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground shadow-xs ring-1 ring-border">
+        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground border border-border">
           Empty file. This file has no content.
         </p>
       ) : (
-        <div className="flex overflow-x-auto rounded-md bg-card font-mono text-sm shadow-xs ring-1 ring-border">
+        <div className="flex overflow-x-auto rounded-md bg-card font-mono text-sm border border-border">
           <pre aria-hidden className="shrink-0 border-r border-border p-3 text-right text-muted-foreground select-none">
             {lines.map((_, i) => i + 1).join("\n")}
           </pre>

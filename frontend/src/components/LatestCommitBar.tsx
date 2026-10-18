@@ -15,7 +15,7 @@ export function LatestCommitBar({
   historyRef: string
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-card p-3 text-sm shadow-xs ring-1 ring-border">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-card p-3 text-sm border border-border">
       <span className="min-w-0 basis-full font-medium break-all sm:basis-auto">{commit.author}</span>
       <span className="min-w-0 basis-full break-words sm:flex-1 sm:basis-0">{firstLine(commit.message)}</span>
       <OidLink

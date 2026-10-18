@@ -96,7 +96,7 @@ export function ComparePage() {
     return (
       <div className="flex flex-col gap-3">
         {back}
-        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground shadow-xs ring-1 ring-border">
+        <p className="rounded-md bg-card p-3 text-sm text-muted-foreground border border-border">
           This repository is empty. There is nothing to compare until a file is committed.
         </p>
       </div>
@@ -122,7 +122,7 @@ export function ComparePage() {
     body = <LoadingBlock label="Loading comparison" />
   } else if (files.length === 0) {
     body = (
-      <p className="rounded-md bg-card p-3 text-sm text-muted-foreground shadow-xs ring-1 ring-border">
+      <p className="rounded-md bg-card p-3 text-sm text-muted-foreground border border-border">
         No differences between these branches
       </p>
     )

@@ -23,7 +23,7 @@ export function PageToolbar({
     <div
       role="toolbar"
       aria-label="Page navigation"
-      className="flex flex-wrap items-center gap-2 rounded-md bg-card p-2 shadow-xs ring-1 ring-border"
+      className="flex flex-wrap items-center gap-2 rounded-md bg-card p-2 border border-border"
     >
       <Button type="button" variant="outline" size="sm" onClick={goBack} disabled={!hasHistory && !up}>
         <ArrowLeft aria-hidden />
