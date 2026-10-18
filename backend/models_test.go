@@ -162,23 +162,23 @@ func TestMigratedConstraints(t *testing.T) {
 				t.Error("repos.owner_id must reference users")
 			}
 			oid := strings.Repeat("a", 40)
-			if err := db.Create(&ObjectModel{RepoID: r.ID, OID: oid, Type: "bogus", Data: []byte("x")}).Error; err == nil {
+			if err := db.Create(&ObjectModel{RepoID: r.ID, OID: OID(oid), Type: "bogus", Data: []byte("x")}).Error; err == nil {
 				t.Error("objects.type CHECK should reject bogus")
 			}
-			if err := db.Create(&ObjectModel{RepoID: r.ID, OID: oid, Type: "commit", Data: []byte{0, 1, 2}}).Error; err != nil {
+			if err := db.Create(&ObjectModel{RepoID: r.ID, OID: OID(oid), Type: "commit", Data: []byte{0, 1, 2}}).Error; err != nil {
 				t.Fatalf("create object: %v", err)
 			}
 			var obj ObjectModel
 			if err := db.First(&obj, "repo_id = ? AND oid = ?", r.ID, oid).Error; err != nil || string(obj.Data) != "\x00\x01\x02" {
 				t.Errorf("object round trip: %v %v", err, obj.Data)
 			}
-			if err := db.Create(&ObjectModel{RepoID: r.ID, OID: oid, Type: "blob", Data: []byte("x")}).Error; err == nil {
+			if err := db.Create(&ObjectModel{RepoID: r.ID, OID: OID(oid), Type: "blob", Data: []byte("x")}).Error; err == nil {
 				t.Error("objects primary key (repo_id, oid) should reject a duplicate")
 			}
-			if err := db.Create(&RefModel{RepoID: r.ID, Name: "main", OID: strings.Repeat("b", 40)}).Error; err == nil {
+			if err := db.Create(&RefModel{RepoID: r.ID, Name: "main", OID: OID(strings.Repeat("b", 40))}).Error; err == nil {
 				t.Error("refs (repo_id, oid) must reference objects")
 			}
-			if err := db.Create(&RefModel{RepoID: r.ID, Name: "main", OID: oid}).Error; err != nil {
+			if err := db.Create(&RefModel{RepoID: r.ID, Name: "main", OID: OID(oid)}).Error; err != nil {
 				t.Fatalf("create ref: %v", err)
 			}
 			// Deleting the owner of a repo is refused (no cascade on owner_id).
@@ -259,11 +259,6 @@ func pgSnapshot(t *testing.T, db *gorm.DB) []string {
 // builds and db/schema.sql. Keys are lines as printed by pgSnapshot for one
 // side; the value is the reason. Both sides are listed when they differ.
 var parityAllowlist = map[string]string{
-	// GORM creates auto-increment keys as a serial (sequence default); schema.sql uses GENERATED ALWAYS AS IDENTITY.
-	`column users.id bigint notnull=true identity="a" default=`:                                 "identity vs serial, same behavior for inserts that omit id",
-	`column users.id bigint notnull=true identity="" default=nextval('users_id_seq'::regclass)`: "identity vs serial, same behavior for inserts that omit id",
-	`column repos.id bigint notnull=true identity="a" default=`:                                 "identity vs serial, same behavior for inserts that omit id",
-	`column repos.id bigint notnull=true identity="" default=nextval('repos_id_seq'::regclass)`: "identity vs serial, same behavior for inserts that omit id",
 	// created_at defaults: now() does not exist on SQLite, CURRENT_TIMESTAMP is the portable spelling.
 	`column users.created_at timestamp with time zone notnull=true identity="" default=now()`:             "now() vs CURRENT_TIMESTAMP, same value",
 	`column users.created_at timestamp with time zone notnull=true identity="" default=CURRENT_TIMESTAMP`: "now() vs CURRENT_TIMESTAMP, same value",
@@ -335,4 +330,51 @@ func toSet(lines []string) map[string]bool {
 		m[l] = true
 	}
 	return m
+}
+
+// sqliteTypeDifferences lists the column types that differ on SQLite from
+// schema.sql (Postgres), table.column -> {SQLite type, reason}. Everything
+// else has the same declared type on both drivers.
+var sqliteTypeDifferences = map[string][2]string{
+	"objects.oid": {"text", "SQLite has no fixed-width char; char(40) on Postgres rejects values longer than 40, SQLite does not, so oid length is validated in Go"},
+	"refs.oid":    {"text", "same as objects.oid"},
+}
+
+func TestSQLiteColumnTypes(t *testing.T) {
+	db := openSQLiteForTest(t)
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	for key, diff := range sqliteTypeDifferences {
+		parts := strings.SplitN(key, ".", 2)
+		var cols []struct{ Name, Type string }
+		if err := db.Raw(`SELECT name, type FROM pragma_table_info(?)`, parts[0]).Scan(&cols).Error; err != nil {
+			t.Fatal(err)
+		}
+		found := false
+		for _, c := range cols {
+			if c.Name == parts[1] {
+				found = true
+				if !strings.EqualFold(c.Type, diff[0]) {
+					t.Errorf("%s: got type %q, want %q (%s)", key, c.Type, diff[0], diff[1])
+				}
+			}
+		}
+		if !found {
+			t.Errorf("%s: column not found", key)
+		}
+	}
+}
+
+func TestPostgresIdentityRejectsExplicitID(t *testing.T) {
+	db, _ := openPostgresForTest(t, "id")
+	if err := Migrate(db); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Exec(`INSERT INTO users (id, username, password_hash) VALUES (500, 'x', 'y')`).Error; err == nil {
+		t.Error("explicit id should be rejected by GENERATED ALWAYS AS IDENTITY")
+	}
+	if err := db.Create(&UserModel{Username: "x", PasswordHash: "y"}).Error; err != nil {
+		t.Errorf("insert without id: %v", err)
+	}
 }
