@@ -115,9 +115,9 @@ func readTree(store treebuild.Store, oid string) ([]gitobj.TreeEntry, error) {
 // ref, path validation, then the lookup. Order: 404 repo, 404 ref, 400 path,
 // 404 path. It returns the resolved commit, cleaned path and entry. The repo,
 // the branch tip, the tip commit and its root tree come from one statement.
-func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, commit, path string, store treebuild.Store, oid string, isDir, ok bool) {
-	fail := func() (Repo, string, string, treebuild.Store, string, bool, bool) {
-		return repo, "", "", nil, "", false, false
+func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, commit, path string, store treebuild.Store, oid string, isDir bool, cache cacheHeaders, ok bool) {
+	fail := func() (Repo, string, string, treebuild.Store, string, bool, cacheHeaders, bool) {
+		return repo, "", "", nil, "", false, cacheHeaders{}, false
 	}
 	ref := r.PathValue("ref")
 	head, err := FindRepoRef(r.Context(), s.DB, r.PathValue("owner"), r.PathValue("repo"), ref)
@@ -147,6 +147,19 @@ func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, 
 		writeError(w, http.StatusBadRequest, "invalid path")
 		return fail()
 	}
+	// Caching: a branch-named read is revalidated by an ETag of the resolved
+	// commit and path, and answered 304 here, after repo and ref resolution
+	// (so 404s stay correct) but before any object is read. A read addressed
+	// by a full commit oid is immutable.
+	kind := strings.SplitN(strings.TrimPrefix(r.URL.Path, "/repos/"), "/", 4)[2]
+	if head.HasRef {
+		cache = branchCache(kind, commit, path)
+		if cache.notModified(w, r) {
+			return fail()
+		}
+	} else {
+		cache = immutableCache()
+	}
 	store = primed(NewRepoStore(s.DB, repo.ID).Objects(r.Context()), objs)
 	root, err := commitTree(store, commit)
 	if err == nil {
@@ -160,12 +173,12 @@ func (s *Server) readTarget(w http.ResponseWriter, r *http.Request) (repo Repo, 
 		s.readError(w, r, repo, err)
 		return fail()
 	}
-	return repo, commit, path, store, oid, isDir, true
+	return repo, commit, path, store, oid, isDir, cache, true
 }
 
 // getTree handles GET /repos/{owner}/{repo}/tree/{ref}/{path...}.
 func (s *Server) getTree(w http.ResponseWriter, r *http.Request) {
-	repo, commit, path, store, oid, isDir, ok := s.readTarget(w, r)
+	repo, commit, path, store, oid, isDir, cache, ok := s.readTarget(w, r)
 	if !ok {
 		return
 	}
@@ -192,12 +205,13 @@ func (s *Server) getTree(w http.ResponseWriter, r *http.Request) {
 		}
 		return out[i].Name < out[j].Name
 	})
+	cache.set(w)
 	writeJSON(w, http.StatusOK, treeResponse{Ref: r.PathValue("ref"), Commit: commit, Path: path, Entries: out})
 }
 
 // getBlob handles GET /repos/{owner}/{repo}/blob/{ref}/{path...}.
 func (s *Server) getBlob(w http.ResponseWriter, r *http.Request) {
-	repo, commit, path, store, oid, isDir, ok := s.readTarget(w, r)
+	repo, commit, path, store, oid, isDir, cache, ok := s.readTarget(w, r)
 	if !ok {
 		return
 	}
@@ -211,6 +225,7 @@ func (s *Server) getBlob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := path[strings.LastIndexByte(path, '/')+1:]
+	cache.set(w)
 	writeJSON(w, http.StatusOK, blobResponse{Ref: r.PathValue("ref"), Commit: commit, Path: path,
 		Name: name, OID: oid, Size: len(body), Content: string(body)})
 }

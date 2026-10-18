@@ -214,5 +214,6 @@ func (s *Server) getCommit(w http.ResponseWriter, r *http.Request) {
 		s.readError(w, r, repo, err)
 		return
 	}
+	immutableCache().set(w)
 	writeJSON(w, http.StatusOK, commitDetailResponse{commitSummary: summarize(oid, c), Tree: c.Tree, Files: files})
 }
