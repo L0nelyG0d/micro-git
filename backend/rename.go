@@ -3,11 +3,7 @@ package main
 import (
 	"errors"
 	"net/http"
-	"strconv"
-	"strings"
 	"unicode/utf8"
-
-	"github.com/jackc/pgx/v5"
 )
 
 type updateRepoRequest struct {
@@ -34,53 +30,36 @@ func (s *Server) updateRepo(w http.ResponseWriter, r *http.Request) {
 	}
 	// Only the supplied fields are written, so a racing PATCH to another
 	// field is never overwritten with this request's stale copy of it.
-	var sets []string
-	var args []any
-	arg := func(col string, v any) int {
-		args = append(args, v)
-		sets = append(sets, col+" = $"+strconv.Itoa(len(args)))
-		return len(args)
-	}
+	var patch RepoPatch
 	if req.Name != nil {
 		if !repoNameRE.MatchString(*req.Name) || *req.Name == "." || *req.Name == ".." {
 			writeError(w, http.StatusBadRequest, "invalid repository name")
 			return
 		}
-		arg("name", *req.Name)
+		patch.Name = req.Name
 	}
 	if req.Description != nil {
 		if utf8.RuneCountInString(*req.Description) > maxDescription {
 			writeError(w, http.StatusBadRequest, "description must be at most 500 characters")
 			return
 		}
-		arg("description", *req.Description)
+		patch.Description = req.Description
 	}
-	branchArg := 0
-	if req.DefaultBranch != nil { // never compared with the loaded copy: a racing PATCH may have changed it
-		branchArg = arg("default_branch", *req.DefaultBranch)
-	}
-	if req.Private != nil {
-		arg("private", *req.Private)
-	}
-	args = append(args, repo.ID)
-	where := "id = $" + strconv.Itoa(len(args))
-	if branchArg > 0 { // the branch must still exist when the row is written
-		where += " AND EXISTS (SELECT 1 FROM refs WHERE repo_id = repos.id AND name = $" + strconv.Itoa(branchArg) + ")"
-	}
-	updated, err := scanRepo(s.DB.QueryRow(r.Context(),
-		returningRepo(`UPDATE repos SET `+strings.Join(sets, ", ")+` WHERE `+where), args...))
-	if errors.Is(err, pgx.ErrNoRows) {
+	patch.DefaultBranch = req.DefaultBranch // never compared with the loaded copy: a racing PATCH may have changed it
+	patch.Private = req.Private
+	updated, err := s.Store.UpdateRepo(r.Context(), repo.ID, patch)
+	if errors.Is(err, ErrNotFound) {
 		// No row: the repository is gone, or the branch is.
 		if _, ferr := s.findRepo(r.Context(), repo.Owner, repo.Name); ferr == nil {
 			writeError(w, http.StatusNotFound, "branch not found")
-		} else if errors.Is(ferr, errRepoNotFound) {
+		} else if errors.Is(ferr, ErrNotFound) {
 			writeError(w, http.StatusNotFound, "repository not found")
 		} else {
 			internalError(w, ferr)
 		}
 		return
 	}
-	if isUniqueViolation(err) {
+	if errors.Is(err, ErrConflict) {
 		writeError(w, http.StatusConflict, "repository already exists")
 		return
 	}

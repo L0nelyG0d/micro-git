@@ -6,14 +6,12 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // Server holds the dependencies handlers share. Routes are registered in
 // routes().
 type Server struct {
-	DB           *pgxpool.Pool
+	Store        Store
 	Now          func() time.Time // injected clock
 	JWTSecret    []byte           // HMAC key for session tokens
 	CookieSecure bool             // Secure attribute on the session cookie
@@ -31,14 +29,14 @@ func (s *Server) testHook(point string) {
 }
 
 // NewServer builds a Server with the real clock.
-func NewServer(db *pgxpool.Pool) *Server {
-	s := &Server{DB: db, Now: time.Now}
+func NewServer(store Store) *Server {
+	s := &Server{Store: store, Now: time.Now}
 	// The limiter reads s.Now at call time so a test can swap the clock.
 	s.limiter = newLimiter(func() time.Time { return s.Now() })
 	return s
 }
 
-// NewHandler returns the routes for a Server without a database (health only
+// NewHandler returns the routes for a Server without a store (health only
 // works). Kept for tests that need no database.
 func NewHandler() http.Handler {
 	return NewServer(nil).Handler()

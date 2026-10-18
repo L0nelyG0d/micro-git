@@ -31,7 +31,7 @@ func newMergeFix(t *testing.T) mergeFix {
 	_, other := newUserCookie(t, s)
 	repo := createRepo(t, s, c, `{"name":"r"}`)
 	a := mustCommit(t, s, owner, c, repo, commitJSON("main", "", "a", up("a.txt", "a")))
-	rs := NewRepoStore(s.DB, repo.ID)
+	rs := NewRepoStore(rawDB(s), repo.ID)
 	ctx := context.Background()
 	for _, n := range []string{"feature", "side"} {
 		if err := rs.CreateRef(ctx, n, a.OID); err != nil {

@@ -3,14 +3,9 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 	"regexp"
-	"strings"
-	"time"
 	"unicode/utf8"
-
-	"github.com/jackc/pgx/v5"
 )
 
 var repoNameRE = regexp.MustCompile(`^[A-Za-z0-9._-]{1,100}$`)
@@ -31,36 +26,10 @@ type Repo struct {
 	OwnerID       int64  `json:"-"`
 }
 
-var errRepoNotFound = errors.New("repository not found")
-
-const repoSelect = `SELECT r.id, r.owner_id, u.username, r.name, r.description, r.default_branch,
-	r.private, r.created_at, NOT EXISTS (SELECT 1 FROM refs WHERE repo_id = r.id)
-	FROM repos r JOIN users u ON u.id = r.owner_id`
-
-// returningRepo wraps an INSERT/UPDATE (without RETURNING) so it yields the
-// full repo row, joined like repoSelect, in one round trip.
-func returningRepo(stmt string) string {
-	return `WITH r AS (` + stmt + ` RETURNING *) ` +
-		strings.Replace(repoSelect, "FROM repos r", "FROM r", 1)
-}
-
-func scanRepo(row pgx.Row) (Repo, error) {
-	var r Repo
-	var created time.Time
-	err := row.Scan(&r.ID, &r.OwnerID, &r.Owner, &r.Name, &r.Description, &r.DefaultBranch, &r.Private, &created, &r.Empty)
-	r.CreatedAt = created.UTC().Format(time.RFC3339)
-	return r, err
-}
-
 // findRepo looks a repository up by owner username and name, both
-// case-insensitively. It returns errRepoNotFound when either is unknown.
+// case-insensitively. It returns ErrNotFound when either is unknown.
 func (s *Server) findRepo(ctx context.Context, owner, name string) (Repo, error) {
-	r, err := scanRepo(s.DB.QueryRow(ctx,
-		repoSelect+` WHERE lower(u.username) = lower($1) AND lower(r.name) = lower($2)`, owner, name))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return Repo{}, errRepoNotFound
-	}
-	return r, err
+	return s.Store.FindRepo(ctx, owner, name)
 }
 
 // repoFromPath loads the repository named by the {owner} and {repo} path
@@ -68,7 +37,7 @@ func (s *Server) findRepo(ctx context.Context, owner, name string) (Repo, error)
 // returns false. Shared by every /repos/{owner}/{repo}/... handler.
 func (s *Server) repoFromPath(w http.ResponseWriter, r *http.Request) (Repo, bool) {
 	repo, err := s.findRepo(r.Context(), r.PathValue("owner"), r.PathValue("repo"))
-	if errors.Is(err, errRepoNotFound) {
+	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "repository not found")
 		return Repo{}, false
 	}
@@ -150,33 +119,18 @@ func (s *Server) listRepos(w http.ResponseWriter, r *http.Request) {
 		internalError(w, err)
 		return
 	}
-	q := repoSelect + ` WHERE (NOT r.private OR r.owner_id = $1)`
-	args := []any{viewer.ID}
+	var owner *string
 	if r.URL.Query().Has("owner") {
-		q += ` AND lower(u.username) = lower($2)`
-		args = append(args, r.URL.Query().Get("owner"))
+		o := r.URL.Query().Get("owner")
+		owner = &o
 	}
 	// One extra row past the page tells has_more.
-	q += fmt.Sprintf(` ORDER BY r.created_at DESC, r.id DESC LIMIT %d OFFSET %d`,
-		perPage+1, (page-1)*perPage)
-	rows, err := s.DB.Query(r.Context(), q, args...)
+	repos, err := s.Store.ListRepos(r.Context(), viewer.ID, owner, perPage+1, (page-1)*perPage)
 	if err != nil {
 		internalError(w, err)
 		return
 	}
-	defer rows.Close()
-	for rows.Next() {
-		repo, err := scanRepo(rows)
-		if err != nil {
-			internalError(w, err)
-			return
-		}
-		resp.Repos = append(resp.Repos, repo)
-	}
-	if err := rows.Err(); err != nil {
-		internalError(w, err)
-		return
-	}
+	resp.Repos = repos
 	if len(resp.Repos) > perPage {
 		resp.Repos = resp.Repos[:perPage]
 		resp.HasMore = true
@@ -205,10 +159,8 @@ func (s *Server) createRepo(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "description must be at most 500 characters")
 		return
 	}
-	repo, err := scanRepo(s.DB.QueryRow(r.Context(), returningRepo(
-		`INSERT INTO repos (owner_id, name, description, private, created_at) VALUES ($1, $2, $3, $4, $5)`),
-		u.ID, req.Name, req.Description, req.Private, s.Now().UTC()))
-	if isUniqueViolation(err) {
+	repo, err := s.Store.CreateRepo(r.Context(), u.ID, req.Name, req.Description, req.Private, s.Now())
+	if errors.Is(err, ErrConflict) {
 		writeError(w, http.StatusConflict, "repository already exists")
 		return
 	}
@@ -233,7 +185,7 @@ func (s *Server) deleteRepo(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if _, err := s.DB.Exec(r.Context(), `DELETE FROM repos WHERE id = $1`, repo.ID); err != nil {
+	if err := s.Store.DeleteRepo(r.Context(), repo.ID); err != nil {
 		internalError(w, err)
 		return
 	}

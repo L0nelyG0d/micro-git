@@ -15,17 +15,17 @@ func newRepoStore(t *testing.T, s *Server) *RepoStore {
 	t.Helper()
 	uid := newUser(t, s, uniqueName(t), "correct horse")
 	var id int64
-	err := s.DB.QueryRow(context.Background(),
+	err := rawDB(s).QueryRow(context.Background(),
 		`INSERT INTO repos (owner_id, name) VALUES ($1, 'r') RETURNING id`, uid).Scan(&id)
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { // runs before the user cleanup (LIFO)
-		if _, err := s.DB.Exec(context.Background(), `DELETE FROM repos WHERE id = $1`, id); err != nil {
+		if _, err := rawDB(s).Exec(context.Background(), `DELETE FROM repos WHERE id = $1`, id); err != nil {
 			t.Errorf("cleanup repo: %v", err)
 		}
 	})
-	return NewRepoStore(s.DB, id)
+	return NewRepoStore(rawDB(s), id)
 }
 
 func TestObjectStore(t *testing.T) {
@@ -43,7 +43,7 @@ func TestObjectStore(t *testing.T) {
 		t.Fatalf("second put = %q, %v", again, err)
 	}
 	var n int
-	if err := s.DB.QueryRow(ctx, `SELECT count(*) FROM objects WHERE repo_id = $1`, rs.repoID).Scan(&n); err != nil || n != 1 {
+	if err := rawDB(s).QueryRow(ctx, `SELECT count(*) FROM objects WHERE repo_id = $1`, rs.repoID).Scan(&n); err != nil || n != 1 {
 		t.Errorf("rows = %d, err %v, want 1", n, err)
 	}
 
@@ -88,13 +88,13 @@ func TestRefStore(t *testing.T) {
 	}
 	a, b, c := oids[0], oids[1], oids[2]
 
-	if _, err := rs.GetRef(ctx, "main"); !errors.Is(err, ErrRefNotFound) {
+	if _, err := rs.GetRef(ctx, "main"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("get missing: %v", err)
 	}
 	if refs, err := rs.ListRefs(ctx); err != nil || refs == nil || len(refs) != 0 {
 		t.Errorf("list empty = %v, %v", refs, err)
 	}
-	if err := rs.DeleteRef(ctx, "main"); !errors.Is(err, ErrRefNotFound) {
+	if err := rs.DeleteRef(ctx, "main"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("delete missing: %v", err)
 	}
 
@@ -102,16 +102,16 @@ func TestRefStore(t *testing.T) {
 	if err := rs.UpdateRef(ctx, "main", "", a); err != nil {
 		t.Fatalf("first update: %v", err)
 	}
-	if err := rs.UpdateRef(ctx, "main", "", b); !errors.Is(err, ErrRefMoved) {
+	if err := rs.UpdateRef(ctx, "main", "", b); !errors.Is(err, ErrConflict) {
 		t.Errorf("must-not-exist on existing ref: %v", err)
 	}
-	if err := rs.UpdateRef(ctx, "main", b, c); !errors.Is(err, ErrRefMoved) {
+	if err := rs.UpdateRef(ctx, "main", b, c); !errors.Is(err, ErrConflict) {
 		t.Errorf("stale swap: %v", err)
 	}
 	if got, _ := rs.GetRef(ctx, "main"); got != a {
 		t.Errorf("ref changed by failed swap: %s", got)
 	}
-	if err := rs.UpdateRef(ctx, "other", a, b); !errors.Is(err, ErrRefMoved) {
+	if err := rs.UpdateRef(ctx, "other", a, b); !errors.Is(err, ErrConflict) {
 		t.Errorf("swap on missing ref: %v", err)
 	}
 	if err := rs.UpdateRef(ctx, "main", a, b); err != nil {
@@ -124,7 +124,7 @@ func TestRefStore(t *testing.T) {
 	if err := rs.CreateRef(ctx, "dev", b); err != nil {
 		t.Fatal(err)
 	}
-	if err := rs.CreateRef(ctx, "dev", c); !errors.Is(err, ErrRefExists) {
+	if err := rs.CreateRef(ctx, "dev", c); !errors.Is(err, ErrConflict) {
 		t.Errorf("duplicate create: %v", err)
 	}
 	refs, err := rs.ListRefs(ctx)
@@ -134,7 +134,7 @@ func TestRefStore(t *testing.T) {
 	if err := rs.DeleteRef(ctx, "dev"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := rs.GetRef(ctx, "dev"); !errors.Is(err, ErrRefNotFound) {
+	if _, err := rs.GetRef(ctx, "dev"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("deleted ref still there: %v", err)
 	}
 }
@@ -171,14 +171,14 @@ func TestResolveCommit(t *testing.T) {
 		{"branch", "main", rs, commit, nil},
 		{"full oid", commit, rs, commit, nil},
 		{"branch pointing at any oid is returned as is", "pointing-at-blob", rs, blob, nil},
-		{"unknown branch", "nope", rs, "", ErrRefNotFound},
-		{"oid of a blob", blob, rs, "", ErrRefNotFound},
-		{"oid of a tree", tree, rs, "", ErrRefNotFound},
-		{"missing oid", missing, rs, "", ErrRefNotFound},
-		{"abbreviated oid", commit[:7], rs, "", ErrRefNotFound},
-		{"uppercase oid", "ABCDEF" + commit[6:], rs, "", ErrRefNotFound},
-		{"oid from another repo", commit, other, "", ErrRefNotFound},
-		{"empty", "", rs, "", ErrRefNotFound},
+		{"unknown branch", "nope", rs, "", ErrNotFound},
+		{"oid of a blob", blob, rs, "", ErrNotFound},
+		{"oid of a tree", tree, rs, "", ErrNotFound},
+		{"missing oid", missing, rs, "", ErrNotFound},
+		{"abbreviated oid", commit[:7], rs, "", ErrNotFound},
+		{"uppercase oid", "ABCDEF" + commit[6:], rs, "", ErrNotFound},
+		{"oid from another repo", commit, other, "", ErrNotFound},
+		{"empty", "", rs, "", ErrNotFound},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

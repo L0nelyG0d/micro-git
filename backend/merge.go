@@ -29,7 +29,6 @@ func (s *Server) mergeBranches(w http.ResponseWriter, r *http.Request) {
 	}
 	var req mergeRequest
 	jsonOK := decodeJSONQuiet(w, r, &req)
-	rs := NewRepoStore(s.DB, repo.ID)
 	ctx := r.Context()
 	var baseTip, headTip string
 	if jsonOK && validBranchName(req.Base) && validBranchName(req.Head) {
@@ -37,8 +36,8 @@ func (s *Server) mergeBranches(w http.ResponseWriter, r *http.Request) {
 			name string
 			tip  *string
 		}{{req.Base, &baseTip}, {req.Head, &headTip}} {
-			tip, err := rs.GetRef(ctx, p.name)
-			if errors.Is(err, ErrRefNotFound) {
+			tip, err := s.Store.GetRef(ctx, repo.ID, p.name)
+			if errors.Is(err, ErrNotFound) {
 				writeError(w, http.StatusNotFound, "branch not found")
 				return
 			}
@@ -68,7 +67,7 @@ func (s *Server) mergeBranches(w http.ResponseWriter, r *http.Request) {
 
 	// One statement answers both questions: head already in base's history
 	// (up to date) and base in head's history (fast-forward possible).
-	reach, err := rs.CommitReachability(ctx, headTip, baseTip)
+	reach, err := s.Store.CommitReachability(ctx, repo.ID, headTip, baseTip)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -85,10 +84,10 @@ func (s *Server) mergeBranches(w http.ResponseWriter, r *http.Request) {
 	if beforeMergeSwap != nil {
 		beforeMergeSwap()
 	}
-	err = rs.UpdateRef(ctx, req.Base, baseTip, headTip)
-	if errors.Is(err, ErrRefMoved) {
-		current, gerr := rs.GetRef(ctx, req.Base)
-		if gerr != nil && !errors.Is(gerr, ErrRefNotFound) {
+	err = s.Store.UpdateRef(ctx, repo.ID, req.Base, baseTip, headTip)
+	if errors.Is(err, ErrConflict) {
+		current, gerr := s.Store.GetRef(ctx, repo.ID, req.Base)
+		if gerr != nil && !errors.Is(gerr, ErrNotFound) {
 			internalError(w, gerr)
 			return
 		}

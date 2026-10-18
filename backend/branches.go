@@ -1,7 +1,6 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"net/http"
 )
@@ -24,7 +23,7 @@ func (s *Server) listBranches(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	refs, err := NewRepoStore(s.DB, repo.ID).ListRefs(r.Context())
+	refs, err := s.Store.ListRefs(r.Context(), repo.ID)
 	if err != nil {
 		internalError(w, err)
 		return
@@ -45,13 +44,12 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request) {
 	}
 	var req createBranchRequest
 	jsonOK := decodeJSONQuiet(w, r, &req)
-	rs := NewRepoStore(s.DB, repo.ID)
 	// A missing source branch is a 404, which comes before the 403.
 	var tip string
 	if jsonOK {
 		var err error
-		tip, err = rs.GetRef(r.Context(), req.From)
-		if errors.Is(err, ErrRefNotFound) {
+		tip, err = s.Store.GetRef(r.Context(), repo.ID, req.From)
+		if errors.Is(err, ErrNotFound) {
 			writeError(w, http.StatusNotFound, "branch not found")
 			return
 		}
@@ -72,8 +70,8 @@ func (s *Server) createBranch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid branch name")
 		return
 	}
-	err := rs.CreateRef(r.Context(), req.Name, tip)
-	if errors.Is(err, ErrRefExists) {
+	err := s.Store.CreateRef(r.Context(), repo.ID, req.Name, tip)
+	if errors.Is(err, ErrConflict) {
 		writeError(w, http.StatusConflict, "branch already exists")
 		return
 	}
@@ -93,8 +91,7 @@ func (s *Server) deleteBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := r.PathValue("branch")
-	rs := NewRepoStore(s.DB, repo.ID)
-	if _, err := rs.GetRef(r.Context(), name); errors.Is(err, ErrRefNotFound) {
+	if _, err := s.Store.GetRef(r.Context(), repo.ID, name); errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "branch not found")
 		return
 	} else if err != nil {
@@ -109,12 +106,12 @@ func (s *Server) deleteBranch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "cannot delete the default branch")
 		return
 	}
-	err := deleteNonDefaultRef(r.Context(), rs, name)
+	err := s.Store.DeleteNonDefaultRef(r.Context(), repo.ID, name)
 	if errors.Is(err, errDefaultBranch) {
 		writeError(w, http.StatusBadRequest, "cannot delete the default branch")
 		return
 	}
-	if errors.Is(err, ErrRefNotFound) {
+	if errors.Is(err, ErrNotFound) {
 		writeError(w, http.StatusNotFound, "branch not found")
 		return
 	}
@@ -123,24 +120,4 @@ func (s *Server) deleteBranch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
-}
-
-var errDefaultBranch = errors.New("default branch")
-
-// deleteNonDefaultRef deletes a branch unless it is the repo's default, checked
-// inside the DELETE so a concurrent set-default cannot slip in between.
-func deleteNonDefaultRef(ctx context.Context, rs *RepoStore, name string) error {
-	tag, err := rs.db.Exec(ctx,
-		`DELETE FROM refs WHERE repo_id = $1 AND name = $2
-		 AND NOT EXISTS (SELECT 1 FROM repos WHERE id = $1 AND default_branch = $2)`, rs.repoID, name)
-	if err != nil {
-		return err
-	}
-	if tag.RowsAffected() > 0 {
-		return nil
-	}
-	if _, err := rs.GetRef(ctx, name); err != nil {
-		return err // ErrRefNotFound, or a real error
-	}
-	return errDefaultBranch
 }

@@ -32,7 +32,7 @@ func newRaceFixture(t *testing.T) *raceFixture {
 
 func (f *raceFixture) deleteNow(t *testing.T) {
 	t.Helper()
-	if _, err := f.s.DB.Exec(context.Background(), `DELETE FROM repos WHERE id = $1`, f.repo.ID); err != nil {
+	if _, err := rawDB(f.s).Exec(context.Background(), `DELETE FROM repos WHERE id = $1`, f.repo.ID); err != nil {
 		t.Fatalf("delete repo: %v", err)
 	}
 }
@@ -84,7 +84,7 @@ func TestReadsRacingRepoDeleteAre404(t *testing.T) {
 
 func TestMissingObjectInExistingRepoStays500(t *testing.T) {
 	f := newRaceFixture(t)
-	if _, err := f.s.DB.Exec(context.Background(), `DELETE FROM objects WHERE repo_id = $1 AND type = 'blob'`, f.repo.ID); err != nil {
+	if _, err := rawDB(f.s).Exec(context.Background(), `DELETE FROM objects WHERE repo_id = $1 AND type = 'blob'`, f.repo.ID); err != nil {
 		t.Fatal(err)
 	}
 	logs := captureLog(t)

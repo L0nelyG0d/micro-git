@@ -144,7 +144,7 @@ func (s *Server) listCommits(w http.ResponseWriter, r *http.Request) {
 	skip := (page - 1) * perPage
 	// First-parent walk in one statement; one extra commit past the page
 	// tells has_more.
-	rows, err := NewRepoStore(s.DB, repo.ID).WalkFirstParents(r.Context(), tip, skip+perPage+1)
+	rows, err := s.Store.WalkFirstParents(r.Context(), repo.ID, tip, skip+perPage+1)
 	if err != nil {
 		s.readError(w, r, repo, err)
 		return
@@ -177,15 +177,14 @@ func (s *Server) getCommit(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "invalid commit id")
 		return
 	}
-	rs := NewRepoStore(s.DB, repo.ID)
 	// commit, first parent and both root trees in one statement; anything it
 	// misses is read on demand through the same store
-	objs, found, err := rs.CommitBundle(r.Context(), oid)
+	objs, found, err := s.Store.CommitBundle(r.Context(), repo.ID, oid)
 	if err != nil {
 		s.readError(w, r, repo, err)
 		return
 	}
-	store := primed(rs.Objects(r.Context()), objs)
+	store := primed(s.Store.Objects(r.Context(), repo.ID), objs)
 	var c gitobj.Commit
 	if found {
 		c, err = loadCommit(store, oid)

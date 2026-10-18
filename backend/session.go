@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
-	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -91,15 +90,14 @@ func (s *Server) authenticate(r *http.Request) (User, bool, error) {
 	if err != nil {
 		return User{}, false, nil
 	}
-	u := User{ID: id}
-	err = s.DB.QueryRow(r.Context(), `SELECT username FROM users WHERE id = $1`, id).Scan(&u.Username)
-	if errors.Is(err, pgx.ErrNoRows) {
+	name, err := s.Store.UsernameByID(r.Context(), id)
+	if errors.Is(err, ErrNotFound) {
 		return User{}, false, nil
 	}
 	if err != nil {
 		return User{}, false, err
 	}
-	return u, true, nil
+	return User{ID: id, Username: name}, true, nil
 }
 
 func (s *Server) issueToken(userID int64) (string, error) {
@@ -145,12 +143,9 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		tooMany(w, wait)
 		return
 	}
-	var id int64
-	var hash string
-	err := s.DB.QueryRow(r.Context(),
-		`SELECT id, password_hash FROM users WHERE lower(username) = $1`, username).Scan(&id, &hash)
+	id, hash, err := s.Store.UserForLogin(r.Context(), username)
 	found := err == nil
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+	if err != nil && !errors.Is(err, ErrNotFound) {
 		s.limiter.loginAborted(ip, username, known)
 		internalError(w, err)
 		return
