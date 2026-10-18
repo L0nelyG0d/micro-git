@@ -21,7 +21,7 @@ type mergeFix struct {
 	c, other *http.Cookie
 	repo     Repo
 	a, b, cc string
-	rs       *RepoStore
+	rs       repoHandle
 }
 
 func newMergeFix(t *testing.T) mergeFix {
@@ -31,7 +31,7 @@ func newMergeFix(t *testing.T) mergeFix {
 	_, other := newUserCookie(t, s)
 	repo := createRepo(t, s, c, `{"name":"r"}`)
 	a := mustCommit(t, s, owner, c, repo, commitJSON("main", "", "a", up("a.txt", "a")))
-	rs := NewRepoStore(rawDB(s), repo.ID)
+	rs := viewOf(s, repo.ID)
 	ctx := context.Background()
 	for _, n := range []string{"feature", "side"} {
 		if err := rs.CreateRef(ctx, n, a.OID); err != nil {

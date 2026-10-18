@@ -29,6 +29,7 @@ func newRepoStore(t *testing.T, s *Server) *RepoStore {
 }
 
 func TestObjectStore(t *testing.T) {
+	requirePostgres(t)
 	s := testServer(t)
 	ctx := context.Background()
 	rs := newRepoStore(t, s)
@@ -73,6 +74,7 @@ func TestObjectStore(t *testing.T) {
 }
 
 func TestRefStore(t *testing.T) {
+	requirePostgres(t)
 	s := testServer(t)
 	ctx := context.Background()
 	rs := newRepoStore(t, s)
@@ -140,6 +142,7 @@ func TestRefStore(t *testing.T) {
 }
 
 func TestResolveCommit(t *testing.T) {
+	requirePostgres(t)
 	s := testServer(t)
 	ctx := context.Background()
 	rs := newRepoStore(t, s)
@@ -204,6 +207,7 @@ func TestResolveCommit(t *testing.T) {
 // A ref cannot point at an oid that is not stored in the same repository
 // (foreign key refs_object_fk, issue #23).
 func TestRefNeedsObject(t *testing.T) {
+	requirePostgres(t)
 	s := testServer(t)
 	ctx := context.Background()
 	rs := newRepoStore(t, s)

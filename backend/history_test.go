@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/L0nelyG0d/micro-git/backend/gitobj"
+	"github.com/L0nelyG0d/micro-git/backend/treebuild"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -159,7 +160,7 @@ func newHistFixture(t *testing.T, withLong bool) *histFixture {
 	}
 	lr := createRepo(t, s, c, `{"name":"long"}`)
 	f.longBase = "/repos/" + owner + "/long"
-	rs := NewRepoStore(rawDB(s), lr.ID)
+	rs := viewOf(s, lr.ID)
 	st := rs.Objects(t.Context())
 	treeOID, err := st.PutObject(gitobj.TypeTree, nil)
 	if err != nil {
@@ -183,11 +184,11 @@ func newHistFixture(t *testing.T, withLong bool) *histFixture {
 		bodies = append(bodies, body)
 	}
 	// One round trip for all 120 commits instead of 120 PutObject calls.
-	_, err = rawDB(s).Exec(t.Context(),
-		`INSERT INTO objects (repo_id, oid, type, data)
-		 SELECT $1, o, 'commit', d FROM unnest($2::text[], $3::bytea[]) AS u(o, d)
-		 ON CONFLICT (repo_id, oid) DO NOTHING`, lr.ID, f.long, bodies)
-	if err != nil {
+	objs := make([]treebuild.Object, len(bodies))
+	for i, body := range bodies {
+		objs[i] = treebuild.Object{Type: gitobj.TypeCommit, Body: body}
+	}
+	if err := st.(treebuild.BatchStore).PutObjects(objs); err != nil {
 		t.Fatal(err)
 	}
 	if err := rs.CreateRef(t.Context(), "fifty", f.long[49]); err != nil {
@@ -611,6 +612,7 @@ func (c *stmtCounter) TraceQueryStart(ctx context.Context, _ *pgx.Conn, _ pgx.Tr
 func (c *stmtCounter) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEndData) {}
 
 func TestCommitLogStatementCount(t *testing.T) {
+	requirePostgres(t)
 	f := newHistFixture(t, true)
 	cfg, err := pgxpool.ParseConfig(os.Getenv("TEST_DATABASE_URL"))
 	if err != nil {
@@ -658,7 +660,7 @@ func TestCommitLogHeaderOnly(t *testing.T) {
 	f := newHistFixture(t, false)
 	name, c := newUserCookie(t, f.s)
 	repo := createRepo(t, f.s, c, `{"name":"hdr"}`)
-	rs := NewRepoStore(rawDB(f.s), repo.ID)
+	rs := viewOf(f.s, repo.ID)
 	st := rs.Objects(t.Context())
 	treeOID, err := st.PutObject(gitobj.TypeTree, nil)
 	if err != nil {

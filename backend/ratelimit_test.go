@@ -650,7 +650,7 @@ func TestRegisterLimitPerIP(t *testing.T) {
 		t.Errorf("Retry-After = %s", got)
 	}
 	name := uniqueName(t)
-	cleanupUser(t, rawDB(s), name)
+	cleanupUser(t, s, name)
 	if c := attempt(s, ipB, "/auth/register", regBody(name, "correct horse")).Code; c != http.StatusCreated {
 		t.Errorf("other IP: %d", c)
 	}

@@ -148,7 +148,8 @@ func TestCheckStoreAvailable(t *testing.T) {
 		wantErr bool
 	}{
 		{"postgres", Config{Store: StoreDB, DBDriver: DriverPostgres}, false},
-		{"memory", Config{Store: StoreMemory, DBDriver: DriverPostgres}, true},
+		{"memory", Config{Store: StoreMemory, DBDriver: DriverPostgres}, false},
+		{"memory ignores the db driver", Config{Store: StoreMemory, DBDriver: DriverSQLite}, false},
 		{"sqlite", Config{Store: StoreDB, DBDriver: DriverSQLite}, true},
 	}
 	for _, tc := range tests {
@@ -162,5 +163,18 @@ func TestCheckStoreAvailable(t *testing.T) {
 				t.Errorf("err = %v", err)
 			}
 		})
+	}
+}
+
+// STORE=memory builds a memStore without a database URL or a pool.
+func TestOpenStoreMemory(t *testing.T) {
+	t.Parallel()
+	st, closeStore, err := openStore(t.Context(), Config{Store: StoreMemory, DBDriver: DriverPostgres})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer closeStore()
+	if _, ok := st.(*memStore); !ok {
+		t.Errorf("store is %T, want *memStore", st)
 	}
 }

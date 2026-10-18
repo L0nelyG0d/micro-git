@@ -14,7 +14,7 @@ import (
 // putCommits stores n empty-tree commits, the first with the given parents
 // and each next one a child of the previous, and returns them oldest first.
 // Every message contains a fake "parent" line that must never be followed.
-func putCommits(t *testing.T, rs *RepoStore, first []string, n int) []string {
+func putCommits(t *testing.T, rs repoHandle, first []string, n int) []string {
 	t.Helper()
 	st := rs.Objects(context.Background())
 	tree, err := st.PutObject(gitobj.TypeTree, nil)
@@ -41,6 +41,7 @@ func putCommits(t *testing.T, rs *RepoStore, first []string, n int) []string {
 }
 
 func TestMergeStatementCountConstant(t *testing.T) {
+	requirePostgres(t)
 	f := newMergeFix(t)
 	ctx := context.Background()
 	chain := putCommits(t, f.rs, []string{f.a}, 200)

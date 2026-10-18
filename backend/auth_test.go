@@ -43,6 +43,18 @@ func TestMain(m *testing.M) {
 
 func testServer(t *testing.T) *Server {
 	t.Helper()
+	switch kind := testStoreKind(); kind {
+	case "memory":
+		// a fresh empty store per test: nothing to clean up afterwards
+		srv := NewServer(newMemStore())
+		srv.JWTSecret = []byte("test-secret")
+		return srv
+	case "sqlite":
+		t.Skip("TEST_STORE=sqlite: the SQLite store does not exist yet (#93)")
+	case "postgres":
+	default:
+		t.Fatalf("TEST_STORE=%q: want memory, sqlite or postgres", kind)
+	}
 	url := os.Getenv("TEST_DATABASE_URL")
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL is not set; skipping database test")
@@ -56,9 +68,15 @@ func testServer(t *testing.T) *Server {
 	return srv
 }
 
-// cleanupUser deletes the user row (any case) when the test ends.
-func cleanupUser(t *testing.T, db *pgxpool.Pool, username string) {
+// cleanupUser deletes the user row (any case) when the test ends. The memory
+// store is new for every test, so there is nothing to delete.
+func cleanupUser(t *testing.T, s *Server, username string) {
 	t.Helper()
+	pg, ok := s.Store.(*pgxStore)
+	if !ok {
+		return
+	}
+	db := pg.pool
 	t.Cleanup(func() {
 		_, err := db.Exec(context.Background(), `DELETE FROM users WHERE lower(username) = lower($1)`, username)
 		if err != nil {
@@ -101,7 +119,7 @@ func wantError(t *testing.T, rec *httptest.ResponseRecorder, status int, msg str
 func TestRegisterSuccess(t *testing.T) {
 	s := testServer(t)
 	name := uniqueName(t)
-	cleanupUser(t, rawDB(s), name)
+	cleanupUser(t, s, name)
 
 	rec := post(s, regBody(name, "correct horse"))
 	if rec.Code != http.StatusCreated {
@@ -128,8 +146,11 @@ func TestRegisterSuccess(t *testing.T) {
 		t.Error("password in response")
 	}
 
-	var dbName, hash string
-	err := rawDB(s).QueryRow(context.Background(), `SELECT username, password_hash FROM users WHERE id = $1`, int64(id)).Scan(&dbName, &hash)
+	dbName, err := s.Store.UsernameByID(context.Background(), int64(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, hash, err := s.Store.UserForLogin(context.Background(), name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -144,7 +165,7 @@ func TestRegisterSuccess(t *testing.T) {
 func TestRegisterLowercases(t *testing.T) {
 	s := testServer(t)
 	name := uniqueName(t)
-	cleanupUser(t, rawDB(s), name)
+	cleanupUser(t, s, name)
 
 	rec := post(s, regBody(strings.ToUpper(name), "correct horse"))
 	if rec.Code != http.StatusCreated {
@@ -155,8 +176,7 @@ func TestRegisterLowercases(t *testing.T) {
 	if got.Username != name {
 		t.Errorf("username = %q, want %q", got.Username, name)
 	}
-	var stored string
-	if err := rawDB(s).QueryRow(context.Background(), `SELECT username FROM users WHERE id = $1`, got.ID).Scan(&stored); err != nil || stored != name {
+	if stored, err := s.Store.UsernameByID(context.Background(), got.ID); err != nil || stored != name {
 		t.Errorf("stored = %q, err %v", stored, err)
 	}
 }
@@ -164,7 +184,7 @@ func TestRegisterLowercases(t *testing.T) {
 func TestRegisterDuplicate(t *testing.T) {
 	s := testServer(t)
 	name := uniqueName(t)
-	cleanupUser(t, rawDB(s), name)
+	cleanupUser(t, s, name)
 
 	if rec := post(s, regBody(name, "correct horse")); rec.Code != http.StatusCreated {
 		t.Fatalf("first register: %d %s", rec.Code, rec.Body)
@@ -182,7 +202,7 @@ func TestRegisterDuplicate(t *testing.T) {
 func TestRegisterConcurrentDuplicate(t *testing.T) {
 	s := testServer(t)
 	name := uniqueName(t)
-	cleanupUser(t, rawDB(s), name)
+	cleanupUser(t, s, name)
 
 	const n = 6
 	codes := make([]int, n)
@@ -227,7 +247,7 @@ func TestRegisterPasswordLength(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			name := uniqueName(t)
-			cleanupUser(t, rawDB(s), name)
+			cleanupUser(t, s, name)
 			rec := post(s, regBody(name, tc.password))
 			if tc.wantOK {
 				if rec.Code != http.StatusCreated {
@@ -262,7 +282,7 @@ func TestRegisterLengthBoundaries(t *testing.T) {
 	s := testServer(t)
 	for _, n := range []int{3, 32} {
 		name := "z" + strings.Repeat("9", n-1)
-		cleanupUser(t, rawDB(s), name)
+		cleanupUser(t, s, name)
 		if rec := post(s, regBody(name, "correct horse")); rec.Code != http.StatusCreated {
 			t.Errorf("len %d: status %d body %s", n, rec.Code, rec.Body)
 		}
@@ -307,8 +327,9 @@ func TestRegisterWrongMethod(t *testing.T) {
 	}
 }
 
-// rawDB returns the pgx pool behind a test server, for tests that seed or
-// inspect rows directly. Handlers never use it; they go through Server.Store.
+// rawDB returns the pgx pool behind a test server, for tests that are about
+// Postgres itself (the pgx store, statement counts). Tests that must also run on
+// the memory store use the Store interface or the helpers in storetest_test.go.
 func rawDB(s *Server) *pgxpool.Pool {
 	return s.Store.(*pgxStore).pool
 }

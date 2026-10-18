@@ -32,9 +32,7 @@ func newRaceFixture(t *testing.T) *raceFixture {
 
 func (f *raceFixture) deleteNow(t *testing.T) {
 	t.Helper()
-	if _, err := rawDB(f.s).Exec(context.Background(), `DELETE FROM repos WHERE id = $1`, f.repo.ID); err != nil {
-		t.Fatalf("delete repo: %v", err)
-	}
+	deleteRepo(t, f.s, f.repo.ID)
 }
 
 // captureLog redirects the standard logger for the test.
@@ -84,9 +82,7 @@ func TestReadsRacingRepoDeleteAre404(t *testing.T) {
 
 func TestMissingObjectInExistingRepoStays500(t *testing.T) {
 	f := newRaceFixture(t)
-	if _, err := rawDB(f.s).Exec(context.Background(), `DELETE FROM objects WHERE repo_id = $1 AND type = 'blob'`, f.repo.ID); err != nil {
-		t.Fatal(err)
-	}
+	dropBlobs(t, f.s, f.repo.ID)
 	logs := captureLog(t)
 	rec := do(f.s, http.MethodGet, f.base+"/blob/main/README.md", "", nil)
 	if rec.Code != http.StatusInternalServerError {
