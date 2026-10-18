@@ -12,3 +12,4 @@ bin/
 .playwright-mcp/
 graphify-out/
 resolving the issues.txt
+!frontend/.env.example
