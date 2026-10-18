@@ -40,7 +40,7 @@ func TestStoreSentinels(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanupUser(t, rawDB(s), name)
+	cleanupUser(t, s, name)
 
 	t.Run("duplicate user is ErrConflict", func(t *testing.T) {
 		if _, err := st.CreateUser(ctx, name, "hash"); !errors.Is(err, ErrConflict) {
@@ -124,7 +124,7 @@ func TestStoreInTxAtomic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cleanupUser(t, rawDB(s), name)
+	cleanupUser(t, s, name)
 	repo, err := st.CreateRepo(ctx, uid, "r", "", false, time.Now())
 	if err != nil {
 		t.Fatal(err)

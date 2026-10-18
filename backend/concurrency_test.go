@@ -72,7 +72,7 @@ func checkCommitRace(t *testing.T, s *Server, owner string, c *http.Cookie, repo
 			t.Errorf("request %d: current_tip %q, want winner %s", i, out["current_tip"], win.OID)
 		}
 	}
-	if got, _ := NewRepoStore(rawDB(s), repo.ID).GetRef(context.Background(), "main"); got != win.OID {
+	if got, _ := viewOf(s, repo.ID).GetRef(context.Background(), "main"); got != win.OID {
 		t.Errorf("branch tip %s, want winner %s", got, win.OID)
 	}
 }
@@ -90,12 +90,8 @@ func TestConcurrentFirstCommits(t *testing.T) {
 	owner, c := newUserCookie(t, s)
 	repo := createRepo(t, s, c, `{"name":"cc-first"}`)
 	checkCommitRace(t, s, owner, c, repo, "")
-	var refs int
-	if err := rawDB(s).QueryRow(context.Background(), `SELECT count(*) FROM refs WHERE repo_id = $1`, repo.ID).Scan(&refs); err != nil {
-		t.Fatal(err)
-	}
-	if refs != 1 {
-		t.Errorf("%d refs, want exactly 1", refs)
+	if refs, err := s.Store.ListRefs(context.Background(), repo.ID); err != nil || len(refs) != 1 {
+		t.Errorf("%d refs, err %v, want exactly 1", len(refs), err)
 	}
 }
 
@@ -129,7 +125,7 @@ func TestConcurrentRepoDeletedMidCommitNonEmpty(t *testing.T) {
 	repo := createRepo(t, s, c, `{"name":"cc-gone2"}`)
 	tip := mustCommit(t, s, owner, c, repo, commitJSON("main", "", "base", up("a/x.txt", "1"))).OID
 	beforeCommitTx = func() {
-		if _, err := rawDB(s).Exec(context.Background(), `DELETE FROM repos WHERE id = $1`, repo.ID); err != nil {
+		if err := s.Store.DeleteRepo(context.Background(), repo.ID); err != nil {
 			t.Error(err)
 		}
 	}
@@ -143,7 +139,7 @@ func TestConcurrentRepoDeletedMidCommit(t *testing.T) {
 	owner, c := newUserCookie(t, s)
 	repo := createRepo(t, s, c, `{"name":"cc-gone"}`)
 	beforeCommitTx = func() {
-		if _, err := rawDB(s).Exec(context.Background(), `DELETE FROM repos WHERE id = $1`, repo.ID); err != nil {
+		if err := s.Store.DeleteRepo(context.Background(), repo.ID); err != nil {
 			t.Error(err)
 		}
 	}

@@ -76,6 +76,7 @@ func lastTiming(t *testing.T, buf *bytes.Buffer) (ms float64, stmts int) {
 }
 
 func TestTimingCountsStatements(t *testing.T) {
+	requirePostgres(t)
 	s := testServer(t)
 	buf := captureTimingLog(t)
 	rec := do(s, http.MethodGet, "/repos?per_page=1", "", nil)
@@ -146,7 +147,7 @@ func TestBaseline(t *testing.T) {
 	measure("GET commit detail", get("/commits/"+tip))
 	measure("POST merge (50-commit history)", func(i int) *httptest.ResponseRecorder {
 		name := fmt.Sprint("target", i)
-		if err := NewRepoStore(rawDB(s), repo.ID).CreateRef(context.Background(), name, root); err != nil {
+		if err := viewOf(s, repo.ID).CreateRef(context.Background(), name, root); err != nil {
 			t.Fatal(err)
 		}
 		buf.Reset()

@@ -236,7 +236,8 @@ func TestRead304(t *testing.T) {
 	if rec.Code != 304 || rec.Body.Len() != 0 || rec.Header().Get("ETag") != et || rec.Header().Get("Cache-Control") != "no-cache" {
 		t.Fatalf("304 path: %d body=%d %v", rec.Code, rec.Body.Len(), rec.Header())
 	}
-	if !strings.Contains(logs.String(), " 304 ") || !strings.Contains(logs.String(), "stmts=1\n") {
+	// the statement count only means something on Postgres
+	if !strings.Contains(logs.String(), " 304 ") || testStoreKind() == "postgres" && !strings.Contains(logs.String(), "stmts=1\n") {
 		t.Errorf("304 should cost exactly the ref lookup statement: %q", logs.String())
 	}
 

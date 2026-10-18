@@ -33,6 +33,12 @@
   with `t.Cleanup()`, so tests do not depend on each other or on leftover rows
 - Do not use `t.Parallel()` in tests that share the same database rows
 
+## Choosing the store (`TEST_STORE`)
+- The API suite runs against one store, chosen by `TEST_STORE`: `postgres` (default, needs `TEST_DATABASE_URL`), `memory` (no database, a fresh `memStore` per test), `sqlite` (not built yet, #93: every test skips)
+- `TEST_STORE=memory go test -p 1 -race ./...` runs with `TEST_DATABASE_URL` unset
+- Reach the store through `Server.Store`. For what the interface cannot do (count rows, drop objects, delete a user) use the helpers in `backend/storetest_test.go` (`countObjects`, `dropBlobs`, `deleteRepo`, `deleteUser`, `viewOf`), never `rawDB`
+- A test that is about Postgres itself (statement counts, the pgx store, the pool) starts with `requirePostgres(t)`, which skips it on the other stores
+
 ## Frontend tests
 - Vitest and Testing Library; test what the user sees (text, roles, labels),
   not component internals

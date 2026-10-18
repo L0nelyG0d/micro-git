@@ -63,21 +63,12 @@ func mustCommit(t *testing.T, s *Server, owner string, c *http.Cookie, r Repo, b
 	return out
 }
 
-func countObjects(t *testing.T, s *Server, repoID int64) int {
-	t.Helper()
-	var n int
-	if err := rawDB(s).QueryRow(context.Background(), `SELECT count(*) FROM objects WHERE repo_id = $1`, repoID).Scan(&n); err != nil {
-		t.Fatal(err)
-	}
-	return n
-}
-
 func TestCommitFirstAndSecond(t *testing.T) {
 	s := testServer(t)
 	s.Now = func() time.Time { return t0 }
 	owner, c := newUserCookie(t, s)
 	repo := createRepo(t, s, c, `{"name":"r"}`)
-	rs := NewRepoStore(rawDB(s), repo.ID)
+	rs := viewOf(s, repo.ID)
 	ctx := context.Background()
 
 	first := mustCommit(t, s, owner, c, repo, commitJSON("main", "", "  First  \n", up("a/b.txt", "hi\n")))
@@ -188,12 +179,12 @@ func TestCommitErrors(t *testing.T) {
 			if after := countObjects(t, s, tc.repo.ID); after != before {
 				t.Errorf("objects %d -> %d", before, after)
 			}
-			if tip, _ := NewRepoStore(rawDB(s), full.ID).GetRef(context.Background(), "main"); tip != base.OID {
+			if tip, _ := viewOf(s, full.ID).GetRef(context.Background(), "main"); tip != base.OID {
 				t.Errorf("tip moved to %s", tip)
 			}
 		})
 	}
-	if rs := NewRepoStore(rawDB(s), empty.ID); true {
+	if rs := viewOf(s, empty.ID); true {
 		if refs, _ := rs.ListRefs(context.Background()); len(refs) != 0 {
 			t.Errorf("empty repo got refs %v", refs)
 		}
@@ -223,11 +214,11 @@ func TestCommitTipConflicts(t *testing.T) {
 	check("stale tip", commitJSON("main", stale, "m", up("a", "2")), first.OID)
 
 	// another branch is untouched by commits on main
-	if err := NewRepoStore(rawDB(s), repo.ID).CreateRef(context.Background(), "dev", first.OID); err != nil {
+	if err := viewOf(s, repo.ID).CreateRef(context.Background(), "dev", first.OID); err != nil {
 		t.Fatal(err)
 	}
 	second := mustCommit(t, s, owner, c, repo, commitJSON("main", first.OID, "m2", up("a", "2")))
-	if tip, _ := NewRepoStore(rawDB(s), repo.ID).GetRef(context.Background(), "dev"); tip != first.OID {
+	if tip, _ := viewOf(s, repo.ID).GetRef(context.Background(), "dev"); tip != first.OID {
 		t.Errorf("dev moved to %s", tip)
 	}
 	// non-empty tip on a branch that does not exist is a 404 on a non-empty repo
@@ -310,7 +301,7 @@ func race(t *testing.T, s *Server, owner string, c *http.Cookie, repo Repo, tip 
 	if n201 != 1 || n409 != 1 {
 		t.Fatalf("codes = %v, want one 201 and one 409", codes)
 	}
-	if got, _ := NewRepoStore(rawDB(s), repo.ID).GetRef(context.Background(), "main"); got != winner {
+	if got, _ := viewOf(s, repo.ID).GetRef(context.Background(), "main"); got != winner {
 		t.Errorf("tip %s, want winner %s", got, winner)
 	}
 }

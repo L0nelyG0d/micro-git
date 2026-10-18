@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -25,11 +26,13 @@ func newUserCookie(t *testing.T, s *Server) (string, *http.Cookie) {
 	t.Helper()
 	name := uniqueName(t)
 	uid := newUser(t, s, name, "correct horse")
-	t.Cleanup(func() { // runs before the user cleanup (LIFO); repos cascade
-		if _, err := rawDB(s).Exec(context.Background(), `DELETE FROM repos WHERE owner_id = $1`, uid); err != nil {
-			t.Errorf("cleanup repos: %v", err)
-		}
-	})
+	if pg, ok := s.Store.(*pgxStore); ok {
+		t.Cleanup(func() { // runs before the user cleanup (LIFO); repos cascade
+			if _, err := pg.pool.Exec(context.Background(), `DELETE FROM repos WHERE owner_id = $1`, uid); err != nil {
+				t.Errorf("cleanup repos: %v", err)
+			}
+		})
+	}
 	return name, login(t, s, name)
 }
 
@@ -80,10 +83,8 @@ func TestCreateRepo(t *testing.T) {
 		r.DefaultBranch != "main" || r.CreatedAt != "2026-01-02T15:04:05Z" || r.ID == 0 {
 		t.Errorf("repo = %+v", r)
 	}
-	var n int
-	_ = rawDB(s).QueryRow(context.Background(), `SELECT count(*) FROM refs WHERE repo_id = $1`, r.ID).Scan(&n)
-	if n != 0 {
-		t.Errorf("refs created: %d", n)
+	if refs, _ := s.Store.ListRefs(context.Background(), r.ID); len(refs) != 0 {
+		t.Errorf("refs created: %d", len(refs))
 	}
 	// description may be omitted
 	if r2 := createRepo(t, s, c, `{"name":"two"}`); r2.Description != "" {
@@ -204,7 +205,7 @@ func TestEmptyFlag(t *testing.T) {
 	s := testServer(t)
 	owner, c := newUserCookie(t, s)
 	r := createRepo(t, s, c, `{"name":"e"}`)
-	rs := NewRepoStore(rawDB(s), r.ID)
+	rs := viewOf(s, r.ID)
 	oid, err := rs.Objects(context.Background()).PutObject("blob", []byte("x"))
 	if err != nil {
 		t.Fatal(err)
@@ -235,7 +236,7 @@ func TestDeleteRepo(t *testing.T) {
 	owner, c := newUserCookie(t, s)
 	_, other := newUserCookie(t, s)
 	r := createRepo(t, s, c, `{"name":"doomed"}`)
-	rs := NewRepoStore(rawDB(s), r.ID)
+	rs := viewOf(s, r.ID)
 	ctx := context.Background()
 	oid, err := rs.Objects(ctx).PutObject("blob", []byte("x"))
 	if err != nil {
@@ -260,11 +261,11 @@ func TestDeleteRepo(t *testing.T) {
 	}
 	wantError(t, do(s, http.MethodGet, path, "", nil), 404, "repository not found")
 	wantError(t, do(s, http.MethodDelete, path, "", c), 404, "repository not found")
-	for _, table := range []string{"objects", "refs"} {
-		var n int
-		if err := rawDB(s).QueryRow(ctx, `SELECT count(*) FROM `+table+` WHERE repo_id = $1`, r.ID).Scan(&n); err != nil || n != 0 {
-			t.Errorf("%s rows after delete = %d, err %v", table, n, err)
-		}
+	if n := countObjects(t, s, r.ID); n != 0 {
+		t.Errorf("object rows after delete = %d", n)
+	}
+	if refs, err := s.Store.ListRefs(ctx, r.ID); err != nil || len(refs) != 0 {
+		t.Errorf("ref rows after delete = %d, err %v", len(refs), err)
 	}
 }
 
@@ -359,23 +360,20 @@ func TestListReposDefaultPageBoundary(t *testing.T) {
 	s := testServer(t)
 	owner, c := newUserCookie(t, s)
 	createRepo(t, s, c, `{"name":"r0"}`)
-	var ownerID int64
-	if err := rawDB(s).QueryRow(t.Context(), `SELECT id FROM users WHERE username = $1`, owner).Scan(&ownerID); err != nil {
-		t.Fatal(err)
-	}
-	_, err := rawDB(s).Exec(t.Context(),
-		`INSERT INTO repos (owner_id, name, created_at)
-		 SELECT $1, 'r' || g, $2::timestamptz + g * interval '1 second' FROM generate_series(1, 49) g`,
-		ownerID, t0)
+	ownerID, _, err := s.Store.UserForLogin(t.Context(), owner)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for g := 1; g <= 49; g++ {
+		if _, err := s.Store.CreateRepo(t.Context(), ownerID, fmt.Sprintf("r%d", g), "", false, t0.Add(time.Duration(g)*time.Second)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	p := getRepoPage(t, s, "?owner="+owner)
 	if len(p.Repos) != 50 || p.HasMore || p.PerPage != 50 {
 		t.Fatalf("50 repos: len %d has_more %v per_page %d", len(p.Repos), p.HasMore, p.PerPage)
 	}
-	if _, err := rawDB(s).Exec(t.Context(),
-		`INSERT INTO repos (owner_id, name, created_at) VALUES ($1, 'r50', $2)`, ownerID, t0); err != nil {
+	if _, err := s.Store.CreateRepo(t.Context(), ownerID, "r50", "", false, t0); err != nil {
 		t.Fatal(err)
 	}
 	p = getRepoPage(t, s, "?owner="+owner)
@@ -390,13 +388,10 @@ func TestListReposDefaultPageBoundary(t *testing.T) {
 func TestListReposTieBreaker(t *testing.T) {
 	s := testServer(t)
 	owner, c := newUserCookie(t, s)
+	// Identical created_at: only id DESC makes the order (and the pages) stable.
+	s.Now = func() time.Time { return t0 }
 	for _, n := range []string{"t1", "t2", "t3", "t4", "t5"} {
 		createRepo(t, s, c, `{"name":"`+n+`"}`)
-	}
-	// Identical created_at: only id DESC makes the order (and the pages) stable.
-	if _, err := rawDB(s).Exec(t.Context(),
-		`UPDATE repos SET created_at = $1 WHERE owner_id = (SELECT id FROM users WHERE username = $2)`, t0, owner); err != nil {
-		t.Fatal(err)
 	}
 	seen := map[int64]bool{}
 	var prev int64
