@@ -90,23 +90,127 @@ func (g *gormStore) UserForLogin(ctx context.Context, username string) (int64, s
 	return u.ID, u.PasswordHash, nil
 }
 
-// Not ported yet.
+// Repos.
+
+// repoQuery selects a repository joined with its owner, plus the Empty flag
+// (no refs). Same shape as repoSelect in store.go, with column aliases that
+// match repoRow.
+const repoQuery = `SELECT r.id, r.owner_id, u.username AS owner, r.name, r.description,
+	r.default_branch, r.private, r.created_at, NOT EXISTS (SELECT 1 FROM refs WHERE repo_id = r.id) AS empty
+	FROM repos r JOIN users u ON u.id = r.owner_id`
+
+type repoRow struct {
+	ID            int64
+	OwnerID       int64
+	Owner         string
+	Name          string
+	Description   string
+	DefaultBranch string
+	Private       bool
+	CreatedAt     time.Time
+	Empty         bool
+}
+
+func (r repoRow) repo() Repo {
+	return Repo{ID: r.ID, OwnerID: r.OwnerID, Owner: r.Owner, Name: r.Name, Description: r.Description,
+		DefaultBranch: r.DefaultBranch, Private: r.Private, Empty: r.Empty,
+		CreatedAt: r.CreatedAt.UTC().Format(time.RFC3339)}
+}
+
+// loadRepo reads one repository by id on db (the store or a transaction).
+func loadRepo(db *gorm.DB, id int64) (Repo, error) {
+	var rows []repoRow
+	if err := db.Raw(repoQuery+` WHERE r.id = ?`, id).Scan(&rows).Error; err != nil {
+		return Repo{}, mapGormErr(err)
+	}
+	if len(rows) == 0 {
+		return Repo{}, ErrNotFound
+	}
+	return rows[0].repo(), nil
+}
 
 func (g *gormStore) FindRepo(ctx context.Context, owner, name string) (Repo, error) {
-	return Repo{}, errNotPorted
+	var rows []repoRow
+	err := g.db.WithContext(ctx).Raw(repoQuery+` WHERE lower(u.username) = lower(?) AND lower(r.name) = lower(?)`,
+		owner, name).Scan(&rows).Error
+	if err != nil {
+		return Repo{}, mapGormErr(err)
+	}
+	if len(rows) == 0 {
+		return Repo{}, ErrNotFound
+	}
+	return rows[0].repo(), nil
 }
+
+func (g *gormStore) CreateRepo(ctx context.Context, ownerID int64, name, description string, private bool, createdAt time.Time) (Repo, error) {
+	var out Repo
+	err := g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		m := RepoModel{OwnerID: ownerID, Name: name, Description: description, Private: private, CreatedAt: createdAt.UTC()}
+		// Select the columns so Private=false is written, not defaulted.
+		if err := tx.Select("OwnerID", "Name", "Description", "Private", "CreatedAt").Create(&m).Error; err != nil {
+			return err
+		}
+		r, err := loadRepo(tx, m.ID)
+		out = r
+		return err
+	})
+	return out, mapGormErr(err)
+}
+
+// UpdateRepo writes only the fields set in the patch in one UPDATE; when the
+// default branch is set, the same statement requires the ref to exist.
+func (g *gormStore) UpdateRepo(ctx context.Context, repoID int64, p RepoPatch) (Repo, error) {
+	set := map[string]any{}
+	if p.Name != nil {
+		set["name"] = *p.Name
+	}
+	if p.Description != nil {
+		set["description"] = *p.Description
+	}
+	if p.Private != nil {
+		set["private"] = *p.Private
+	}
+	where := "id = ?"
+	args := []any{repoID}
+	if p.DefaultBranch != nil {
+		set["default_branch"] = *p.DefaultBranch
+		where += " AND EXISTS (SELECT 1 FROM refs WHERE repo_id = repos.id AND name = ?)"
+		args = append(args, *p.DefaultBranch)
+	}
+	if len(set) == 0 {
+		return Repo{}, errors.New("UpdateRepo: nothing to update")
+	}
+	var out Repo
+	err := g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		res := tx.Model(&RepoModel{}).Where(where, args...).Updates(set)
+		if res.Error != nil {
+			return res.Error
+		}
+		if res.RowsAffected == 0 {
+			return ErrNotFound
+		}
+		r, err := loadRepo(tx, repoID)
+		out = r
+		return err
+	})
+	return out, mapGormErr(err)
+}
+
+// DeleteRepo relies on ON DELETE CASCADE for objects and refs.
+func (g *gormStore) DeleteRepo(ctx context.Context, repoID int64) error {
+	return mapGormErr(g.db.WithContext(ctx).Delete(&RepoModel{}, repoID).Error)
+}
+
+func (g *gormStore) RepoExists(ctx context.Context, repoID int64) (bool, error) {
+	var n int64
+	err := g.db.WithContext(ctx).Model(&RepoModel{}).Where("id = ?", repoID).Count(&n).Error
+	return n > 0, mapGormErr(err)
+}
+
+// Not ported yet.
+
 func (g *gormStore) FindRepoRef(ctx context.Context, owner, name, ref string) (ReadHead, error) {
 	return ReadHead{}, errNotPorted
-}
-func (g *gormStore) CreateRepo(ctx context.Context, ownerID int64, name, description string, private bool, createdAt time.Time) (Repo, error) {
-	return Repo{}, errNotPorted
-}
-func (g *gormStore) UpdateRepo(ctx context.Context, repoID int64, p RepoPatch) (Repo, error) {
-	return Repo{}, errNotPorted
-}
-func (g *gormStore) DeleteRepo(ctx context.Context, repoID int64) error { return errNotPorted }
-func (g *gormStore) RepoExists(ctx context.Context, repoID int64) (bool, error) {
-	return false, errNotPorted
 }
 func (g *gormStore) ListRepos(ctx context.Context, viewerID int64, owner *string, limit, offset int) ([]Repo, error) {
 	return nil, errNotPorted
