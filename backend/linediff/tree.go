@@ -69,10 +69,7 @@ func Trees(store treebuild.Store, oldTree, newTree string) ([]FileDiff, error) {
 const blobBatch = 50
 
 // Object is a stored object as a Batcher returns it.
-type Object struct {
-	Type gitobj.Type
-	Body []byte
-}
+type Object = treebuild.Object
 
 // Batcher is an optional extension of treebuild.Store: it fetches several
 // objects in one round trip. Oids that do not exist are left out of the result

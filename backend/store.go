@@ -401,33 +401,6 @@ SELECT COALESCE(bool_or(root = 2 AND oid = $2), false),
 	return r, err
 }
 
-// GetObjects fetches several objects of the repository in one statement
-// (oid = ANY). Oids that do not exist are simply absent from the result, so
-// the caller can fall back to GetObject for the exact not-found error. It
-// satisfies linediff.Batcher.
-func (o *objectStore) GetObjects(oids []string) (map[string]linediff.Object, error) {
-	out := make(map[string]linediff.Object, len(oids))
-	if len(oids) == 0 {
-		return out, nil
-	}
-	rows, err := o.rs.db.Query(o.ctx,
-		`SELECT oid, type, data FROM objects WHERE repo_id = $1 AND oid = ANY($2)`,
-		o.rs.repoID, oids)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	for rows.Next() {
-		var oid, t string
-		var body []byte
-		if err := rows.Scan(&oid, &t, &body); err != nil {
-			return nil, err
-		}
-		out[oid] = linediff.Object{Type: gitobj.Type(t), Body: body}
-	}
-	return out, rows.Err()
-}
-
 // primedStore serves some objects from memory (ones a join already fetched)
 // and everything else from the wrapped store, so code written against
 // treebuild.Store keeps its behaviour and only skips the statements.
