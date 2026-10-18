@@ -7,6 +7,8 @@ format; the frontend (React + Vite) looks like a GitHub repository page.
 Clone, push and fetch of the git protocol are not supported; use the web UI or the `mg` command-line client (see "Command line"). See `_docs/plan.md` for the full
 feature list, endpoints, tables and rules.
 
+The original brainstorm chat, cleaned and redacted, is in [`_docs/brainstorm-history.md`](_docs/brainstorm-history.md).
+
 ## Quick start with make
 
 With Go, Node.js and npm, `psql` and a PostgreSQL database available, a fresh
