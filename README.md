@@ -296,6 +296,7 @@ Start the backend and frontend (Setup steps 5 and 6) and open
   deleted branch stay in the database (they are removed only when the whole
   repository is deleted).
 - Only login and register are rate limited (in memory, so the counters reset on restart; the client IP is the connection address, so behind a reverse proxy all clients look alike). Other endpoints are not limited. A throttled client gets `429` with `Retry-After`.
+- HTTP caching: reads addressed by a full commit oid are `immutable` for a year; branch-named reads use `no-cache` with an `ETag` and answer `304` on `If-None-Match`. JSON bodies over 1 KB are gzipped for clients that accept it (`Vary: Accept-Encoding`). `/auth/*` is `no-store`.
 - Request limits: JSON bodies over 1 MiB answer `413` (commits: 64 MiB); one
   diff response does at most 32 million line-pair cells, later files come back
   `truncated`; a file with more than 5000 lines on either side is not diffed.
