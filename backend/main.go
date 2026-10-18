@@ -27,6 +27,9 @@ func main() {
 	for _, w := range cfg.Warnings {
 		log.Printf("config warning: %s", w)
 	}
+	if err := checkStoreAvailable(cfg); err != nil {
+		log.Fatalf("config: %v", err)
+	}
 	pool, err := NewPool(context.Background(), cfg.DatabaseURL, cfg.Pool)
 	if err != nil {
 		log.Fatalf("database: %v", err)
@@ -66,4 +69,16 @@ func main() {
 		log.Printf("shutdown: %v", err)
 	}
 	pool.Close()
+}
+
+// checkStoreAvailable refuses settings whose store is not built yet (#82
+// memory, #93 SQLite) so main never falls back to Postgres silently.
+func checkStoreAvailable(cfg Config) error {
+	if cfg.Store == StoreMemory {
+		return errors.New("STORE=memory is not available in this build yet")
+	}
+	if cfg.DBDriver == DriverSQLite {
+		return errors.New("DB_DRIVER=sqlite is not available in this build yet")
+	}
+	return nil
 }

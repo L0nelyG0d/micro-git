@@ -292,11 +292,18 @@ In-memory, standard library only; constants and their meaning are at the top of 
 
 | env variable | required | notes |
 |---|---|---|
-| `DATABASE_URL` | yes | PostgreSQL connection string |
+| `STORE` | no | `db` (default) or `memory`; anything else stops startup. `memory` needs no database and loses all data on exit (startup warning) |
+| `DB_DRIVER` | no | `postgres` (default) or `sqlite`; validated even when `STORE=memory` |
+| `DATABASE_URL` | when `STORE` is not `memory` and `DB_DRIVER` is `postgres` | PostgreSQL connection string |
+| `SQLITE_PATH` | no | SQLite file when `DB_DRIVER=sqlite`, default `./data/mg.db` |
+| `DB_MAX_CONNS` | no | Postgres pool size, 1 to 1000, default `10` |
+| `DB_STATEMENT_TIMEOUT` | no | Postgres `statement_timeout` per pooled connection, duration from `1ms` to `1h`, default `15s` |
 | `JWT_SECRET` | yes | HMAC key for the session JWT; at least 32 bytes, otherwise the process refuses to start |
 | `COOKIE_SECURE` | no | exactly `true` adds `Secure` to the session cookie |
 | `PORT` | no | 1 to 65535, default `8080` |
 | `TEST_DATABASE_URL` | for tests | separate database; DB tests are skipped without it |
+
+Until #82 (memory store) and #93 (SQLite) land, `main` refuses `STORE=memory` and `DB_DRIVER=sqlite` with "not available in this build yet" instead of using Postgres.
 
 Process: `http.Server` with read-header, read, write and idle timeouts, graceful shutdown on SIGINT / SIGTERM, `X-Content-Type-Options: nosniff` on every response and `Cache-Control: no-store` on `/auth/*`.
 

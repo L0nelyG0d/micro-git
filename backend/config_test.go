@@ -77,3 +77,88 @@ func TestLoadConfigCookieSecureWarning(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadConfigStorage(t *testing.T) {
+	t.Parallel()
+	const pg = "postgres://u:p@h/db"
+	tests := []struct {
+		name       string
+		env        map[string]string
+		wantErr    string
+		wantStore  string
+		wantDriver string
+		wantURL    string
+		wantPath   string
+		wantWarn   bool
+	}{
+		{"default without url", map[string]string{"JWT_SECRET": goodSecret}, "DATABASE_URL is not set", "", "", "", "", false},
+		{"postgres with url", map[string]string{"JWT_SECRET": goodSecret, "DATABASE_URL": pg}, "", "db", "postgres", pg, "", false},
+		{"explicit db and postgres", map[string]string{"JWT_SECRET": goodSecret, "DATABASE_URL": pg, "STORE": "db", "DB_DRIVER": "postgres"}, "", "db", "postgres", pg, "", false},
+		{"sqlite without url", map[string]string{"JWT_SECRET": goodSecret, "DB_DRIVER": "sqlite"}, "", "db", "sqlite", "", "./data/mg.db", false},
+		{"sqlite empty path", map[string]string{"JWT_SECRET": goodSecret, "DB_DRIVER": "sqlite", "SQLITE_PATH": ""}, "", "db", "sqlite", "", "./data/mg.db", false},
+		{"sqlite custom path", map[string]string{"JWT_SECRET": goodSecret, "DB_DRIVER": "sqlite", "SQLITE_PATH": "/tmp/x.db"}, "", "db", "sqlite", "", "/tmp/x.db", false},
+		{"memory with nothing set", map[string]string{"JWT_SECRET": goodSecret, "STORE": "memory"}, "", "memory", "postgres", "", "", true},
+		{"bad store", map[string]string{"JWT_SECRET": goodSecret, "DATABASE_URL": pg, "STORE": "bogus"}, `STORE must be one of: db, memory, got "bogus"`, "", "", "", "", false},
+		{"bad driver", map[string]string{"JWT_SECRET": goodSecret, "DATABASE_URL": pg, "DB_DRIVER": "mysql"}, `DB_DRIVER must be one of: postgres, sqlite, got "mysql"`, "", "", "", "", false},
+		{"bad driver with memory", map[string]string{"JWT_SECRET": goodSecret, "STORE": "memory", "DB_DRIVER": "bogus"}, `DB_DRIVER must be one of: postgres, sqlite, got "bogus"`, "", "", "", "", false},
+		{"memory still needs jwt", map[string]string{"STORE": "memory"}, "JWT_SECRET is not set", "", "", "", "", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			cfg, err := LoadConfig(func(k string) string { return tc.env[k] })
+			if tc.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("err = %v, want containing %q", err, tc.wantErr)
+				}
+				if strings.Contains(err.Error(), pg) || strings.Contains(err.Error(), goodSecret) {
+					t.Errorf("error leaks a secret: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.Store != tc.wantStore || cfg.DBDriver != tc.wantDriver || cfg.DatabaseURL != tc.wantURL || cfg.SQLitePath != tc.wantPath {
+				t.Errorf("cfg = %+v", cfg)
+			}
+			lost := false
+			for _, w := range cfg.Warnings {
+				if strings.Contains(w, "lost when the process exits") {
+					lost = true
+				}
+				if strings.Contains(w, pg) || strings.Contains(w, goodSecret) {
+					t.Errorf("warning leaks a secret: %q", w)
+				}
+			}
+			if lost != tc.wantWarn {
+				t.Errorf("memory warning = %v, want %v (%q)", lost, tc.wantWarn, cfg.Warnings)
+			}
+		})
+	}
+}
+
+func TestCheckStoreAvailable(t *testing.T) {
+	t.Parallel()
+	tests := []struct {
+		name    string
+		cfg     Config
+		wantErr bool
+	}{
+		{"postgres", Config{Store: StoreDB, DBDriver: DriverPostgres}, false},
+		{"memory", Config{Store: StoreMemory, DBDriver: DriverPostgres}, true},
+		{"sqlite", Config{Store: StoreDB, DBDriver: DriverSQLite}, true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			err := checkStoreAvailable(tc.cfg)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
+			}
+			if err != nil && !strings.Contains(err.Error(), "not available in this build yet") {
+				t.Errorf("err = %v", err)
+			}
+		})
+	}
+}

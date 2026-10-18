@@ -10,11 +10,28 @@ import (
 // minJWTSecretBytes is the shortest HMAC signing key accepted.
 const minJWTSecretBytes = 32
 
+const (
+	StoreDB     = "db"
+	StoreMemory = "memory"
+
+	DriverPostgres = "postgres"
+	DriverSQLite   = "sqlite"
+
+	defaultSQLitePath = "./data/mg.db"
+)
+
 // Config holds process settings read from the environment.
 type Config struct {
 	Addr        string // listen address, ":" + PORT
-	DatabaseURL string
-	JWTSecret   string
+	DatabaseURL string // only set when Store is "db" and DBDriver is "postgres"
+	// Store is STORE: "db" (default) or "memory".
+	Store string
+	// DBDriver is DB_DRIVER: "postgres" (default) or "sqlite". Validated even
+	// when Store is "memory".
+	DBDriver string
+	// SQLitePath is SQLITE_PATH, only set when DBDriver is "sqlite".
+	SQLitePath string
+	JWTSecret  string
 	// CookieSecure adds the Secure attribute to the session cookie (COOKIE_SECURE=true).
 	CookieSecure bool
 	Pool         PoolConfig
@@ -82,9 +99,34 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
 		return Config{}, fmt.Errorf("PORT must be a number from 1 to 65535, got %q", port)
 	}
-	dbURL := getenv("DATABASE_URL")
-	if dbURL == "" {
-		return Config{}, errors.New("DATABASE_URL is not set")
+	store := getenv("STORE")
+	if store == "" {
+		store = StoreDB
+	}
+	if store != StoreDB && store != StoreMemory {
+		return Config{}, fmt.Errorf("STORE must be one of: db, memory, got %q", store)
+	}
+	driver := getenv("DB_DRIVER")
+	if driver == "" {
+		driver = DriverPostgres
+	}
+	if driver != DriverPostgres && driver != DriverSQLite {
+		return Config{}, fmt.Errorf("DB_DRIVER must be one of: postgres, sqlite, got %q", driver)
+	}
+	var dbURL, sqlitePath string
+	if store == StoreDB {
+		switch driver {
+		case DriverPostgres:
+			dbURL = getenv("DATABASE_URL")
+			if dbURL == "" {
+				return Config{}, errors.New("DATABASE_URL is not set")
+			}
+		case DriverSQLite:
+			sqlitePath = getenv("SQLITE_PATH")
+			if sqlitePath == "" {
+				sqlitePath = defaultSQLitePath
+			}
+		}
 	}
 	secret := getenv("JWT_SECRET")
 	if secret == "" {
@@ -101,7 +143,13 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if getenv("COOKIE_SECURE") == "" {
 		warnings = append(warnings, "COOKIE_SECURE is not set: the session cookie is sent without the Secure attribute. Set COOKIE_SECURE=true when serving over HTTPS")
 	}
+	if store == StoreMemory {
+		warnings = append(warnings, "STORE=memory: all data is lost when the process exits")
+	}
 	return Config{
+		Store:        store,
+		DBDriver:     driver,
+		SQLitePath:   sqlitePath,
 		Warnings:     warnings,
 		Pool:         pool,
 		Addr:         ":" + port,
