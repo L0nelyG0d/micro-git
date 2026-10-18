@@ -1,6 +1,6 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
 import { api, ApiError } from "@/lib/api"
-import { cacheGet, cacheSet, cacheToken, isImmutablePath } from "@/lib/fetchCache"
+import { cacheGet, cacheHas, cacheSet, cacheSubscribe, cacheToken, isImmutablePath } from "@/lib/fetchCache"
 
 export type FetchState<T> = {
   data: T | undefined
@@ -24,12 +24,18 @@ export function useFetch<T>(path: string | null): FetchState<T> {
   const [attempt, setAttempt] = useState(0)
   const [settled, setSettled] = useState<Settled<T>>()
   const forced = useRef(false)
+  // An immutable oid path that is cached needs no request; if the entry is
+  // dropped while mounted (write, cacheClear) this flips and the effect fetches.
+  const skip = useSyncExternalStore(
+    cacheSubscribe,
+    () => path !== null && isImmutablePath(path) && cacheHas(path),
+  )
 
   useEffect(() => {
     if (path === null) return
     const force = forced.current
     forced.current = false
-    if (!force && isImmutablePath(path) && cacheGet(path)) return
+    if (!force && skip) return
     const ctl = new AbortController()
     const token = cacheToken()
     api<T>(path, { signal: ctl.signal })
@@ -43,7 +49,7 @@ export function useFetch<T>(path: string | null): FetchState<T> {
         setSettled({ path, attempt, error })
       })
     return () => ctl.abort()
-  }, [path, attempt])
+  }, [path, attempt, skip])
 
   const reload = useCallback(() => {
     forced.current = true
@@ -51,9 +57,10 @@ export function useFetch<T>(path: string | null): FetchState<T> {
   }, [])
   const samePath = settled?.path === path
   const current = samePath && settled?.attempt === attempt
-  const cached = !samePath && path !== null ? cacheGet<T>(path) : undefined
+  const cached = path !== null ? cacheGet<T>(path) : undefined
   return {
-    data: samePath ? settled?.data : cached?.data,
+    // A failed revalidation keeps showing the cached answer (error is still set).
+    data: samePath && settled?.data !== undefined ? settled.data : cached?.data,
     error: current ? settled?.error : undefined,
     loading: path !== null && !current && !cached,
     reload,

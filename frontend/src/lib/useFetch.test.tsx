@@ -1,10 +1,10 @@
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { api } from "@/lib/api"
-import { cacheClear, isImmutablePath } from "@/lib/fetchCache"
+import { cacheClear, invalidateAfterWrite, isImmutablePath } from "@/lib/fetchCache"
 import { useFetch } from "@/lib/useFetch"
 
-type Pending = { url: string; signal?: AbortSignal | null; resolve: (body: unknown) => void }
+type Pending = { url: string; signal?: AbortSignal | null; resolve: (body: unknown) => void; fail: () => void }
 let pending: Pending[]
 let calls: string[]
 
@@ -26,6 +26,7 @@ beforeEach(() => {
           pending.push({
             url,
             signal,
+            fail: () => reject(new TypeError("network")),
             resolve: (body) => resolve({ status: 200, ok: true, json: async () => body } as Response),
           })
         }),
@@ -85,6 +86,35 @@ it("never revalidates an immutable (40-hex oid) path", async () => {
 
   act(() => second.result.current.reload())
   expect(calls).toHaveLength(2) // an explicit retry still goes out
+})
+
+it("fetches again when a cached oid entry is dropped while mounted", async () => {
+  const path = `/repos/o/r/tree/${OID}`
+  const first = renderHook(() => useFetch<string>(path))
+  answer(`/api${path}`, "tree")
+  await waitFor(() => expect(first.result.current.data).toBe("tree"))
+  first.unmount()
+
+  const second = renderHook(() => useFetch<string>(path))
+  expect(calls).toHaveLength(1)
+  act(() => invalidateAfterWrite("/repos/o/r/branches"))
+  await waitFor(() => expect(calls).toHaveLength(2))
+  answer(`/api${path}`, "fresh")
+  await waitFor(() => expect(second.result.current.data).toBe("fresh"))
+  expect(second.result.current.loading).toBe(false)
+})
+
+it("keeps showing cached data when a background revalidation fails", async () => {
+  const first = renderHook(() => useFetch<string>("/a"))
+  answer("/api/a", "old")
+  await waitFor(() => expect(first.result.current.data).toBe("old"))
+  first.unmount()
+
+  const second = renderHook(() => useFetch<string>("/a"))
+  const p = pending.find((x) => x.url === "/api/a" && !x.signal?.aborted)!
+  act(() => p.fail())
+  await waitFor(() => expect(second.result.current.error).toBeDefined())
+  expect(second.result.current.data).toBe("old")
 })
 
 it("recognizes immutable paths only for full oids", () => {
