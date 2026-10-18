@@ -174,4 +174,6 @@ Analysis on 2026-10-18. Main costs: one SQL statement per object on reads and wr
 - #53 Frontend abort, cache, no waterfalls
 - #54 Explicit DB pool settings, faster test suite
 
-Order: #47 first; then #48, #49, #50, #54 (backend, mostly separate files) and #51; #52 and #53 (frontend) in parallel. #51 and #53 both touch caching: #51 first.
+Status: #47-#55 are all done, QA PASS and merged into `main` (#55 = flaky tests after code-splitting). Decisions: Neon baseline stays an estimate (statements x 200 ms); gzipped bodies carry a weak ETag (RFC-correct); a forged ETag for a missing path on an existing branch gets 304 (documented limit in plan.md).
+
+Original order: #47 first; then #48, #49, #50, #54 (backend, mostly separate files) and #51; #52 and #53 (frontend) in parallel. #51 and #53 both touch caching: #51 first.
