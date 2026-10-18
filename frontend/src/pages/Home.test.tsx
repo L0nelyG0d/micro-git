@@ -119,6 +119,21 @@ it("shows an error with Retry for a network error", async () => {
   expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument()
 })
 
+it("shows the unreachable block and the session indication when the backend is down, and Retry recovers", async () => {
+  routes["GET /api/auth/me"] = () => new TypeError("Failed to fetch")
+  routes["GET /api/repos?page=1"] = () => new TypeError("Failed to fetch")
+  renderHome()
+  expect(await screen.findByText("Session unavailable")).toBeInTheDocument()
+  const block = await screen.findByRole("alert")
+  expect(block).toHaveTextContent("Could not reach the server. Check your connection and try again.")
+  const before = calls.filter((c) => c === "GET /api/repos?page=1").length
+  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo()] })
+  await userEvent.click(within(block).getByRole("button", { name: "Retry" }))
+  expect(await screen.findByRole("link", { name: "alice/hello" })).toBeInTheDocument()
+  expect(calls.filter((c) => c === "GET /api/repos?page=1").length).toBe(before + 1)
+  expect(screen.queryByText(/could not reach the server/i)).not.toBeInTheDocument()
+})
+
 it("creates a repo: toast, form closed, list updated without reload", async () => {
   routes["GET /api/auth/me"] = me
   routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo({ id: 1, name: "old" })] })

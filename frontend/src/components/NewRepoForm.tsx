@@ -6,6 +6,7 @@ import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Textarea } from "@/components/ui/textarea"
 import { apiService, ApiError } from "@/services"
+import { errorMessage } from "@/lib/useFetch"
 import { validateDescription, validateRepoName } from "@/lib/repos"
 import type { Repo } from "@/lib/repos"
 
@@ -64,11 +65,7 @@ export function NewRepoForm({ onCreated, onCancel, onUnauthorized }: Props) {
           nameRef.current?.focus()
         }
       } else {
-        setFormError(
-          err instanceof ApiError
-            ? err.message
-            : "Could not reach the server. Check your connection and try again.",
-        )
+        setFormError(errorMessage(err))
       }
       setBusy(false)
     }

@@ -67,9 +67,12 @@ export function useFetch<T>(path: string | null): FetchState<T> {
   }
 }
 
-/** User-facing text for a failed request. */
+export const UNREACHABLE_MESSAGE = "Could not reach the server. Check your connection and try again."
+
+/** Statuses a proxy or gateway answers when the backend itself is down. */
+const UNREACHABLE_STATUSES = [502, 503, 504]
+
+/** User-facing text for a failed request. Network failures and 502/503/504 read the same. */
 export function errorMessage(e: unknown): string {
-  return e instanceof ApiError
-    ? e.message
-    : "Could not reach the server. Check your connection and try again."
+  return e instanceof ApiError && !UNREACHABLE_STATUSES.includes(e.status) ? e.message : UNREACHABLE_MESSAGE
 }
