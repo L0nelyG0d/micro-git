@@ -1,75 +1,14 @@
-import { MemoryRouter } from "@/test-utils"
-import { renderWithMock } from "@/test-mock"
+import { holdGet, holdNext, renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
-import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useLocation } from "react-router-dom"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import App from "@/App"
-import { cacheClear } from "@/lib/fetchCache"
+import { beforeEach, expect, it, vi } from "vitest"
 
-type Res = { status: number; body?: unknown } | Error
-let routes: Record<string, (body: unknown) => Res | Promise<Res>>
-let calls: string[]
-
-const json = (status: number, body?: unknown): Res => ({ status, body })
-const OID = "a".repeat(40)
-const OID2 = "b".repeat(40)
-const NEW = "c".repeat(40)
-const repo = (o: Record<string, unknown> = {}) => ({
-  id: 1, owner: "alice", name: "hello", description: "", default_branch: "main",
-  empty: false, created_at: "2026-01-02T15:04:05Z", ...o,
-})
-const blob = (commit = OID, content = "hello\n") => ({
-  ref: "main", commit, path: "a.txt", name: "a.txt", oid: OID, size: content.length, content,
-})
-const branches = {
-  branches: [
-    { name: "dev", oid: OID2, is_default: false },
-    { name: "main", oid: OID, is_default: true },
-  ],
-}
-
-function setup(user: string | null = "alice", r = repo()) {
-  routes["GET /api/auth/me"] = () =>
-    user ? json(200, { id: 1, username: user }) : json(401, { error: "authentication required" })
-  routes["GET /api/repos/alice/hello"] = () => json(200, r)
-  routes["GET /api/repos/alice/hello/branches"] = () => json(200, branches)
-}
-
-beforeEach(() => {
-  sessionStorage.clear()
-  cacheClear()
-  calls = []
-  routes = {}
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      const key = `${init?.method ?? "GET"} ${url}`
-      calls.push(key)
-      const h = routes[key]
-      if (!h) throw new Error(`unexpected fetch ${key}`)
-      const r = await h(init?.body ? JSON.parse(init.body as string) : undefined)
-      if (r instanceof Error) throw r
-      return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
-    }),
-  )
-})
-afterEach(() => vi.unstubAllGlobals())
+beforeEach(() => sessionStorage.clear()) // editor drafts live in sessionStorage
 
 function Loc() {
   return <div data-testid="loc">{useLocation().pathname}</div>
-}
-function renderAt(path: string, history: string[] = []) {
-  return render(
-    <MemoryRouter
-      initialEntries={[...history, path]}
-      initialIndex={history.length}
-    >
-      <App />
-      <Loc />
-    </MemoryRouter>,
-  )
 }
 const commitBtn = () => screen.getByRole("button", { name: "Commit" })
 const type = async (label: string, text: string) => {
@@ -77,36 +16,6 @@ const type = async (label: string, text: string) => {
   await userEvent.clear(el)
   if (text) await userEvent.type(el, text)
 }
-
-// Kept on fetch: needs the POST held in flight.
-it("disables Commit while submitting (no double submit)", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  let release: (r: Res) => void = () => {}
-  let posts = 0
-  routes["POST /api/repos/alice/hello/commits"] = () => {
-    posts++
-    return new Promise<Res>((r) => (release = r))
-  }
-  renderAt("/alice/hello/edit/main/a.txt")
-  await screen.findByLabelText("File content")
-  await type("Commit message", "Msg")
-  await waitFor(() => expect(commitBtn()).toBeEnabled())
-  await userEvent.click(commitBtn())
-  await waitFor(() => expect(commitBtn()).toBeDisabled())
-  expect(posts).toBe(1)
-  release(json(201, { oid: NEW, tree: OID, parent: OID, branch: "main" }))
-  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
-})
-
-// Kept on fetch: needs a request held pending.
-it("shows a loading state first", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  renderAt("/alice/hello/edit/main/a.txt")
-  expect(screen.getByRole("status", { name: "Loading editor" })).toBeInTheDocument()
-  await screen.findByLabelText("File content")
-})
 
 const unload = () => {
   const ev = new Event("beforeunload", { cancelable: true })
@@ -458,4 +367,33 @@ it("mock: 403 on submit shows an error (the session switched to another user beh
   await userEvent.click(commitBtn())
   expect(await screen.findByText("forbidden")).toBeInTheDocument()
   expect(await contentAt(mock, "main")).toBe("hello\n")
+})
+
+it("mock: disables Commit while submitting (no double submit)", async () => {
+  const mock = await editorMock("alice")
+  const release = holdNext(mock, "createCommit")
+  const commits = vi.spyOn(mock, "createCommit")
+  open(EDIT, mock)
+  await screen.findByLabelText("File content")
+  await type("File content", "bye")
+  await type("Commit message", "Msg")
+  await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await userEvent.click(commitBtn())
+  await waitFor(() => expect(commitBtn()).toBeDisabled())
+  expect(commits).toHaveBeenCalledTimes(1)
+  release()
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
+  expect(commits).toHaveBeenCalledTimes(1)
+})
+
+it("mock: shows a loading state first", async () => {
+  const mock = await editorMock("alice")
+  const release = holdGet(mock, "/blob/main/a.txt")
+  open(EDIT, mock)
+  await waitFor(() => expect(screen.getByRole("status", { name: "Loading editor" })).toBeInTheDocument())
+  await new Promise((r) => setTimeout(r, 20)) // past the session check: the file request is the one held
+  expect(screen.getByRole("status", { name: "Loading editor" })).toBeInTheDocument()
+  expect(screen.queryByLabelText("File content")).not.toBeInTheDocument()
+  release()
+  await screen.findByLabelText("File content")
 })
