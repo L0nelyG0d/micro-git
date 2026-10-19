@@ -1,53 +1,8 @@
-import { MemoryRouter } from "@/test-utils"
-import { renderWithMock } from "@/test-mock"
+import { holdNext, renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
-import { render, screen, waitFor } from "@testing-library/react"
+import { screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import App from "@/App"
-import { cacheClear } from "@/lib/fetchCache"
-
-type Res = { status: number; body?: unknown }
-let routes: Record<string, () => Res>
-
-const json = (status: number, body?: unknown): Res => ({ status, body })
-const repo = (empty = false) => ({
-  id: 1,
-  owner: "alice",
-  name: "hello",
-  description: "",
-  default_branch: "main",
-  empty,
-  created_at: "2026-01-02T15:04:05Z",
-})
-
-function setup(user: string | null, empty = false) {
-  routes["GET /api/auth/me"] = () =>
-    user ? json(200, { id: 1, username: user }) : json(401, { error: "authentication required" })
-  routes["GET /api/repos/alice/hello"] = () => json(200, repo(empty))
-  routes["GET /api/repos/alice/hello/branches"] = () =>
-    json(200, {
-      branches: [
-        { name: "main", oid: "a".repeat(40), is_default: true },
-        { name: "dev", oid: "b".repeat(40), is_default: false },
-      ],
-    })
-}
-
-beforeEach(() => {
-  cacheClear()
-  routes = {}
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      const h = routes[`${init?.method ?? "GET"} ${url}`]
-      if (!h) throw new Error(`unexpected fetch ${url}`)
-      const r = h()
-      return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
-    }),
-  )
-})
-afterEach(() => vi.unstubAllGlobals())
+import { expect, it } from "vitest"
 
 /** alice owns "hello" (with a "dev" branch unless empty); `as` is who is logged in. */
 async function seeded(as: string | null, empty = false) {
@@ -69,13 +24,6 @@ async function seeded(as: string | null, empty = false) {
   if (as && as !== "alice") await mock.login(as, "password1")
   return mock
 }
-
-const renderAt = (path: string) =>
-  render(
-    <MemoryRouter initialEntries={[path]}>
-      <App />
-    </MemoryRouter>,
-  )
 
 it("owner sees General, Commit history, Branches and Danger zone", async () => {
   renderWithMock("/alice/hello/settings", await seeded("alice"))
@@ -131,29 +79,6 @@ it("blocks saving a description over 500 characters", async () => {
   expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled()
 })
 
-// Kept on fetch: needs the PATCH held in flight.
-it("shows Saving… with aria-busy on the visibility confirm while the request is pending", async () => {
-  setup("alice")
-  let release!: () => void
-  const gate = new Promise<void>((r) => (release = r))
-  routes["PATCH /api/repos/alice/hello"] = () => json(200, { ...repo(), private: true })
-  const inner = vi.mocked(fetch).getMockImplementation()!
-  vi.mocked(fetch).mockImplementation(async (u, i) => {
-    if (i?.method === "PATCH") await gate
-    return inner(u, i)
-  })
-  renderAt("/alice/hello/settings")
-  await userEvent.click(await screen.findByRole("button", { name: "Change visibility" }))
-  const confirm = await screen.findByRole("button", { name: "Make private" })
-  expect(confirm).not.toHaveAttribute("aria-busy")
-  await userEvent.click(confirm)
-  const busy = await screen.findByRole("button", { name: "Saving…" })
-  expect(busy).toBeDisabled()
-  expect(busy).toHaveAttribute("aria-busy", "true")
-  release()
-  await waitFor(() => expect(screen.queryByRole("button", { name: "Saving…" })).not.toBeInTheDocument())
-})
-
 it("section nav wraps instead of clipping on narrow screens (#71)", async () => {
   renderWithMock("/alice/hello/settings", await seeded("alice"))
   const nav = await screen.findByRole("navigation", { name: "Settings sections" })
@@ -165,4 +90,20 @@ it("section nav wraps instead of clipping on narrow screens (#71)", async () => 
     "Branches",
     "Danger zone",
   ])
+})
+
+it("shows Saving… with aria-busy on the visibility confirm while the request is pending", async () => {
+  const mock = await seeded("alice")
+  const release = holdNext(mock, "updateRepo")
+  renderWithMock("/alice/hello/settings", mock)
+  await userEvent.click(await screen.findByRole("button", { name: "Change visibility" }))
+  const confirm = await screen.findByRole("button", { name: "Make private" })
+  expect(confirm).not.toHaveAttribute("aria-busy")
+  await userEvent.click(confirm)
+  const busy = await screen.findByRole("button", { name: "Saving…" })
+  expect(busy).toBeDisabled()
+  expect(busy).toHaveAttribute("aria-busy", "true")
+  release()
+  await waitFor(() => expect(screen.queryByRole("button", { name: "Saving…" })).not.toBeInTheDocument())
+  expect((await mock.getRepo("alice", "hello")).private).toBe(true)
 })

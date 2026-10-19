@@ -1,51 +1,9 @@
-import { MemoryRouter } from "@/test-utils"
-import { renderWithMock } from "@/test-mock"
+import { failNext, renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
-import { render, screen, within } from "@testing-library/react"
+import { screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useLocation } from "react-router-dom"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import App from "@/App"
-import { cacheClear } from "@/lib/fetchCache"
-
-type Res = { status: number; body?: unknown }
-let routes: Record<string, (body: unknown) => Res>
-let calls: string[]
-
-const json = (status: number, body?: unknown): Res => ({ status, body })
-const repo = (name: string, empty = true) => ({
-  id: 1,
-  owner: "alice",
-  name,
-  description: "",
-  default_branch: "main",
-  empty,
-  created_at: "2026-01-02T15:04:05Z",
-})
-
-function setup(user: string | null = "alice") {
-  routes["GET /api/auth/me"] = () => (user ? json(200, { id: 1, username: user }) : json(401, { error: "authentication required" }))
-  routes["GET /api/repos/alice/hello"] = () => json(200, repo("hello"))
-  routes["GET /api/repos/alice/renamed"] = () => json(200, repo("renamed"))
-}
-
-beforeEach(() => {
-  cacheClear()
-  calls = []
-  routes = {}
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      const key = `${init?.method ?? "GET"} ${url}`
-      calls.push(key + (init?.body ? ` ${init.body}` : ""))
-      const h = routes[key]
-      if (!h) throw new Error(`unexpected fetch ${key}`)
-      const r = h(init?.body ? JSON.parse(init.body as string) : undefined)
-      return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
-    }),
-  )
-})
-afterEach(() => vi.unstubAllGlobals())
+import { expect, it } from "vitest"
 
 /** A mock where alice owns the empty repository "hello" and is logged in. */
 async function seeded() {
@@ -59,15 +17,6 @@ async function seeded() {
 function Loc() {
   return <div data-testid="loc">{useLocation().pathname}</div>
 }
-function renderAt(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <App />
-      <Loc />
-    </MemoryRouter>,
-  )
-}
-
 async function openDialog() {
   await userEvent.click(await screen.findByRole("button", { name: "Rename" }))
   return screen.getByRole("dialog")
@@ -115,20 +64,6 @@ it("rename: an invalid name is rejected before any request", async () => {
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
 })
 
-// Kept on fetch: a valid name never gets a 400 from the mock, so only a stub can return the server's rule message.
-it("rename: a 400 from the server shows the name rule", async () => {
-  setup()
-  routes["PATCH /api/repos/alice/hello"] = () => json(400, { error: "invalid repository name" })
-  renderAt("/alice/hello/settings")
-  const dlg = await openDialog()
-  const input = within(dlg).getByLabelText("Repository name")
-  await userEvent.clear(input)
-  await userEvent.type(input, "ok")
-  await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
-  expect(await within(dlg).findByRole("alert")).toHaveTextContent("Use 1-100 letters, digits, dots, hyphens or underscores.")
-  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
-})
-
 it.each([["bob"], [null]])("rename: button hidden for non-owner (%s)", async (u) => {
   const mock = await seeded()
   await mock.register("bob", "password1")
@@ -166,5 +101,18 @@ it("rename: 401 expires the session with a toast and hides owner actions", async
   expectLoggedOut()
   expect(screen.queryByRole("button", { name: "Rename" })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "Delete repository" })).not.toBeInTheDocument()
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
+})
+
+it("rename: a 400 from the server shows the name rule", async () => {
+  const mock = await seeded()
+  failNext(mock, "updateRepo", 400, "invalid repository name")
+  renderWithMock("/alice/hello/settings", mock, <Loc />)
+  const dlg = await openDialog()
+  const input = within(dlg).getByLabelText("Repository name")
+  await userEvent.clear(input)
+  await userEvent.type(input, "ok")
+  await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
+  expect(await within(dlg).findByRole("alert")).toHaveTextContent("Use 1-100 letters, digits, dots, hyphens or underscores.")
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
 })
