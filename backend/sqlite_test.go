@@ -71,10 +71,17 @@ func TestSQLiteDataSurvivesRestart(t *testing.T) {
 }
 
 func TestOpenSQLiteRejectsBadPath(t *testing.T) {
-	for _, p := range []string{"", "x.db?mode=ro", "x#.db"} {
+	for _, p := range []string{"", "x.db?mode=ro", "x#.db", t.TempDir()} {
 		if db, err := OpenSQLite(p); err == nil {
 			CloseGorm(db)
 			t.Errorf("OpenSQLite(%q) succeeded", p)
 		}
+	}
+}
+
+func TestOpenSQLiteDirectoryMessage(t *testing.T) {
+	_, err := OpenSQLite(t.TempDir())
+	if err == nil || !strings.Contains(err.Error(), "is a directory") {
+		t.Fatalf("err = %v", err)
 	}
 }

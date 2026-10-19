@@ -75,7 +75,8 @@ Run these steps in order.
    `DB_DRIVER=sqlite` needs no Postgres and no cgo: the backend opens
    `SQLITE_PATH` with the pure-Go driver, creates the file and its directory
    when missing, migrates it and keeps the data across restarts
-   (`DB_DRIVER=sqlite SQLITE_PATH=/tmp/mg.db JWT_SECRET=... go run ./backend`).
+   (`cd backend && DB_DRIVER=sqlite SQLITE_PATH=/tmp/mg.db JWT_SECRET=... go run .`).
+   An empty `SQLITE_PATH` counts as unset and uses the default.
    The default `./data/` directory is git-ignored. `DATABASE_URL` is not used.
 
    The pool also closes connections idle for more than 5 minutes

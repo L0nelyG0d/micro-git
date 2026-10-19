@@ -23,6 +23,9 @@ func OpenSQLite(path string) (*gorm.DB, error) {
 	if strings.ContainsAny(path, "?#") {
 		return nil, errors.New(`SQLITE_PATH must not contain "?" or "#"`)
 	}
+	if fi, err := os.Stat(path); err == nil && fi.IsDir() {
+		return nil, errors.New("SQLITE_PATH is a directory, it must name a file")
+	}
 	if dir := filepath.Dir(path); dir != "." {
 		if err := os.MkdirAll(dir, 0o750); err != nil {
 			return nil, fmt.Errorf("create the SQLITE_PATH directory: %w", err)
