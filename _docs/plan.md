@@ -303,7 +303,7 @@ In-memory, standard library only; constants and their meaning are at the top of 
 | `PORT` | no | 1 to 65535, default `8080` |
 | `TEST_DATABASE_URL` | for tests | separate database; DB tests are skipped without it |
 
-Until #82 (memory store) and #93 (SQLite) land, `main` refuses `STORE=memory` and `DB_DRIVER=sqlite` with "not available in this build yet" instead of using Postgres.
+`DB_DRIVER=sqlite` opens `SQLITE_PATH` (pure Go, no cgo; the file and its directory are created when missing), migrates it with GORM and serves the same API; data survives a restart. `DATABASE_URL` is ignored then.
 
 Process: `http.Server` with read-header, read, write and idle timeouts, graceful shutdown on SIGINT / SIGTERM, `X-Content-Type-Options: nosniff` on every response and `Cache-Control: no-store` on `/auth/*`.
 

@@ -72,9 +72,11 @@ Run these steps in order.
    | `PORT` | no | Backend listen port, 1 to 65535. Defaults to `8080` |
    | `DB_MAX_CONNS` | no | Maximum size of the database connection pool, 1 to 1000. Defaults to `10`. Keep it below your database's connection limit divided by the number of backend instances |
 
-   Until the memory store (#82) and SQLite (#93) land, the backend refuses
-   `STORE=memory` and `DB_DRIVER=sqlite` at startup ("not available in this
-   build yet"); only Postgres runs.
+   `DB_DRIVER=sqlite` needs no Postgres and no cgo: the backend opens
+   `SQLITE_PATH` with the pure-Go driver, creates the file and its directory
+   when missing, migrates it and keeps the data across restarts
+   (`DB_DRIVER=sqlite SQLITE_PATH=/tmp/mg.db JWT_SECRET=... go run ./backend`).
+   The default `./data/` directory is git-ignored. `DATABASE_URL` is not used.
 
    The pool also closes connections idle for more than 5 minutes
    (`MaxConnIdleTime`) and checks idle ones every 30 seconds

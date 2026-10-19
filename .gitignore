@@ -13,3 +13,9 @@ bin/
 graphify-out/
 resolving the issues.txt
 !frontend/.env.example
+
+# SQLite data (default SQLITE_PATH=./data/mg.db)
+data/
+*.db
+*.db-wal
+*.db-shm

@@ -11,7 +11,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/glebarez/sqlite"
 	"github.com/jackc/pgx/v5"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -21,15 +20,11 @@ import (
 func openSQLiteForTest(t *testing.T) *gorm.DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "mg.db")
-	db, err := gorm.Open(sqlite.Open(path+"?"+sqliteDSNParams), &gorm.Config{Logger: logger.Discard})
+	db, err := OpenSQLite(path)
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}
-	t.Cleanup(func() {
-		if sqlDB, err := db.DB(); err == nil {
-			sqlDB.Close()
-		}
-	})
+	t.Cleanup(func() { CloseGorm(db) })
 	return db
 }
 

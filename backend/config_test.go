@@ -150,7 +150,8 @@ func TestCheckStoreAvailable(t *testing.T) {
 		{"postgres", Config{Store: StoreDB, DBDriver: DriverPostgres}, false},
 		{"memory", Config{Store: StoreMemory, DBDriver: DriverPostgres}, false},
 		{"memory ignores the db driver", Config{Store: StoreMemory, DBDriver: DriverSQLite}, false},
-		{"sqlite", Config{Store: StoreDB, DBDriver: DriverSQLite}, true},
+		{"sqlite", Config{Store: StoreDB, DBDriver: DriverSQLite}, false},
+		{"unknown driver", Config{Store: StoreDB, DBDriver: "mysql"}, true},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -159,7 +160,7 @@ func TestCheckStoreAvailable(t *testing.T) {
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("err = %v, wantErr %v", err, tc.wantErr)
 			}
-			if err != nil && !strings.Contains(err.Error(), "not available in this build yet") {
+			if err != nil && !strings.Contains(err.Error(), "unknown DB_DRIVER") {
 				t.Errorf("err = %v", err)
 			}
 		})
