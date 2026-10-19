@@ -40,6 +40,16 @@ func checkOID(oid string) error {
 	return fmt.Errorf("%w: %q", ErrInvalidOID, oid)
 }
 
+// checkRefOIDs validates the user-supplied oids of a ref write.
+func checkRefOIDs(oldOID, newOID string) error {
+	if oldOID != "" {
+		if err := checkOID(oldOID); err != nil {
+			return err
+		}
+	}
+	return checkOID(newOID)
+}
+
 // errDefaultBranch is returned by DeleteNonDefaultRef when the branch is the
 // repository's default branch.
 var errDefaultBranch = errors.New("default branch")

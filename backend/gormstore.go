@@ -6,19 +6,19 @@ import (
 	"strings"
 	"time"
 
-	"github.com/L0nelyG0d/micro-git/backend/treebuild"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
 // errNotPorted is returned by the gormStore methods that a later issue
-// (#88 to #92) ports. It is never a sentinel the handlers match on.
+// (#89 to #92) ports. It is never a sentinel the handlers match on.
 var errNotPorted = errors.New("not implemented in gormStore yet")
 
 // gormStore is the Store on GORM: one code path for SQLite and Postgres.
 // Methods are ported group by group; until then they return errNotPorted.
 type gormStore struct {
-	db *gorm.DB
+	db   *gorm.DB
+	inTx bool // db is a transaction made by InTx
 }
 
 var _ Store = (*gormStore)(nil)
@@ -207,19 +207,10 @@ func (g *gormStore) RepoExists(ctx context.Context, repoID int64) (bool, error) 
 
 // Not ported yet.
 
-func (g *gormStore) FindRepoRef(ctx context.Context, owner, name, ref string) (ReadHead, error) {
-	return ReadHead{}, errNotPorted
-}
 func (g *gormStore) ListRepos(ctx context.Context, viewerID int64, owner *string, limit, offset int) ([]Repo, error) {
 	return nil, errNotPorted
 }
 
-func (g *gormStore) GetRef(ctx context.Context, repoID int64, name string) (string, error) {
-	return "", errNotPorted
-}
-func (g *gormStore) GetRefCommit(ctx context.Context, repoID int64, name string) (string, []byte, error) {
-	return "", nil, errNotPorted
-}
 func (g *gormStore) ListRefs(ctx context.Context, repoID int64) ([]Ref, error) {
 	return nil, errNotPorted
 }
@@ -232,19 +223,9 @@ func (g *gormStore) DeleteRef(ctx context.Context, repoID int64, name string) er
 func (g *gormStore) DeleteNonDefaultRef(ctx context.Context, repoID int64, name string) error {
 	return errNotPorted
 }
-func (g *gormStore) UpdateRef(ctx context.Context, repoID int64, name, oldOID, newOID string) error {
-	return errNotPorted
-}
-func (g *gormStore) ResolveCommit(ctx context.Context, repoID int64, ref string) (string, error) {
-	return "", errNotPorted
-}
-func (g *gormStore) PutObjectsMoveRef(ctx context.Context, repoID int64, objs []treebuild.Object, name, oldOID, newOID string) error {
-	return errNotPorted
-}
 func (g *gormStore) WalkFirstParents(ctx context.Context, repoID int64, tip string, limit int) ([]CommitRow, error) {
 	return nil, errNotPorted
 }
 func (g *gormStore) CommitReachability(ctx context.Context, repoID int64, a, b string) (Reachability, error) {
 	return Reachability{}, errNotPorted
 }
-func (g *gormStore) InTx(ctx context.Context, fn func(Store) error) error { return errNotPorted }
