@@ -158,10 +158,31 @@ func TestListRepos(t *testing.T) {
 	if rec.Code != 200 || len(got) != 2 || got[0].ID != a2.ID || got[1].ID != a1.ID {
 		t.Errorf("owner filter: %d %s", rec.Code, rec.Body)
 	}
-	all := decodeRepos(t, do(s, http.MethodGet, "/repos", "", nil).Body)
+	// The shared DB may hold any number of other repos (newer than ours), so
+	// page through the whole list and compare positions of our own three.
 	pos := map[int64]int{}
-	for i, r := range all {
-		pos[r.ID] = i
+	n := 0
+	for page := 1; ; page++ {
+		rec := do(s, http.MethodGet, "/repos?page="+strconv.Itoa(page), "", nil)
+		var out struct {
+			Repos   []Repo `json:"repos"`
+			HasMore bool   `json:"has_more"`
+		}
+		if rec.Code != 200 || json.Unmarshal(rec.Body.Bytes(), &out) != nil {
+			t.Fatalf("list page %d: %d %s", page, rec.Code, rec.Body)
+		}
+		for _, r := range out.Repos {
+			pos[r.ID] = n
+			n++
+		}
+		if !out.HasMore {
+			break
+		}
+	}
+	for _, r := range []Repo{a1, b1, a2} {
+		if _, ok := pos[r.ID]; !ok {
+			t.Fatalf("repo %d missing from the full list", r.ID)
+		}
 	}
 	if !(pos[a2.ID] < pos[b1.ID] && pos[b1.ID] < pos[a1.ID]) {
 		t.Errorf("not newest first: %v", pos)
