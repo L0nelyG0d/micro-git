@@ -1,4 +1,5 @@
-import { MemoryRouter } from "@/test-utils"
+import { MemoryRouter, renderWithMock } from "@/test-utils"
+import { MockApiService } from "@/services/MockApiService"
 import { act, render, screen, waitFor } from "@testing-library/react"
 import { toast } from "sonner"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
@@ -52,19 +53,37 @@ async function mount() {
 }
 const focus = () => act(async () => { window.dispatchEvent(new Event("focus")) })
 
+/** alice (logged in) owns a private and a public repo; bob owns one private repo. */
+async function twoUsers() {
+  const mock = new MockApiService()
+  await mock.register("alice", "password1")
+  await mock.register("bob", "password1")
+  await mock.login("bob", "password1")
+  await mock.createRepo({ name: "bob-private", private: true })
+  await mock.login("alice", "password1")
+  await mock.createRepo({ name: "alice-private", private: true })
+  await mock.createRepo({ name: "public-one" })
+  return mock
+}
+// Another tab changing the session is mock.logout() / mock.login() on the same instance.
+async function mountMock() {
+  const mock = await twoUsers()
+  renderWithMock("/", mock)
+  await screen.findByText(/alice-private/)
+  return mock
+}
+
 it("focus after another tab logged out clears the cached list and shows the anonymous one", async () => {
-  await mount()
-  me = { status: 401, body: { error: "authentication required" } }
-  list = page("public-one")
+  const mock = await mountMock()
+  await mock.logout()
   await focus()
   expect(await screen.findByText(/public-one/)).toBeInTheDocument()
   expect(screen.queryByText(/alice-private/)).not.toBeInTheDocument()
 })
 
 it("visibilitychange to visible after another tab logged in as someone else refetches the list", async () => {
-  await mount()
-  me = user(2, "bob")
-  list = page("bob-private")
+  const mock = await mountMock()
+  await mock.login("bob", "password1")
   await act(async () => { document.dispatchEvent(new Event("visibilitychange")) })
   expect(await screen.findByText(/bob-private/)).toBeInTheDocument()
   expect(screen.queryByText(/alice-private/)).not.toBeInTheDocument()
@@ -98,8 +117,8 @@ it("a network error while revalidating keeps the current user", async () => {
 })
 
 it("an expired session found on focus shows the expiry toast once", async () => {
-  await mount()
-  me = { status: 401, body: { error: "authentication required" } }
+  const mock = await mountMock()
+  await mock.logout()
   await focus()
   await waitFor(() => expect(toastSpy).toHaveBeenCalledWith("Your session has expired. Log in again."))
   expect(toastSpy).toHaveBeenCalledTimes(1)

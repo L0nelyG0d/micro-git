@@ -46,6 +46,13 @@ export function MemoryRouter({
 
 afterEach(() => setServiceOverride(null))
 
+/** Makes the app's `apiService` a (new) MockApiService for the current test, without rendering anything. */
+export function installMock(mock = new MockApiService()) {
+  cacheClear()
+  setServiceOverride(mock)
+  return mock
+}
+
 /**
  * Renders the whole app (App layout + routes) at `path` on top of a fresh
  * MockApiService, with the service swapped through the `@/services` mock in
@@ -59,8 +66,7 @@ export function renderWithMock(
   extra?: ReactNode,
   nav: { history?: string[]; routerRef?: (r: ReturnType<typeof createMemoryRouter>) => void } = {},
 ) {
-  cacheClear()
-  setServiceOverride(mock)
+  installMock(mock)
   const view = render(
     <MemoryRouter
       initialEntries={[...(nav.history ?? []), path]}

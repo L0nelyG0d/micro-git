@@ -2,6 +2,8 @@ import { act, render, screen } from "@testing-library/react"
 import { toast } from "sonner"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { AuthProvider, useAuth } from "./AuthContext"
+import { installMock } from "@/test-utils"
+import { MockApiService } from "@/services/MockApiService"
 
 let auth: ReturnType<typeof useAuth>
 function Probe() {
@@ -9,15 +11,12 @@ function Probe() {
   return <div>{auth.loading ? "loading" : auth.user ? `user ${auth.user.username}` : "logged out"}</div>
 }
 
-function mockMe(loggedIn: boolean) {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () =>
-      loggedIn
-        ? ({ status: 200, ok: true, json: async () => ({ id: 1, username: "alice" }) } as Response)
-        : ({ status: 401, ok: false, json: async () => ({ error: "authentication required" }) } as Response),
-    ),
-  )
+/** The app's service becomes a mock where alice exists, logged in or not. */
+async function mockMe(loggedIn: boolean) {
+  const mock = new MockApiService()
+  await mock.register("alice", "password1")
+  if (loggedIn) await mock.login("alice", "password1")
+  installMock(mock)
 }
 
 let errorSpy: ReturnType<typeof vi.spyOn>
@@ -30,7 +29,7 @@ afterEach(() => {
 })
 
 it("expireSession logs the user out with one toast, even when called twice in a row", async () => {
-  mockMe(true)
+  await mockMe(true)
   render(<AuthProvider><Probe /></AuthProvider>)
   await screen.findByText("user alice")
   act(() => {
@@ -43,7 +42,7 @@ it("expireSession logs the user out with one toast, even when called twice in a 
 })
 
 it("expireSession shows no toast when nobody is logged in", async () => {
-  mockMe(false)
+  await mockMe(false)
   render(<AuthProvider><Probe /></AuthProvider>)
   await screen.findByText("logged out")
   act(() => auth.expireSession())

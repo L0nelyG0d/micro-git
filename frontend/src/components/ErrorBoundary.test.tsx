@@ -1,4 +1,4 @@
-import { MemoryRouter } from "@/test-utils"
+import { installMock, MemoryRouter } from "@/test-utils"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { Link } from "react-router-dom"
@@ -26,14 +26,7 @@ beforeEach(() => {
   cacheClear()
   state.fail = true
   vi.spyOn(console, "error").mockImplementation(() => {})
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string) => {
-      const ok = (body: unknown, status = 200) =>
-        ({ status, ok: status < 300, json: async () => body, headers: new Headers() }) as Response
-      return url === "/api/auth/me" ? ok({ error: "authentication required" }, 401) : ok({})
-    }),
-  )
+  installMock() // nobody logged in: /auth/me answers 401
 })
 afterEach(() => {
   vi.restoreAllMocks()
