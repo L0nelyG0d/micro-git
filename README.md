@@ -15,13 +15,15 @@ The backend has three interchangeable stores and the frontend can also run
 without any backend. Pick one. Every command is run from the repository root;
 `make setup` (go mod download + npm ci) comes first on a fresh checkout. The
 backend listens on `8080` and Vite on `5173`; if one is busy, `make` says so:
-add `PORT=<other>` (backend) or `VITE_PORT=<other>` (frontend).
+add `PORT=<other>` (backend) or `VITE_PORT=<other>` (frontend). Started
+directly (`npm run dev`), Vite has no `strictPort`, so it moves to `5174` (or the
+next free port) when `5173` is busy; use the URL Vite prints.
 
 **Memory** (no database, data is lost on exit; good for a quick look):
 
 ```sh
 make run-memory      # backend on :8080 with STORE=memory
-make frontend        # second terminal: http://localhost:5173
+make frontend        # second terminal: http://localhost:5173 (or the port Vite prints)
 ```
 
 **SQLite** (no Postgres, data kept in the git-ignored `data/mg.db`):
@@ -42,7 +44,7 @@ into the git-ignored `.env` if it has none; the value is never printed.
 ```sh
 make check-env       # DATABASE_URL and JWT_SECRET present?
 make schema          # apply backend/db/schema.sql (retries for Neon cold starts)
-make dev             # backend + frontend; open http://localhost:5173; Ctrl-C stops both
+make dev             # backend + frontend; open http://localhost:5173 (or the port Vite prints); Ctrl-C stops both
 ```
 
 `make run-pg` runs just the backend on Postgres (same as `make backend`).
@@ -51,7 +53,7 @@ make dev             # backend + frontend; open http://localhost:5173; Ctrl-C st
 data is lost on reload):
 
 ```sh
-cd frontend && npm ci && VITE_USE_MOCK=true npm run dev   # http://localhost:5173
+cd frontend && npm ci && VITE_USE_MOCK=true npm run dev   # http://localhost:5173 (or the port Vite prints)
 ```
 
 `.env` is never sourced by `make` and `PORT` in `.env` is not used by `make`
@@ -157,7 +159,7 @@ Run these steps in order.
 
    Check it: `curl http://localhost:8080/health` prints `OK`.
 
-6. Run the frontend (terminal 2) and open <http://localhost:5173>.
+6. Run the frontend (terminal 2) and open <http://localhost:5173> (or the port Vite prints).
 
    ```sh
    cd frontend && npm run dev
@@ -174,7 +176,7 @@ Run these steps in order.
    `frontend/.env.local` and edit `VITE_USE_MOCK`. The default build
    (`npm run build` without the flag) contains no mock code.
 
-The Vite dev server on port 5173 proxies `/api/*` to `http://localhost:8080`,
+The Vite dev server on port 5173 (5174 if that is busy) proxies `/api/*` to `http://localhost:8080`,
 stripping the `/api` prefix (`/api/repos` reaches the backend as `/repos`). If
 the backend listens elsewhere (a different `PORT`), start the frontend with the
 `API_PROXY_TARGET` environment variable, for example
@@ -289,7 +291,9 @@ frontend/                React + TypeScript + Vite + Tailwind + shadcn/ui
                            VisibilityDialog, ReadmeCard, LatestCommitBar, DiffView,
                            Breadcrumbs, OidLink, StateViews, ErrorBoundary, ui/
   src/auth/                AuthContext (current user)
-  src/lib/                 api client, fetch hook, formatting, git helpers
+  src/services/            api client (ApiService, HttpApiService, http.ts), mock
+                           service (MockApiService, mockGit), index.ts picks one
+  src/lib/                 fetch hook, formatting, git helpers, markdown, pagination
 ```
 
 ### API contract
@@ -310,7 +314,7 @@ npx @redocly/cli lint openapi.yaml
 ## Demo script
 
 Start the backend and frontend (Setup steps 5 and 6) and open
-<http://localhost:5173>.
+<http://localhost:5173> (or the port Vite prints).
 
 1. **Register.** Go to Register, enter a username (3 to 32 characters of
    `a-z`, `0-9`, `-`) and a password of 8 to 72 bytes, submit.
