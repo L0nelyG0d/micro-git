@@ -76,14 +76,7 @@ func testServer(t *testing.T) *Server {
 // "run" in a reason: the failure was seen by running the test with its entry
 // removed; "read": found by reading the test. An issue that ports methods
 // deletes the entries it unblocks.
-var sqlitePending = map[string]string{
-	"TestCommitReachabilityParents": "#90 (ancestry; read)",
-	"TestCompare":                   "#90 (ancestry; read)",
-	"TestMergeEqualTipsUpToDate":    "#90 (ancestry; read)",
-	"TestMergeErrors":               "#90 (ancestry; read)",
-	"TestMergeFastForward":          "#90 (ancestry; read)",
-	"TestMergeTipMoved":             "#90 (ancestry; read)",
-}
+var sqlitePending = map[string]string{}
 
 // newSQLiteServer builds a Server on a gormStore over a temp SQLite file, or
 // skips the test when it is in sqlitePending. testServer is the caller.

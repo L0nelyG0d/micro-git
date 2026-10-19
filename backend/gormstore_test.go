@@ -255,18 +255,6 @@ func TestGormStoreMapErrPassesOtherErrors(t *testing.T) {
 	}
 }
 
-func TestGormStoreUnportedMethods(t *testing.T) {
-	db := openSQLiteForTest(t)
-	st := newGormStore(db)
-	ctx := context.Background()
-	if _, err := st.CommitReachability(ctx, 1, "", ""); !errors.Is(err, errNotPorted) {
-		t.Errorf("CommitReachability err = %v, want errNotPorted", err)
-	}
-	if got := errNotPorted.Error(); got != "not implemented in gormStore yet" {
-		t.Errorf("message = %q", got)
-	}
-}
-
 // The sqlite driver reports constraint failures as text; pin the wording we
 // match so a driver upgrade that changes it fails here.
 func TestMapGormErrDriverMessages(t *testing.T) {
