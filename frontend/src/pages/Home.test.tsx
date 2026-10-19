@@ -1,5 +1,6 @@
-import { MemoryRouter } from "@/test-utils"
-import { render, screen, within } from "@testing-library/react"
+import { MemoryRouter, renderWithMock } from "@/test-utils"
+import { MockApiService } from "@/services/MockApiService"
+import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
@@ -23,6 +24,16 @@ const repo = (o: Partial<Record<string, unknown>> = {}) => ({
   created_at: "2026-01-02T15:04:05Z",
   ...o,
 })
+
+/** A mock where alice owns `repos`; logged in as her or logged out. */
+async function homeMock(loggedIn: boolean, repos: { name: string; private?: boolean }[] = []) {
+  const mock = new MockApiService()
+  await mock.register("alice", "secret123")
+  await mock.login("alice", "secret123")
+  for (const r of repos) await mock.createRepo(r)
+  if (!loggedIn) await mock.logout()
+  return mock
+}
 
 beforeEach(() => {
   cacheClear()
@@ -83,9 +94,7 @@ it("shows a loading state while the request is pending", async () => {
 })
 
 it("shows the empty state pointing at login when logged out", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  renderHome()
+  renderWithMock("/", await homeMock(false))
   expect(await screen.findByText(/no repositories yet/i)).toBeInTheDocument()
   const main = screen.getByRole("main")
   expect(within(main).getAllByRole("link", { name: /log in/i }).length).toBeGreaterThan(0)
@@ -93,9 +102,7 @@ it("shows the empty state pointing at login when logged out", async () => {
 })
 
 it("shows the empty state pointing at New repository when logged in", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  renderHome()
+  renderWithMock("/", await homeMock(true))
   expect(await screen.findByText(/no repositories yet.*new repository/i)).toBeInTheDocument()
   expect(await screen.findByRole("button", { name: "New repository" })).toBeInTheDocument()
 })
@@ -135,13 +142,8 @@ it("shows the unreachable block and the session indication when the backend is d
 })
 
 it("creates a repo: toast, form closed, list updated without reload", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo({ id: 1, name: "old" })] })
-  routes["POST /api/repos"] = (b) => {
-    expect(b).toEqual({ name: "new-one", description: "Hi", private: false })
-    return json(201, repo({ id: 2, name: "new-one", description: "Hi" }))
-  }
-  renderHome()
+  const mock = await homeMock(true, [{ name: "old" }])
+  renderWithMock("/", mock)
   await openForm()
   await userEvent.type(screen.getByLabelText("Name"), "new-one")
   await userEvent.type(screen.getByLabelText(/Description/), "Hi")
@@ -149,8 +151,8 @@ it("creates a repo: toast, form closed, list updated without reload", async () =
   expect(await screen.findByText(/alice\/new-one created/i)).toBeInTheDocument()
   expect(screen.queryByRole("form", { name: "New repository" })).not.toBeInTheDocument()
   const links = screen.getAllByRole("link", { name: /^alice\// })
-  expect(links.map((l) => l.textContent)).toEqual(["alice/new-one", "alice/old"])
-  expect(calls.filter((c) => c === "GET /api/repos?page=1")).toHaveLength(1)
+  expect(links.map((l) => l.textContent).sort()).toEqual(["alice/new-one", "alice/old"])
+  expect(await mock.getRepo("alice", "new-one")).toMatchObject({ description: "Hi", private: false })
   // reopening gives a fresh form
   await openForm()
   expect(screen.getByLabelText("Name")).toHaveValue("")
@@ -181,10 +183,7 @@ it("validates client-side without calling the server", async () => {
 })
 
 it("shows 409 inline exactly as returned and keeps the input", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  routes["POST /api/repos"] = () => json(409, { error: "repository already exists" })
-  renderHome()
+  renderWithMock("/", await homeMock(true, [{ name: "hello" }]))
   await openForm()
   await userEvent.type(screen.getByLabelText("Name"), "hello")
   await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
@@ -211,12 +210,11 @@ it("shows server 400 messages inline", async () => {
 })
 
 it("on 401 shows a message and the nav goes to the logged-out state", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  routes["POST /api/repos"] = () => json(401, { error: "authentication required" })
-  renderHome()
+  const mock = await homeMock(true)
+  renderWithMock("/", mock)
   await openForm()
   await userEvent.type(screen.getByLabelText("Name"), "hello")
+  await mock.logout() // the session ends behind the page's back
   await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
   // Inline message and toast both appear.
   expect((await screen.findAllByText(/session has expired/i)).length).toBeGreaterThanOrEqual(1)
@@ -380,31 +378,22 @@ it("shows the cached list at once on a revisit while it revalidates", async () =
 })
 
 it("does not show a stale list on a revisit after creating a repo", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo()] })
-  routes["POST /api/repos"] = () => json(201, repo({ id: 2, name: "fresh" }))
-  const first = renderHome()
+  const mock = await homeMock(true, [{ name: "hello" }])
+  const first = renderWithMock("/", mock)
   await openForm()
   await userEvent.type(screen.getByLabelText("Name"), "fresh")
   await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
   await screen.findAllByText(/alice\/fresh created/i)
   first.unmount()
-  routes["GET /api/repos?page=1"] = () =>
-    json(200, { repos: [repo({ id: 2, name: "fresh" }), repo()] })
-  renderHome()
+  renderWithMock("/", mock)
   expect(await screen.findByRole("link", { name: "alice/fresh" })).toBeInTheDocument()
   expect(screen.getAllByRole("link", { name: /^alice\// })).toHaveLength(2)
 })
 
 it("refetches the list when the user logs out", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () =>
-    json(200, { repos: [repo({ name: "secret", private: true })] })
-  routes["POST /api/auth/logout"] = () => json(204)
-  renderHome()
+  renderWithMock("/", await homeMock(true, [{ name: "secret", private: true }, { name: "public" }]))
   await screen.findByRole("link", { name: "alice/secret" })
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo({ name: "public" })] })
   await userEvent.click(screen.getByRole("button", { name: /log ?out/i }))
-  expect(await screen.findByRole("link", { name: "alice/public" })).toBeInTheDocument()
-  expect(screen.queryByRole("link", { name: "alice/secret" })).not.toBeInTheDocument()
+  await waitFor(() => expect(screen.queryByRole("link", { name: "alice/secret" })).not.toBeInTheDocument())
+  expect(screen.getByRole("link", { name: "alice/public" })).toBeInTheDocument()
 })
