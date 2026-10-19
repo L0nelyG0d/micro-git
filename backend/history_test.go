@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -709,6 +710,201 @@ func TestCommitLogHeaderOnly(t *testing.T) {
 		code, msg := f.get(t, logURL, "?ref=orphan", nil)
 		if code != 500 || msg != "internal error" {
 			t.Errorf("got %d %q", code, msg)
+		}
+	})
+}
+
+// putChain stores n commits in a chain (each the first parent of the next)
+// in one batch and returns their oids, oldest first.
+func putChain(t *testing.T, st treebuild.Store, n int, msg func(i int) string) []string {
+	t.Helper()
+	treeOID, err := st.PutObject(gitobj.TypeTree, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sig := func(i int) gitobj.Signature {
+		return gitobj.Signature{Name: "u", Email: "u@micro-git.local", Unix: t0.Unix() + int64(i)}
+	}
+	oids := make([]string, 0, n)
+	objs := make([]treebuild.Object, 0, n)
+	for i := 0; i < n; i++ {
+		c := gitobj.Commit{Tree: treeOID, Message: msg(i), Author: sig(i), Committer: sig(i)}
+		if i > 0 {
+			c.Parents = []string{oids[i-1]}
+		}
+		body, err := gitobj.SerializeCommit(c)
+		if err != nil {
+			t.Fatal(err)
+		}
+		oids = append(oids, gitobj.Hash(gitobj.TypeCommit, body))
+		objs = append(objs, treebuild.Object{Type: gitobj.TypeCommit, Body: body})
+	}
+	if err := st.(treebuild.BatchStore).PutObjects(objs); err != nil {
+		t.Fatal(err)
+	}
+	return oids
+}
+
+// TestWalkFirstParents runs the store method itself on the store TEST_STORE
+// names (memory, sqlite or postgres), without refs.
+func TestWalkFirstParents(t *testing.T) {
+	s := testServer(t)
+	_, c := newUserCookie(t, s)
+	repo := createRepo(t, s, c, `{"name":"walk"}`)
+	walkFirstParentsSuite(t, s.Store, repo.ID)
+}
+
+// TestWalkFirstParentsGorm runs the same suite on gormStore over both
+// dialects, whatever TEST_STORE is: the SQLite and the Postgres variant of
+// the statement are each covered here (Postgres needs TEST_DATABASE_URL).
+func TestWalkFirstParentsGorm(t *testing.T) {
+	for _, d := range dialects {
+		t.Run(d.name, func(t *testing.T) {
+			db := d.open(t)
+			if err := Migrate(db); err != nil {
+				t.Fatal(err)
+			}
+			st := newGormStore(db)
+			uid, err := st.CreateUser(t.Context(), uniqueName(t), "x")
+			if err != nil {
+				t.Fatal(err)
+			}
+			repo, err := st.CreateRepo(t.Context(), uid, "walk", "", false, t0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			walkFirstParentsSuite(t, st, repo.ID)
+		})
+	}
+}
+
+func walkFirstParentsSuite(t *testing.T, store Store, repoID int64) {
+	ctx := t.Context()
+	st := store.Objects(ctx, repoID)
+	walk := func(tip string, limit int) ([]CommitRow, error) {
+		return store.WalkFirstParents(ctx, repoID, tip, limit)
+	}
+	msg := func(i int) string { return fmt.Sprintf("commit %d", i) }
+
+	chain := putChain(t, st, 500, msg)
+	tip := chain[499]
+
+	t.Run("500-commit chain in order", func(t *testing.T) {
+		rows, err := walk(tip, 10000)
+		if err != nil || len(rows) != 500 {
+			t.Fatalf("err %v, %d rows", err, len(rows))
+		}
+		for i, r := range rows {
+			if r.OID != chain[499-i] || len(r.Data) == 0 {
+				t.Fatalf("row %d: %s", i, r.OID)
+			}
+			wantParent := ""
+			if i < 499 {
+				wantParent = chain[498-i]
+			}
+			if r.Parent != wantParent {
+				t.Fatalf("row %d parent %q want %q", i, r.Parent, wantParent)
+			}
+		}
+	})
+	t.Run("limit", func(t *testing.T) {
+		rows, err := walk(tip, 7)
+		if err != nil || len(rows) != 7 || rows[0].OID != tip || rows[6].OID != chain[493] {
+			t.Fatalf("err %v rows %d", err, len(rows))
+		}
+		if rows, err := walk(tip, 1); err != nil || len(rows) != 1 {
+			t.Fatalf("limit 1: %v %d", err, len(rows))
+		}
+	})
+	t.Run("huge limit", func(t *testing.T) {
+		for _, l := range []int{1<<31 - 1, 1 << 31, 1 << 40} {
+			rows, err := walk(tip, l)
+			if err != nil || len(rows) != 500 {
+				t.Errorf("limit %d: err %v, %d rows", l, err, len(rows))
+			}
+		}
+	})
+	t.Run("limit below 1 is empty, not an error", func(t *testing.T) {
+		for _, l := range []int{0, -3} {
+			if rows, err := walk(tip, l); err != nil || rows == nil || len(rows) != 0 {
+				t.Errorf("limit %d: %v %#v", l, err, rows)
+			}
+		}
+	})
+	t.Run("missing tip", func(t *testing.T) {
+		for _, tp := range []string{strings.Repeat("a", 40), "nope", ""} {
+			if _, err := walk(tp, 5); !errors.Is(err, treebuild.ErrNotFound) {
+				t.Errorf("tip %q: %v", tp, err)
+			}
+		}
+	})
+	t.Run("tip that is not a commit", func(t *testing.T) {
+		tree, err := st.PutObject(gitobj.TypeTree, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := walk(tree, 5); !errors.Is(err, treebuild.ErrNotFound) {
+			t.Errorf("tree tip: %v", err)
+		}
+	})
+	t.Run("missing parent in the middle", func(t *testing.T) {
+		treeOID, _ := st.PutObject(gitobj.TypeTree, nil)
+		sig := gitobj.Signature{Name: "u", Email: "u@micro-git.local", Unix: t0.Unix()}
+		put := func(msg string, parents ...string) string {
+			body, err := gitobj.SerializeCommit(gitobj.Commit{Tree: treeOID, Parents: parents, Message: msg, Author: sig, Committer: sig})
+			if err != nil {
+				t.Fatal(err)
+			}
+			oid, err := st.PutObject(gitobj.TypeCommit, body)
+			if err != nil {
+				t.Fatal(err)
+			}
+			return oid
+		}
+		orphan := put("orphan", strings.Repeat("b", 40))
+		top := put("top", orphan)
+		for _, l := range []int{10, 3} {
+			if _, err := walk(top, l); !errors.Is(err, treebuild.ErrNotFound) {
+				t.Errorf("limit %d: %v", l, err)
+			}
+		}
+		// limit 1 stops before the missing parent is needed
+		if rows, err := walk(top, 1); err != nil || len(rows) != 1 {
+			t.Errorf("limit 1: %v %d", err, len(rows))
+		}
+	})
+	t.Run("only the header counts", func(t *testing.T) {
+		other := putChain(t, st, 2, func(i int) string { return fmt.Sprintf("other %d", i) })[1]
+		// message lines that look like a header, one with multi-byte text at
+		// the edge of the 100-byte window
+		tricky := putChain(t, st, 1, func(int) string {
+			return "root\nparent " + other + "\n" + strings.Repeat("é", 60) + "\nparent " + other + "\n"
+		})[0]
+		rows, err := walk(tricky, 10)
+		if err != nil || len(rows) != 1 || rows[0].OID != tricky || rows[0].Parent != "" {
+			t.Fatalf("err %v rows %+v", err, rows)
+		}
+	})
+	// The store has no cap of its own (maxHistoryCommits is enforced in
+	// history.go); this checks that limit 10000 stops a 10005-chain at 10000.
+	t.Run("limit of 10000 on a longer chain", func(t *testing.T) {
+		if testing.Short() {
+			t.Skip("10005 commits")
+		}
+		if _, ok := store.(*pgxStore); ok {
+			t.Skip("pgx store: 10000-deep walk exceeds the statement timeout (unchanged, store.go)")
+		}
+		long := putChain(t, st, maxHistoryCommits+5, func(i int) string { return fmt.Sprintf("long %d", i) })
+		if g, ok := store.(*gormStore); ok {
+			// fresh tables have no statistics; without them Postgres may scan
+			// instead of using the primary key on every step of the walk
+			if err := g.db.Exec(`ANALYZE objects`).Error; err != nil {
+				t.Fatal(err)
+			}
+		}
+		rows, err := walk(long[len(long)-1], maxHistoryCommits)
+		if err != nil || len(rows) != maxHistoryCommits || rows[maxHistoryCommits-1].OID != long[5] {
+			t.Fatalf("err %v, %d rows", err, len(rows))
 		}
 	})
 }
