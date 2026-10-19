@@ -14,8 +14,10 @@ import (
 
 // OpenSQLite opens (creating it and its directory when missing) the SQLite
 // file at path with the pure-Go driver and sqliteDSNParams, and migrates it.
-// The caller closes the handle with CloseGorm. Pragmas and the writer pool are
-// tuned in #95; this only applies the connection parameters the store needs.
+// The caller closes the handle with CloseGorm. The pragmas in sqliteDSNParams
+// are set on every pooled connection. The pool is not capped: SQLite allows
+// one writer at a time, and the others wait on busy_timeout; a one-connection
+// cap would deadlock a write on the outer store while a transaction is open.
 func OpenSQLite(path string) (*gorm.DB, error) {
 	if path == "" {
 		return nil, errors.New("SQLITE_PATH is empty")
