@@ -2,7 +2,7 @@ import { act, render, screen } from "@testing-library/react"
 import { toast } from "sonner"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { AuthProvider, useAuth } from "./AuthContext"
-import { installMock } from "@/test-utils"
+import { installMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
 
 let auth: ReturnType<typeof useAuth>

@@ -1,4 +1,5 @@
-import { installMock, MemoryRouter } from "@/test-utils"
+import { MemoryRouter } from "@/test-utils"
+import { installMock } from "@/test-mock"
 import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { Link } from "react-router-dom"

@@ -5,7 +5,7 @@ import { screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { toast } from "sonner"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import { renderWithMock } from "@/test-utils"
+import { renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
 
 const PW = "password1"

@@ -26,7 +26,7 @@ if (!Element.prototype.scrollIntoView) Element.prototype.scrollIntoView = () => 
 
 // The one place the service is swapped (#102). `@/services` exports a module
 // singleton, so its `apiService` is replaced by a forwarding proxy: it uses the
-// MockApiService set by renderWithMock() (test-utils.tsx) and otherwise the real
+// MockApiService set by renderWithMock() (test-mock.tsx) and otherwise the real
 // HttpApiService, which keeps the fetch-stub tests unchanged.
 vi.mock("@/services", async (importOriginal) => {
   const real = await importOriginal<typeof import("@/services")>()

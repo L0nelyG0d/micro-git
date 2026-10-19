@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { VisibilityDialog } from "@/components/VisibilityDialog"
 import { cacheClear } from "@/lib/fetchCache"
-import { installMock } from "@/test-utils"
+import { installMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
 
 type Res = { status: number; body?: unknown }

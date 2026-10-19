@@ -1,12 +1,6 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
 import { pageRoutes } from "@/routes"
-import App from "@/App"
-import { cacheClear } from "@/lib/fetchCache"
-import { MockApiService } from "@/services/MockApiService"
-import { setServiceOverride } from "@/test-service"
-import { render } from "@testing-library/react"
-import { afterEach } from "vitest"
 import { createMemoryRouter, RouterProvider } from "react-router-dom"
 /**
  * Resolves on the next macrotask. Fetch mocks await it before answering so a
@@ -42,40 +36,4 @@ export function MemoryRouter({
     return r
   })
   return <RouterProvider router={router} />
-}
-
-afterEach(() => setServiceOverride(null))
-
-/** Makes the app's `apiService` a (new) MockApiService for the current test, without rendering anything. */
-export function installMock(mock = new MockApiService()) {
-  cacheClear()
-  setServiceOverride(mock)
-  return mock
-}
-
-/**
- * Renders the whole app (App layout + routes) at `path` on top of a fresh
- * MockApiService, with the service swapped through the `@/services` mock in
- * test-setup.ts. Returns the mock so a test can seed data or call its methods
- * (e.g. logout() to expire the session) on the same instance the screens use.
- * `nav.history` are entries before `path` (for Back) and `nav.routerRef` receives the router. `extra` renders next to the app inside the router. The mock is dropped after each test.
- */
-export function renderWithMock(
-  path = "/",
-  mock = new MockApiService(),
-  extra?: ReactNode,
-  nav: { history?: string[]; routerRef?: (r: ReturnType<typeof createMemoryRouter>) => void } = {},
-) {
-  installMock(mock)
-  const view = render(
-    <MemoryRouter
-      initialEntries={[...(nav.history ?? []), path]}
-      initialIndex={nav.history?.length ?? 0}
-      routerRef={nav.routerRef}
-    >
-      <App />
-      {extra}
-    </MemoryRouter>,
-  )
-  return { mock, ...view }
 }

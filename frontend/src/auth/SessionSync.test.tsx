@@ -1,4 +1,5 @@
-import { MemoryRouter, renderWithMock } from "@/test-utils"
+import { MemoryRouter } from "@/test-utils"
+import { renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
 import { act, render, screen, waitFor } from "@testing-library/react"
 import { toast } from "sonner"
