@@ -1,4 +1,5 @@
-import { MemoryRouter } from "@/test-utils"
+import { MemoryRouter, renderWithMock } from "@/test-utils"
+import { MockApiService } from "@/services/MockApiService"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useLocation } from "react-router-dom"
@@ -45,6 +46,15 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
+/** A mock where alice owns the empty repository "hello" and is logged in. */
+async function seeded() {
+  const mock = new MockApiService()
+  await mock.register("alice", "password1")
+  await mock.login("alice", "password1")
+  await mock.createRepo({ name: "hello" })
+  return mock
+}
+
 function Loc() {
   return <div data-testid="loc">{useLocation().pathname}</div>
 }
@@ -63,9 +73,8 @@ async function openDialog() {
 }
 
 it("rename: prefilled field, success navigates to the new name with a toast", async () => {
-  setup()
-  routes["PATCH /api/repos/alice/hello"] = () => json(200, repo("renamed"))
-  renderAt("/alice/hello/settings")
+  const mock = await seeded()
+  renderWithMock("/alice/hello/settings", mock, <Loc />)
   const dlg = await openDialog()
   const input = within(dlg).getByLabelText("Repository name")
   expect(input).toHaveValue("hello")
@@ -73,15 +82,15 @@ it("rename: prefilled field, success navigates to the new name with a toast", as
   await userEvent.type(input, "renamed")
   await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
   await vi.waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/alice/renamed"))
-  expect(calls).toContain('PATCH /api/repos/alice/hello {"name":"renamed"}')
+  expect((await mock.getRepo("alice", "renamed")).name).toBe("renamed")
   expect(await screen.findByText(/renamed to alice\/renamed/i)).toBeInTheDocument()
   expect(await screen.findByRole("heading", { name: "alice/renamed" })).toBeInTheDocument()
 })
 
-it("rename: 409 shows the duplicate message inline and stays", async () => {
-  setup()
-  routes["PATCH /api/repos/alice/hello"] = () => json(409, { error: "repository already exists" })
-  renderAt("/alice/hello/settings")
+it("rename: a taken name shows the duplicate message inline and stays", async () => {
+  const mock = await seeded()
+  await mock.createRepo({ name: "hello2" })
+  renderWithMock("/alice/hello/settings", mock, <Loc />)
   const dlg = await openDialog()
   await userEvent.type(within(dlg).getByLabelText("Repository name"), "2")
   await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
@@ -111,16 +120,19 @@ it("rename: 400 shows the name rule; invalid names are rejected before any reque
 })
 
 it.each([["bob"], [null]])("rename: button hidden for non-owner (%s)", async (u) => {
-  setup(u)
-  renderAt("/alice/hello/settings")
+  const mock = await seeded()
+  await mock.register("bob", "password1")
+  if (u) await mock.login(u, "password1")
+  else await mock.logout()
+  renderWithMock("/alice/hello/settings", mock)
   await screen.findByRole("heading", { name: "alice/hello" })
   expect(screen.queryByRole("button", { name: "Rename" })).not.toBeInTheDocument()
 })
 
 it("old URL after a rename shows the repository not found state", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello"] = () => json(404, { error: "repository not found" })
-  renderAt("/alice/hello/settings")
+  const mock = await seeded()
+  await mock.updateRepo("alice", "hello", { name: "renamed" })
+  renderWithMock("/alice/hello/settings", mock)
   expect(await screen.findByText("Repository not found")).toBeInTheDocument()
 })
 
@@ -134,14 +146,13 @@ function expectLoggedOut() {
 }
 
 it("rename: 401 expires the session with a toast and hides owner actions", async () => {
-  setup()
-  routes["PATCH /api/repos/alice/hello"] = () => json(401, { error: "authentication required" })
-  renderAt("/alice/hello/settings")
+  const mock = await seeded()
+  renderWithMock("/alice/hello/settings", mock, <Loc />)
   const dlg = await openDialog()
+  await mock.logout() // the session ends behind the page's back
   await userEvent.type(within(dlg).getByLabelText("Repository name"), "2")
   await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
   await vi.waitFor(() => expectToast())
-  expect(calls.some((c) => c.startsWith("PATCH /api/repos/alice/hello"))).toBe(true)
   expectLoggedOut()
   expect(screen.queryByRole("button", { name: "Rename" })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "Delete repository" })).not.toBeInTheDocument()

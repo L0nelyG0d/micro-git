@@ -53,7 +53,6 @@ it("encodes the owner in the pagination links", async () => {
 })
 
 // --- #56: states, owner-only action, badges ---
-const me = (username: string) => () => ({ status: 200, body: { id: 1, username } })
 const loggedOut = () => ({ status: 401, body: { error: "authentication required" } })
 const aliceRepos = (repos: unknown[]) => () => ({ status: 200, body: { repos, page: 1, per_page: 50, has_more: false } })
 const aRepo = (o: Record<string, unknown> = {}) => ({
