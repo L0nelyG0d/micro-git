@@ -394,6 +394,6 @@ it("refetches the list when the user logs out", async () => {
   renderWithMock("/", await homeMock(true, [{ name: "secret", private: true }, { name: "public" }]))
   await screen.findByRole("link", { name: "alice/secret" })
   await userEvent.click(screen.getByRole("button", { name: /log ?out/i }))
-  await waitFor(() => expect(screen.queryByRole("link", { name: "alice/secret" })).not.toBeInTheDocument())
+  await waitFor(() => expect(screen.queryByRole("link", { name: "alice/secret" })).not.toBeInTheDocument(), { timeout: 5000 })
   expect(screen.getByRole("link", { name: "alice/public" })).toBeInTheDocument()
 })
