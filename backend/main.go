@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
@@ -72,11 +73,23 @@ func main() {
 }
 
 // openStore builds the Store the config names. STORE=memory opens no database
-// and no pool; otherwise it opens the Postgres pool. The returned func releases
+// and no pool; DB_DRIVER=sqlite opens SQLITE_PATH through GORM; otherwise it
+// opens the Postgres pool. The returned func releases
 // the store's resources.
 func openStore(ctx context.Context, cfg Config) (Store, func(), error) {
 	if cfg.Store == StoreMemory {
 		return newMemStore(), func() {}, nil
+	}
+	if cfg.DBDriver == DriverSQLite {
+		db, err := OpenSQLite(cfg.SQLitePath)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := Migrate(db); err != nil {
+			CloseGorm(db)
+			return nil, nil, err
+		}
+		return newGormStore(db), func() { CloseGorm(db) }, nil
 	}
 	pool, err := NewPool(ctx, cfg.DatabaseURL, cfg.Pool)
 	if err != nil {
@@ -85,15 +98,12 @@ func openStore(ctx context.Context, cfg Config) (Store, func(), error) {
 	return newPgxStore(pool), pool.Close, nil
 }
 
-// checkStoreAvailable refuses settings whose store is not built yet (#93
-// SQLite) so main never falls back to Postgres silently. STORE=memory needs no
-// database, so DB_DRIVER does not matter for it.
+// checkStoreAvailable refuses settings that name a store this build cannot
+// open. Every store is built now (memory, SQLite, Postgres), so it accepts all
+// valid configs; LoadConfig has already rejected unknown values.
 func checkStoreAvailable(cfg Config) error {
-	if cfg.Store == StoreMemory {
-		return nil
-	}
-	if cfg.DBDriver == DriverSQLite {
-		return errors.New("DB_DRIVER=sqlite is not available in this build yet")
+	if cfg.Store != StoreMemory && cfg.DBDriver != DriverSQLite && cfg.DBDriver != DriverPostgres {
+		return fmt.Errorf("unknown DB_DRIVER %q", cfg.DBDriver)
 	}
 	return nil
 }
