@@ -84,7 +84,7 @@ func (o *objectStore) PutObject(t gitobj.Type, body []byte) (string, error) {
 		 ON CONFLICT (repo_id, oid) DO NOTHING`,
 		o.rs.repoID, oid, string(t), body)
 	if err != nil {
-		return "", err
+		return "", mapErr(err)
 	}
 	return oid, nil
 }
@@ -116,7 +116,7 @@ func (o *objectStore) PutObjects(objs []treebuild.Object) error {
 	}
 	oids, types, data := objectArrays(objs)
 	_, err := o.rs.db.Exec(o.ctx, insertObjectsSQL, o.rs.repoID, oids, types, data)
-	return err
+	return mapErr(err)
 }
 
 // GetObjects returns the existing objects among oids in one statement.
@@ -759,6 +759,9 @@ func (p *pgxStore) DeleteNonDefaultRef(ctx context.Context, repoID int64, name s
 }
 
 func (p *pgxStore) UpdateRef(ctx context.Context, repoID int64, name, oldOID, newOID string) error {
+	if err := checkRefOIDs(oldOID, newOID); err != nil {
+		return err
+	}
 	return mapErr(p.rs(repoID).UpdateRef(ctx, name, oldOID, newOID))
 }
 
@@ -768,6 +771,9 @@ func (p *pgxStore) ResolveCommit(ctx context.Context, repoID int64, ref string) 
 }
 
 func (p *pgxStore) PutObjectsMoveRef(ctx context.Context, repoID int64, objs []treebuild.Object, name, oldOID, newOID string) error {
+	if err := checkRefOIDs(oldOID, newOID); err != nil {
+		return err
+	}
 	return mapErr(p.rs(repoID).PutObjectsMoveRef(ctx, objs, name, oldOID, newOID))
 }
 

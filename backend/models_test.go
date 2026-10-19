@@ -21,7 +21,7 @@ import (
 func openSQLiteForTest(t *testing.T) *gorm.DB {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "mg.db")
-	db, err := gorm.Open(sqlite.Open(path+"?_pragma=foreign_keys(1)"), &gorm.Config{Logger: logger.Discard})
+	db, err := gorm.Open(sqlite.Open(path+"?"+sqliteDSNParams), &gorm.Config{Logger: logger.Discard})
 	if err != nil {
 		t.Fatalf("open sqlite: %v", err)
 	}

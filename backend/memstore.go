@@ -592,6 +592,9 @@ func (m *memStore) deleteRefLocked(repoID int64, name string, keepDefault bool) 
 }
 
 func (m *memStore) UpdateRef(ctx context.Context, repoID int64, name, oldOID, newOID string) error {
+	if err := checkRefOIDs(oldOID, newOID); err != nil {
+		return err
+	}
 	m.d.mu.Lock()
 	defer m.d.mu.Unlock()
 	return m.casLocked(repoID, name, oldOID, newOID)
@@ -638,6 +641,9 @@ func (m *memStore) ResolveCommit(ctx context.Context, repoID int64, ref string) 
 }
 
 func (m *memStore) PutObjectsMoveRef(ctx context.Context, repoID int64, objs []treebuild.Object, name, oldOID, newOID string) error {
+	if err := checkRefOIDs(oldOID, newOID); err != nil {
+		return err
+	}
 	oids := make([]string, len(objs))
 	for i, ob := range objs {
 		oids[i] = gitobj.Hash(ob.Type, ob.Body)
