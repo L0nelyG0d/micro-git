@@ -11,12 +11,13 @@ import (
 )
 
 // sqliteDSNParams are the connection parameters the SQLite store needs for
-// concurrent commits (#95 owns the full pragma set and the writer pool):
-// foreign keys on, WAL so readers do not block the writer, a busy timeout so a
-// second writer waits instead of failing with SQLITE_BUSY, and BEGIN IMMEDIATE
-// so a transaction that reads before it writes takes the write lock up front
+// concurrent commits (#95): foreign keys on, WAL so readers do not block the
+// writer, synchronous=NORMAL (the safe pairing with WAL: durable across an
+// application crash, only the last commits can be lost on power loss), a busy
+// timeout so a second writer waits instead of failing with SQLITE_BUSY, and
+// BEGIN IMMEDIATE so a transaction that reads before it writes takes the write lock up front
 // (a deferred one cannot upgrade while another writer holds it).
-const sqliteDSNParams = "_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(10000)&_txlock=immediate"
+const sqliteDSNParams = "_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=synchronous(NORMAL)&_pragma=busy_timeout(10000)&_txlock=immediate"
 
 // InTx runs fn in one database transaction. The Store fn receives uses that
 // transaction, so everything it does commits together, or rolls back when fn
