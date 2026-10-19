@@ -7,11 +7,11 @@
 
 .DEFAULT_GOAL := help
 .PHONY: help setup check-env schema backend frontend dev test test-fast test-all build cli lint clean \
-	run-sqlite run-memory run-pg dev-secret clean-data
+	run-sqlite run-memory run-pg dev-secret clean-data dev-sqlite smoke-sqlite
 
 # Backend port; override with `make dev PORT=9090`.
 PORT ?= 8080
-# Vite dev server port (fixed in frontend/vite.config.ts).
+# Vite dev server port; override with `make frontend VITE_PORT=5174`.
 VITE_PORT := 5173
 
 # Throwaway local Postgres from _docs/AGENTS.md; `make test` falls back to it.
@@ -32,7 +32,7 @@ portcheck = busy=; \
 	if command -v lsof >/dev/null 2>&1; then \
 		if lsof -nP -iTCP:$(1) -sTCP:LISTEN >/dev/null 2>&1; then busy=1; fi; \
 	elif nc -z localhost $(1) >/dev/null 2>&1; then busy=1; fi; \
-	if [ -n "$$busy" ]; then echo "port $(1) is busy; run: make $(2) PORT=<other>"; exit 1; fi
+	if [ -n "$$busy" ]; then echo "port $(1) is busy; run: make $(2) $(or $(3),PORT)=<other>"; exit 1; fi
 
 # Shell snippet: export the backend variables from .env (values never printed).
 loadenv = export DATABASE_URL="$$($(call envval,DATABASE_URL))" \
@@ -81,16 +81,16 @@ backend: check-env ## Run the Go server on PORT (default 8080) with variables fr
 	@$(loadenv); cd backend && exec go run .
 
 frontend: ## Run the Vite dev server (proxies /api to http://localhost:PORT)
-	@$(call portcheck,$(VITE_PORT),frontend)
-	@cd frontend && API_PROXY_TARGET="http://localhost:$(PORT)" exec npm run dev -- --strictPort
+	@$(call portcheck,$(VITE_PORT),frontend,VITE_PORT)
+	@cd frontend && API_PROXY_TARGET="http://localhost:$(PORT)" exec npm run dev -- --port $(VITE_PORT) --strictPort
 
 dev: check-env ## Run backend and frontend together; Ctrl-C stops both
 	@$(call portcheck,$(PORT),dev)
-	@$(call portcheck,$(VITE_PORT),dev)
+	@$(call portcheck,$(VITE_PORT),dev,VITE_PORT)
 	@set -m; \
 	$(loadenv); \
 	( cd backend && exec go run . ) & bpid=$$!; \
-	( cd frontend && API_PROXY_TARGET="http://localhost:$(PORT)" exec npm run dev -- --strictPort ) & fpid=$$!; \
+	( cd frontend && API_PROXY_TARGET="http://localhost:$(PORT)" exec npm run dev -- --port $(VITE_PORT) --strictPort ) & fpid=$$!; \
 	stop() { \
 		trap '' INT TERM; \
 		kill -TERM -$$bpid 2>/dev/null; kill -TERM -$$fpid 2>/dev/null; \
@@ -153,6 +153,30 @@ run-sqlite: dev-secret ## Run the backend on SQLite (data/mg.db), no Postgres ne
 	@$(call portcheck,$(PORT),run-sqlite)
 	@mkdir -p "$(DATA_DIR)"
 	@$(call runenv,DB_DRIVER=sqlite SQLITE_PATH="$(SQLITE_FILE)"); cd backend && exec go run .
+
+dev-sqlite: dev-secret ## Run backend (SQLite, data/mg.db) and frontend together; no Postgres; Ctrl-C stops both
+	@$(call portcheck,$(PORT),dev-sqlite)
+	@$(call portcheck,$(VITE_PORT),dev-sqlite,VITE_PORT)
+	@mkdir -p "$(DATA_DIR)"
+	@set -m; \
+	$(call runenv,DB_DRIVER=sqlite SQLITE_PATH="$(SQLITE_FILE)"); \
+	( cd backend && exec go run . ) & bpid=$$!; \
+	( cd frontend && unset VITE_USE_MOCK; API_PROXY_TARGET="http://localhost:$(PORT)" exec npm run dev -- --port $(VITE_PORT) --strictPort ) & fpid=$$!; \
+	stop() { \
+		trap '' INT TERM; \
+		kill -TERM -$$bpid 2>/dev/null; kill -TERM -$$fpid 2>/dev/null; \
+		i=0; while [ $$i -lt 20 ] && { kill -0 $$bpid 2>/dev/null || kill -0 $$fpid 2>/dev/null; }; do sleep 0.25; i=$$((i + 1)); done; \
+		kill -KILL -$$bpid 2>/dev/null; kill -KILL -$$fpid 2>/dev/null; \
+		wait 2>/dev/null; \
+	}; \
+	trap 'stop; exit 130' INT TERM; \
+	trap 'stop' EXIT; \
+	echo "dev-sqlite: backend on :$(PORT) (data/mg.db), frontend on http://localhost:$(VITE_PORT) (Ctrl-C stops both)"; \
+	while kill -0 $$bpid 2>/dev/null && kill -0 $$fpid 2>/dev/null; do sleep 1; done; \
+	echo "dev-sqlite: a process exited; stopping the other"; exit 1
+
+smoke-sqlite: ## Integration smoke: real frontend (Vite proxy) + real backend on a temp SQLite file, free ports
+	@scripts/smoke-sqlite.sh
 
 run-memory: dev-secret ## Run the backend with the in-memory store (data is lost on exit)
 	@$(call portcheck,$(PORT),run-memory)
