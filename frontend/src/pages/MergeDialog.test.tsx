@@ -1,10 +1,12 @@
-import { MemoryRouter } from "@/test-utils"
+import { MemoryRouter, renderWithMock } from "@/test-utils"
+import { MockApiService } from "@/services/MockApiService"
 import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { cacheClear } from "@/lib/fetchCache"
+import { toast } from "sonner"
 
 type Res = { status: number; body?: unknown }
 let routes: Record<string, (body: unknown) => Res>
@@ -56,6 +58,37 @@ beforeEach(() => {
   )
 })
 afterEach(() => vi.unstubAllGlobals())
+beforeEach(() => {
+  toastSpy = vi.spyOn(toast, "error").mockImplementation(() => "")
+})
+afterEach(() => toastSpy.mockRestore())
+
+type Shape = "dev-ahead" | "main-ahead" | "diverged" | "same" | "single"
+let toastSpy: ReturnType<typeof vi.spyOn>
+
+/** alice/hello with main and (except "single") dev; `as` is who is logged in. */
+async function merging(shape: Shape, as: string | null = "alice") {
+  const mock = new MockApiService()
+  await mock.register("alice", "password1")
+  await mock.register("bob", "password1")
+  await mock.login("alice", "password1")
+  await mock.createRepo({ name: "hello" })
+  const commit = async (branch: string, file: string) => {
+    const tip = (await mock.listBranches("alice", "hello")).branches.find((b) => b.name === branch)?.oid ?? ""
+    await mock.createCommit("alice", "hello", {
+      branch, expected_tip: tip, message: `add ${file}`, changes: [{ path: file, content: file }],
+    })
+  }
+  await commit("main", "a.txt")
+  if (shape !== "single") await mock.createBranch("alice", "hello", { name: "dev", from: "main" })
+  if (shape === "dev-ahead" || shape === "diverged") await commit("dev", "d.txt")
+  if (shape === "main-ahead" || shape === "diverged") await commit("main", "m.txt")
+  await mock.logout()
+  if (as) await mock.login(as, "password1")
+  return mock
+}
+const tipOf = async (mock: MockApiService, branch: string) =>
+  (await mock.listBranches("alice", "hello")).branches.find((b) => b.name === branch)!.oid
 
 function Loc() {
   return <div data-testid="loc">{useLocation().pathname}</div>
@@ -74,8 +107,7 @@ async function openDialog() {
 }
 
 it("owner with two branches sees Merge; defaults into=main, from=dev", async () => {
-  setup()
-  renderAt("/alice/hello")
+  renderWithMock("/alice/hello", await merging("dev-ahead"), <Loc />)
   const dlg = await openDialog()
   expect(within(dlg).getByRole("combobox", { name: "Into" })).toHaveTextContent("main")
   expect(within(dlg).getByRole("combobox", { name: "Merge from" })).toHaveTextContent("dev")
@@ -84,58 +116,49 @@ it("owner with two branches sees Merge; defaults into=main, from=dev", async () 
 })
 
 it("owner repo page shows Compare, Merge and Settings together", async () => {
-  setup()
-  renderAt("/alice/hello")
+  renderWithMock("/alice/hello", await merging("dev-ahead"))
   expect(await screen.findByRole("link", { name: "Compare" })).toBeInTheDocument()
   expect(await screen.findByRole("button", { name: "Merge" })).toBeInTheDocument()
   expect(await screen.findByRole("link", { name: "Settings" })).toBeInTheDocument()
 })
 
-it("is hidden from non-owners and on a single-branch repo", async () => {
-  setup("bob")
-  const { unmount } = renderAt("/alice/hello")
+it("is hidden from non-owners", async () => {
+  renderWithMock("/alice/hello", await merging("dev-ahead", "bob"))
   await screen.findByRole("table", { name: "Files" })
   expect(screen.queryByRole("button", { name: "Merge" })).not.toBeInTheDocument()
-  unmount()
-  setup("alice", { branches: [branches.branches[1]] })
-  renderAt("/alice/hello")
+})
+
+it("is hidden on a single-branch repo", async () => {
+  renderWithMock("/alice/hello", await merging("single"))
   await screen.findByRole("table", { name: "Files" })
   expect(screen.queryByRole("button", { name: "Merge" })).not.toBeInTheDocument()
 })
 
 it("submit is disabled while both selects are the same branch", async () => {
-  setup()
-  renderAt("/alice/hello")
+  renderWithMock("/alice/hello", await merging("dev-ahead"))
   const dlg = await openDialog()
   await userEvent.click(within(dlg).getByRole("combobox", { name: "Merge from" }))
   await userEvent.click(screen.getByRole("option", { name: "main (default)" }))
   expect(within(dlg).getByRole("button", { name: "Merge" })).toBeDisabled()
 })
 
-it("success: posts base/head, toasts, closes and reloads the target branch", async () => {
-  setup()
-  routes["POST /api/repos/alice/hello/merge"] = (b) => {
-    expect(b).toEqual({ base: "main", head: "dev" })
-    return json(200, { branch: "main", oid: OID2, previous_oid: OID })
-  }
-  renderAt("/alice/hello")
+it("success: merges, toasts, closes and shows the merged branch's files", async () => {
+  const mock = await merging("dev-ahead")
+  renderWithMock("/alice/hello", mock)
+  expect(await screen.findByRole("link", { name: "a.txt" })).toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "d.txt" })).not.toBeInTheDocument()
   const dlg = await openDialog()
   await userEvent.click(within(dlg).getByRole("button", { name: "Merge" }))
   await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument())
   expect(await screen.findByText("main now points to the tip of dev.")).toBeInTheDocument()
-  await vi.waitFor(() =>
-    expect(calls.filter((c) => c === "GET /api/repos/alice/hello/tree/main").length).toBe(2),
-  )
-  expect(calls.filter((c) => c === "GET /api/repos/alice/hello/commits?page=1").length).toBe(2)
+  expect(await tipOf(mock, "main")).toBe(await tipOf(mock, "dev"))
+  // The page reloaded the target branch: dev's file is listed now.
+  expect(await screen.findByRole("link", { name: "d.txt" })).toBeInTheDocument()
 })
 
 it("success with a different target navigates to it", async () => {
-  setup()
-  routes["POST /api/repos/alice/hello/merge"] = (b) => {
-    expect(b).toEqual({ base: "dev", head: "main" })
-    return json(200, { branch: "dev", oid: OID, previous_oid: OID2 })
-  }
-  renderAt("/alice/hello")
+  const mock = await merging("main-ahead")
+  renderWithMock("/alice/hello", mock, <Loc />)
   const dlg = await openDialog()
   await userEvent.click(within(dlg).getByRole("combobox", { name: "Into" }))
   await userEvent.click(screen.getByRole("option", { name: "dev" }))
@@ -143,12 +166,11 @@ it("success with a different target navigates to it", async () => {
   await userEvent.click(screen.getByRole("option", { name: "main (default)" }))
   await userEvent.click(within(dlg).getByRole("button", { name: "Merge" }))
   await vi.waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/tree/dev"))
+  expect(await tipOf(mock, "dev")).toBe(await tipOf(mock, "main"))
 })
 
 it("409 not a fast-forward shows the message and advice, dialog stays open", async () => {
-  setup()
-  routes["POST /api/repos/alice/hello/merge"] = () => json(409, { error: "not a fast-forward" })
-  renderAt("/alice/hello")
+  renderWithMock("/alice/hello", await merging("diverged"))
   const dlg = await openDialog()
   await userEvent.click(within(dlg).getByRole("button", { name: "Merge" }))
   const alert = await within(dlg).findByRole("alert")
@@ -173,32 +195,22 @@ it("409 branch tip has moved offers Reload, which reloads the page data", async 
 })
 
 it("400 already up to date is shown inline", async () => {
-  setup()
-  routes["POST /api/repos/alice/hello/merge"] = () => json(400, { error: "already up to date" })
-  renderAt("/alice/hello")
+  renderWithMock("/alice/hello", await merging("same"))
   const dlg = await openDialog()
   await userEvent.click(within(dlg).getByRole("button", { name: "Merge" }))
   expect(await within(dlg).findByRole("alert")).toHaveTextContent("already up to date")
 })
 
 const EXPIRED = "Your session has expired. Log in again."
-function expectToast() {
-  expect(document.querySelector("[data-sonner-toast]")).toHaveTextContent(EXPIRED)
-}
-function expectLoggedOut() {
-  expectToast()
-  expect(screen.getByRole("link", { name: "Log in" })).toBeInTheDocument()
-}
 
 it("401 expires the session with a toast and hides owner actions", async () => {
-  setup()
-  routes["POST /api/repos/alice/hello/merge"] = () => json(401, { error: "authentication required" })
-  renderAt("/alice/hello")
+  const mock = await merging("dev-ahead")
+  renderWithMock("/alice/hello", mock, <Loc />)
   const dlg = await openDialog()
+  await mock.logout() // the session ends behind the page's back
   await userEvent.click(within(dlg).getByRole("button", { name: "Merge" }))
-  await vi.waitFor(() => expectToast())
-  expect(calls).toContain("POST /api/repos/alice/hello/merge")
-  expectLoggedOut()
+  await vi.waitFor(() => expect(toastSpy).toHaveBeenCalledWith(EXPIRED))
+  expect(screen.getByRole("link", { name: "Log in" })).toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "Merge" })).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "Delete repository" })).not.toBeInTheDocument()
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
