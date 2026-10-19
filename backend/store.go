@@ -690,16 +690,21 @@ func (p *pgxStore) UpdateRepo(ctx context.Context, repoID int64, patch RepoPatch
 	return r, mapErr(err)
 }
 
-// lockRepo runs fn in a transaction (or the current one) that holds the
-// repos row FOR UPDATE. Setting the default branch and deleting a branch both
-// take it, so under READ COMMITTED they run one after the other and the later
-// statement sees the earlier one's commit; without it each could miss the
-// other's uncommitted write (#122). ErrNotFound if the repository is gone.
+// lockRepo runs fn in a transaction (or the current one) that holds a
+// transaction-scoped advisory lock keyed by the repo id. Setting the default
+// branch and deleting a branch both take it, so they run one after the other
+// and the later statement sees the earlier one's commit; without it each could
+// miss the other's uncommitted write under READ COMMITTED (#122).
+//
+// It is an advisory lock, not a lock on the repos row, on purpose: a row lock
+// conflicts with the FK checks and the cascade of commit (PutObjectsMoveRef)
+// and DeleteRepo, which take row locks in the opposite order and deadlocked
+// more often with it. Only these two operations take the advisory lock, and a
+// holder waits for nothing that waits for it, so it adds no lock cycle.
 func (p *pgxStore) lockRepo(ctx context.Context, repoID int64, fn func(q querier) error) error {
 	return p.InTx(ctx, func(s Store) error {
 		q := s.(*pgxStore).q
-		var one int
-		if err := q.QueryRow(ctx, `SELECT 1 FROM repos WHERE id = $1 FOR UPDATE`, repoID).Scan(&one); err != nil {
+		if _, err := q.Exec(ctx, `SELECT pg_advisory_xact_lock($1)`, repoID); err != nil {
 			return err
 		}
 		return fn(q)

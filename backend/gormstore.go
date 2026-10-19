@@ -299,23 +299,17 @@ func (g *gormStore) DeleteNonDefaultRef(ctx context.Context, repoID int64, name 
 	}))
 }
 
-// lockRepoRow locks the repos row FOR UPDATE on Postgres (SQLite has a single
-// writer, so it needs nothing). Setting the default branch and deleting a branch
-// both take it, so under READ COMMITTED they run one after the other and the
-// later statement sees the earlier one's commit (#122). ErrNotFound if the
-// repository is gone.
+// lockRepoRow takes a transaction-scoped advisory lock keyed by the repo id on
+// Postgres (SQLite has a single writer, so it needs nothing). Setting the
+// default branch and deleting a branch both take it, so they run one after the
+// other and the later statement sees the earlier one's commit (#122). It is not
+// a lock on the repos row: that conflicts with the FK checks and cascade of
+// commits and DeleteRepo and made deadlocks more frequent.
 func lockRepoRow(tx *gorm.DB, repoID int64) error {
 	if tx.Dialector.Name() == "sqlite" {
 		return nil
 	}
-	var ids []int64
-	if err := tx.Raw(`SELECT id FROM repos WHERE id = ? FOR UPDATE`, repoID).Scan(&ids).Error; err != nil {
-		return err
-	}
-	if len(ids) == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return tx.Exec(`SELECT pg_advisory_xact_lock(?)`, repoID).Error
 }
 
 func deleteNonDefaultRef(db *gorm.DB, repoID int64, name string) error {
