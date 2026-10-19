@@ -68,6 +68,7 @@ async function openForm() {
   await userEvent.click(await screen.findByRole("button", { name: "New repository" }))
 }
 
+// Kept on fetch: fixed fixture order; the mock sorts by itself.
 it("lists repos in API order with links, description and formatted date", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["GET /api/repos?page=1"] = () =>
@@ -87,6 +88,7 @@ it("lists repos in API order with links, description and formatted date", async 
   expect(document.body).not.toHaveTextContent(/null|undefined/)
 })
 
+// Kept on fetch: needs a request held pending.
 it("shows a loading state while the request is pending", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["GET /api/repos?page=1"] = () => new Promise<Res>(() => {})
@@ -108,6 +110,7 @@ it("shows the empty state pointing at New repository when logged in", async () =
   expect(await screen.findByRole("button", { name: "New repository" })).toBeInTheDocument()
 })
 
+// Kept on fetch: mock has no 500.
 it("shows an error with Retry for a 500 and reloads on retry", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["GET /api/repos?page=1"] = () => json(500, { error: "internal error" })
@@ -119,6 +122,7 @@ it("shows an error with Retry for a 500 and reloads on retry", async () => {
   expect(screen.queryByRole("alert")).not.toBeInTheDocument()
 })
 
+// Kept on fetch: mock has no network error.
 it("shows an error with Retry for a network error", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["GET /api/repos?page=1"] = () => new TypeError("Failed to fetch")
@@ -127,6 +131,7 @@ it("shows an error with Retry for a network error", async () => {
   expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument()
 })
 
+// Kept on fetch: mock has no 5xx or network error.
 it("shows the unreachable block and the session indication when the backend is down, and Retry recovers", async () => {
   routes["GET /api/auth/me"] = () => new TypeError("Failed to fetch")
   routes["GET /api/repos?page=1"] = () => new TypeError("Failed to fetch")
@@ -160,9 +165,9 @@ it("creates a repo: toast, form closed, list updated without reload", async () =
 })
 
 it("validates client-side without calling the server", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  renderHome()
+  const mock = await homeMock(true)
+  const create = vi.spyOn(mock, "createRepo")
+  renderWithMock("/", mock)
   await openForm()
   const submit = screen.getByRole("button", { name: "Create repository" })
   await userEvent.click(submit)
@@ -180,7 +185,7 @@ it("validates client-side without calling the server", async () => {
   await userEvent.paste("x".repeat(501))
   await userEvent.click(submit)
   expect(await screen.findByRole("alert")).toHaveTextContent(/at most 500/i)
-  expect(calls).not.toContain("POST /api/repos")
+  expect(create).not.toHaveBeenCalled()
 })
 
 it("shows 409 inline exactly as returned and keeps the input", async () => {
@@ -193,6 +198,7 @@ it("shows 409 inline exactly as returned and keeps the input", async () => {
   expect(screen.getByRole("button", { name: "Create repository" })).toBeEnabled()
 })
 
+// Kept on fetch: client validation stops invalid input, so the mock never returns this 400.
 it("shows server 400 messages inline", async () => {
   routes["GET /api/auth/me"] = me
   routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
@@ -223,6 +229,7 @@ it("on 401 shows a message and the nav goes to the logged-out state", async () =
   expect(screen.queryByRole("button", { name: "Log out" })).not.toBeInTheDocument()
 })
 
+// Kept on fetch: needs a request held in flight.
 it("disables submit in flight and discards input on cancel", async () => {
   routes["GET /api/auth/me"] = me
   routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
@@ -240,6 +247,7 @@ it("disables submit in flight and discards input on cancel", async () => {
 const pageOf = (page: number, hasMore: boolean, repos: unknown[] = [repo()]) =>
   json(200, { repos, page, per_page: 50, has_more: hasMore })
 
+// Kept on fetch: needs a revalidation held pending.
 it("shows the cached list at once on a revisit while it revalidates", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo()] })

@@ -69,6 +69,7 @@ describe("VisibilityDialog", () => {
     expect(onUnauthorized).not.toHaveBeenCalled()
   })
 
+  // Kept on fetch: needs the request held in flight.
   it("shows 'Saving…' on a disabled button while the request is pending", async () => {
     let finish!: (r: Res) => void
     respond = () => new Promise<Res>((resolve) => (finish = resolve))
@@ -82,6 +83,7 @@ describe("VisibilityDialog", () => {
     await vi.waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
   })
 
+  // Kept on fetch: mock has no 500.
   it("shows a server error inline, stays open and re-enables the button", async () => {
     respond = () => ({ status: 500, body: { error: "disk on fire" } })
     renderDialog(false)

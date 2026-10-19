@@ -115,6 +115,7 @@ it("shows the README rendered below the file tree, markup as text", async () => 
   expect((await screen.findByRole("table", { name: "Files" })).compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
 })
 
+// Kept on fetch: needs a request held pending.
 it("shows a skeleton while the README loads", async () => {
   setup()
   let release: () => void = () => {}
@@ -141,6 +142,7 @@ it("has no card in a subdirectory", async () => {
   expect(screen.queryByTestId("readme")).not.toBeInTheDocument()
 })
 
+// Kept on fetch: mock has no 500.
 it("failed README fetch shows a note with retry and keeps the tree", async () => {
   setup()
   let fail = true

@@ -80,6 +80,7 @@ async function withBranches(empty = false) {
 }
 const main = () => within(screen.getByRole("main"))
 
+// Kept on fetch: loading state plus a truncated file, which the mock cannot produce.
 it("renders summary and the shared diff, prefilled selects, truncated note", async () => {
   // Hold the repo answer so the loading state is observable (requests start in parallel and are fast).
   let release: () => void = () => {}
@@ -130,6 +131,7 @@ it("changing a select updates the URL and reloads", async () => {
   expect(await screen.findByText("No differences between these branches")).toBeInTheDocument()
 })
 
+// Kept on fetch: mock has no 500.
 it("shows an error with retry", async () => {
   let n = 0
   routes[Q] = () => (n++ === 0 ? json(500, { error: "boom" }) : json(200, cmp([])))

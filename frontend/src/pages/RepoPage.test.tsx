@@ -89,6 +89,7 @@ function renderAt(path: string) {
 }
 const main = () => within(screen.getByRole("main"))
 
+// Kept on fetch: mock has no 500.
 it("500 shows an error with retry that reloads", async () => {
   setupRepo(null)
   routes["GET /api/repos/alice/hello"] = () => json(500, { error: "internal error" })
@@ -99,6 +100,7 @@ it("500 shows an error with retry that reloads", async () => {
   expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
 })
 
+// Kept on fetch: mock git cannot hold an empty directory.
 it("an empty directory shows a not-found state", async () => {
   setupRepo(null)
   routes["GET /api/repos/alice/hello/tree/main/empty"] = () => json(200, tree("empty", []))
@@ -146,6 +148,7 @@ const blob = (o: Record<string, unknown> = {}) => ({
   ...o,
 })
 
+// Kept on fetch: needs a request held pending and a 500.
 it("file viewer: loading and error with retry", async () => {
   setupRepo(null)
   routes["GET /api/repos/alice/hello/blob/main/x"] = () => json(500, { error: "internal error" })
@@ -157,6 +160,7 @@ it("file viewer: loading and error with retry", async () => {
   expect(await screen.findByRole("heading", { name: "x" })).toBeInTheDocument()
 })
 
+// Kept on fetch: asserts request start order, which is transport timing.
 it("starts branches, tree and commits without waiting for the repo; README waits for the tree", async () => {
   setupRepo(null)
   let release: () => void = () => {}

@@ -83,6 +83,7 @@ it("shows a loading state, then the username and Log out when logged in", async 
   expect(await screen.findByRole("button", { name: "Log out" })).toBeInTheDocument()
 })
 
+// Kept on fetch: mock has no 500.
 it("shows a non-blocking indication on a 500 from /auth/me", async () => {
   routes["GET /api/auth/me"] = () => json(500, { error: "internal error" })
   renderAt("/")
@@ -90,6 +91,7 @@ it("shows a non-blocking indication on a 500 from /auth/me", async () => {
   expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
 })
 
+// Kept on fetch: mock has no network error.
 it("shows the indication on a network error", async () => {
   routes["GET /api/auth/me"] = () => new TypeError("Failed to fetch")
   renderAt("/")
@@ -117,6 +119,7 @@ it("shows the login error inline, clears the password and re-enables submit", as
   expect(await screen.findByRole("button", { name: "Log in" })).toBeEnabled()
 })
 
+// Kept on fetch: mock has no network error.
 it.each([
   ["/login", "Log in", "POST /api/auth/login"],
   ["/register", "Register", "POST /api/auth/register"],
@@ -133,6 +136,7 @@ it.each([
   expect(alert).not.toHaveTextContent(/failed to fetch/i)
 })
 
+// Kept on fetch: mock has no 429 or Retry-After.
 it("shows a friendly wait message when login is rate limited", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["POST /api/auth/login"] = () =>
@@ -146,6 +150,7 @@ it("shows a friendly wait message when login is rate limited", async () => {
   expect(await screen.findByRole("button", { name: "Log in" })).toBeEnabled()
 })
 
+// Kept on fetch: needs a request held in flight.
 it("disables submit while the request is in flight", async () => {
   routes["GET /api/auth/me"] = loggedOut
   let release!: () => void
@@ -190,6 +195,7 @@ it("shows a 409 on register inline", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("username already taken")
 })
 
+// Kept on fetch: mock cannot fail the login step after a successful register.
 it("sends the user to /login with a message if login after register fails", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["POST /api/auth/register"] = () => json(201, { id: 1, username: "alice" })
@@ -218,6 +224,7 @@ it("logs out, clears the session and goes to /", async () => {
   await expect(mock.me()).rejects.toMatchObject({ status: 401 })
 })
 
+// Kept on fetch: mock logout cannot fail.
 it("stays logged in and shows an error when logout fails", async () => {
   routes["GET /api/auth/me"] = me
   routes["POST /api/auth/logout"] = () => json(500, { error: "internal error" })

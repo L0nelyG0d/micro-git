@@ -37,6 +37,7 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
+// Kept on fetch: owner "a b" is not a valid mock username.
 it("encodes the owner in the pagination links", async () => {
   routes["GET /api/auth/me"] = () => ({ status: 401, body: { error: "authentication required" } })
   routes["GET /api/repos?owner=a%20b&page=2"] = () => ({
@@ -67,6 +68,7 @@ const renderProfile = () =>
     </MemoryRouter>,
   )
 
+// Kept on fetch: needs a request held pending.
 it("shows a loading state while the list is pending", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["GET /api/repos?owner=alice&page=1"] = () => ({ status: 200, body: { repos: [], page: 1, per_page: 50, has_more: false } })
@@ -83,6 +85,7 @@ it("says so when the user has no visible repositories", async () => {
   expect(screen.queryByRole("status", { name: "Loading repositories" })).not.toBeInTheDocument()
 })
 
+// Kept on fetch: mock has no 500.
 it("shows the error block and Retry re-requests the same page", async () => {
   routes["GET /api/auth/me"] = loggedOut
   let attempts = 0

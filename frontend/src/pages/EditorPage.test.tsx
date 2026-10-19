@@ -78,6 +78,7 @@ const type = async (label: string, text: string) => {
   if (text) await userEvent.type(el, text)
 }
 
+// Kept on fetch: needs the POST held in flight.
 it("disables Commit while submitting (no double submit)", async () => {
   setup()
   routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
@@ -98,6 +99,7 @@ it("disables Commit while submitting (no double submit)", async () => {
   await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
 })
 
+// Kept on fetch: needs a request held pending.
 it("shows a loading state first", async () => {
   setup()
   routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())

@@ -131,6 +131,7 @@ it("blocks saving a description over 500 characters", async () => {
   expect(screen.getByRole("button", { name: "Save changes" })).toBeDisabled()
 })
 
+// Kept on fetch: needs the PATCH held in flight.
 it("shows Saving… with aria-busy on the visibility confirm while the request is pending", async () => {
   setup("alice")
   let release!: () => void

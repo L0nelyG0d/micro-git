@@ -1,3 +1,4 @@
+// Kept on fetch (whole file): tests the HTTP transport itself (URLs, headers, status mapping).
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ApiError, apiService } from "@/services"
 import { HttpApiService } from "@/services/HttpApiService"

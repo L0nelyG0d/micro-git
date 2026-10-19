@@ -90,6 +90,7 @@ it("unknown ref is not found", async () => {
   expect(await screen.findByText("History not found")).toBeInTheDocument()
 })
 
+// Kept on fetch: mock has no 500.
 it("500 shows an error that retries", async () => {
   routes[`${H}?ref=main&page=1`] = () => json(500, { error: "internal error" })
   renderAt("/alice/hello/commits/main")
@@ -114,6 +115,7 @@ it("a commit oid works as ref", async () => {
 
 const D = "GET /api/repos/alice/hello/commits/" + A
 
+// Kept on fetch: exact hunk headers and line types need a fixed diff.
 it("commit detail: header, parent link, summary, modified file with hunk and markers", async () => {
   routes[D] = () =>
     json(200, detail([
@@ -178,6 +180,7 @@ it("root commit shows as such, and a later commit links to its parent with added
   expect(document.querySelector("script")).toBeNull()
 })
 
+// Kept on fetch: mock cannot produce truncated or zero-hunk files.
 it("root commit, truncated file and zero-hunk file", async () => {
   routes[D] = () =>
     json(200, detail([
@@ -199,6 +202,7 @@ it.each([
   expect(await screen.findByText("Commit not found")).toBeInTheDocument()
 })
 
+// Kept on fetch: mock has no 500.
 it("500 on commit detail shows retry", async () => {
   routes[D] = () => json(500, { error: "internal error" })
   renderAt(`/alice/hello/commit/${A}`)

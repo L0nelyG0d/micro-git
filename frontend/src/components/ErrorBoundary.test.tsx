@@ -31,7 +31,6 @@ beforeEach(() => {
 })
 afterEach(() => {
   vi.restoreAllMocks()
-  vi.unstubAllGlobals()
 })
 
 function renderAt(path: string) {
