@@ -2,7 +2,8 @@ import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
-import { MemoryRouter, nextTask } from "@/test-utils"
+import { MemoryRouter, nextTask, renderWithMock } from "@/test-utils"
+import { MockApiService } from "@/services/MockApiService"
 import { cacheClear } from "@/lib/fetchCache"
 
 type Res = { status: number; body?: unknown } | Error
@@ -66,6 +67,32 @@ beforeEach(() => {
 })
 afterEach(() => vi.unstubAllGlobals())
 
+/** Logged-out visitor on a mock where alice has a repo "hello" with the given files on main. */
+async function withFiles(files: Record<string, string>, devReadme?: string) {
+  const mock = new MockApiService()
+  await mock.register("alice", "password1")
+  await mock.login("alice", "password1")
+  await mock.createRepo({ name: "hello" })
+  await mock.createCommit("alice", "hello", {
+    branch: "main",
+    expected_tip: "",
+    message: "files",
+    changes: Object.entries(files).map(([path, content]) => ({ path, content })),
+  })
+  if (devReadme !== undefined) {
+    await mock.createBranch("alice", "hello", { name: "dev", from: "main" })
+    const tip = (await mock.listBranches("alice", "hello")).branches.find((b) => b.name === "dev")!.oid
+    await mock.createCommit("alice", "hello", {
+      branch: "dev",
+      expected_tip: tip,
+      message: "dev readme",
+      changes: [{ path: "README.md", content: devReadme }],
+    })
+  }
+  await mock.logout()
+  return mock
+}
+
 const renderAt = (path: string) =>
   render(
     <MemoryRouter initialEntries={[path]}>
@@ -74,10 +101,11 @@ const renderAt = (path: string) =>
   )
 
 it("shows the README rendered below the file tree, markup as text", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/README.md"] = () =>
-    json(200, blob("# Hello\n\nsome **bold** <script>alert(1)</script>\n"))
-  renderAt("/alice/hello")
+  const mock = await withFiles({
+    "README.md": "# Hello\n\nsome **bold** <script>alert(1)</script>\n",
+    "src/a.txt": "a",
+  })
+  renderWithMock("/alice/hello", mock)
   const card = await screen.findByTestId("readme")
   expect(within(card).getByText("README.md")).toBeInTheDocument()
   expect(await within(card).findByRole("heading", { name: "Hello" })).toBeInTheDocument()
@@ -100,16 +128,14 @@ it("shows a skeleton while the README loads", async () => {
   expect(await screen.findByText("x")).toBeInTheDocument()
 })
 
-it("has no card when the tree has no README.md, even though the file is requested in parallel", async () => {
-  setup(false)
-  renderAt("/alice/hello")
+it("has no card when the tree has no README.md", async () => {
+  renderWithMock("/alice/hello", await withFiles({ "src/a.txt": "a" }))
   await screen.findByRole("table", { name: "Files" })
   expect(screen.queryByTestId("readme")).not.toBeInTheDocument()
 })
 
 it("has no card in a subdirectory", async () => {
-  setup()
-  renderAt("/alice/hello/tree/main/src")
+  renderWithMock("/alice/hello/tree/main/src", await withFiles({ "README.md": "# Top", "src/README.md": "# Inner" }))
   await screen.findByRole("table", { name: "Files" })
   expect(screen.queryByTestId("readme")).not.toBeInTheDocument()
 })
@@ -128,12 +154,10 @@ it("failed README fetch shows a note with retry and keeps the tree", async () =>
   expect(await within(card).findByText("back")).toBeInTheDocument()
 })
 
-it("follows the ref: a branch route fetches that branch's README", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/dev/README.md"] = () => json(200, blob("dev readme"))
-  renderAt("/alice/hello/tree/dev")
+it("follows the ref: a branch route shows that branch's README", async () => {
+  renderWithMock("/alice/hello/tree/dev", await withFiles({ "README.md": "main readme" }, "dev readme"))
   expect(await screen.findByText("dev readme")).toBeInTheDocument()
-  expect(calls).toContain("GET /api/repos/alice/hello/blob/dev/README.md")
+  expect(screen.queryByText("main readme")).not.toBeInTheDocument()
 })
 
 it("does not request the README when the tree lists none", async () => {
