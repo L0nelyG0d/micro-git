@@ -3,7 +3,8 @@ import userEvent from "@testing-library/user-event"
 import { useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
-import { MemoryRouter, nextTask } from "@/test-utils"
+import { MemoryRouter, nextTask, renderWithMock } from "@/test-utils"
+import { MockApiService } from "@/services/MockApiService"
 import { cacheClear } from "@/lib/fetchCache"
 
 type Res = { status: number; body?: unknown } | Error
@@ -57,6 +58,25 @@ function Loc() {
 }
 const renderAt = (p: string) =>
   render(<MemoryRouter initialEntries={[p]}><App /><Loc /></MemoryRouter>)
+/** Logged-out visitor on a mock: alice/hello has main (a.txt = "old") and dev.1 (a.txt = "new"); `empty` leaves it without commits. */
+async function withBranches(empty = false) {
+  const mock = new MockApiService()
+  await mock.register("alice", "password1")
+  await mock.login("alice", "password1")
+  await mock.createRepo({ name: "hello" })
+  if (!empty) {
+    await mock.createCommit("alice", "hello", {
+      branch: "main", expected_tip: "", message: "first", changes: [{ path: "a.txt", content: "old\n" }],
+    })
+    await mock.createBranch("alice", "hello", { name: "dev.1", from: "main" })
+    const tip = (await mock.listBranches("alice", "hello")).branches.find((b) => b.name === "dev.1")!.oid
+    await mock.createCommit("alice", "hello", {
+      branch: "dev.1", expected_tip: tip, message: "edit", changes: [{ path: "a.txt", content: "new\n" }],
+    })
+  }
+  await mock.logout()
+  return mock
+}
 const main = () => within(screen.getByRole("main"))
 
 it("renders summary and the shared diff, prefilled selects, truncated note", async () => {
@@ -85,21 +105,28 @@ it("renders summary and the shared diff, prefilled selects, truncated note", asy
   expect(screen.getByRole("link", { name: "alice/hello" })).toHaveClass("max-sm:break-all")
 })
 
+it("shows summary, diff lines and prefilled selects", async () => {
+  renderWithMock("/alice/hello/compare?base=main&head=dev.1", await withBranches(), <Loc />)
+  expect(await screen.findByTestId("summary")).toHaveTextContent("1 file changed, +1 -1")
+  expect(screen.getByRole("combobox", { name: "Base" })).toHaveTextContent("main")
+  expect(screen.getByRole("combobox", { name: "Compare" })).toHaveTextContent("dev.1")
+  expect(screen.getByTestId("line-add")).toHaveTextContent("+new")
+  expect(screen.getByTestId("line-del")).toHaveTextContent("-old")
+})
+
 it("shows the empty state for identical tips", async () => {
-  routes[Q] = () => json(200, cmp([]))
-  renderAt("/alice/hello/compare?base=main&head=dev.1")
+  renderWithMock("/alice/hello/compare?base=main&head=main", await withBranches())
   expect(await screen.findByText("No differences between these branches")).toBeInTheDocument()
   expect(screen.queryByTestId("summary")).not.toBeInTheDocument()
 })
 
 it("changing a select updates the URL and reloads", async () => {
-  routes[Q] = () => json(200, cmp([]))
-  routes[`${API}/compare?base=dev.1&head=dev.1`] = () => json(200, cmp([file({ path: "z.txt", additions: 1 })]))
-  renderAt("/alice/hello/compare?base=main&head=dev.1")
+  renderWithMock("/alice/hello/compare?base=main&head=dev.1", await withBranches(), <Loc />)
+  expect(await screen.findByTestId("summary")).toHaveTextContent("1 file changed")
   await userEvent.click(await screen.findByRole("combobox", { name: "Base" }))
   await userEvent.click(screen.getByRole("option", { name: "dev.1" }))
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/compare?base=dev.1&head=dev.1")
-  expect(await screen.findByTestId("summary")).toHaveTextContent("1 file changed, +1 -0")
+  expect(await screen.findByText("No differences between these branches")).toBeInTheDocument()
 })
 
 it("shows an error with retry", async () => {
@@ -111,16 +138,12 @@ it("shows an error with retry", async () => {
   expect(await screen.findByText("No differences between these branches")).toBeInTheDocument()
 })
 
-it("shows the empty-repo hint without calling compare", async () => {
-  routes[API] = () => json(200, repo({ empty: true }))
-  renderAt("/alice/hello/compare")
+it("shows the empty-repo hint", async () => {
+  renderWithMock("/alice/hello/compare", await withBranches(true))
   expect(await screen.findByText(/This repository is empty/)).toBeInTheDocument()
-  expect(calls.some((c) => c.includes("/compare"))).toBe(false)
 })
 
 it("repo page links to compare", async () => {
-  routes[`${API}/tree/main`] = () => json(200, { ref: "main", commit: A, path: "", entries: [] })
-  routes[`${API}/commits?ref=main&page=1`] = () => json(200, { commits: [] })
-  renderAt("/alice/hello")
+  renderWithMock("/alice/hello", await withBranches())
   expect(await screen.findByRole("link", { name: "Compare" })).toHaveAttribute("href", "/alice/hello/compare")
 })
