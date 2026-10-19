@@ -75,3 +75,44 @@ export function failNext<K extends keyof MockApiService>(mock: MockApiService, m
 export function networkErrorNext<K extends keyof MockApiService>(mock: MockApiService, method: K) {
   spyOf(mock, method).mockRejectedValueOnce(new TypeError("Failed to fetch"))
 }
+
+type PathMatch = string | RegExp
+const matches = (m: PathMatch, path: string) => (typeof m === "string" ? path.includes(m) : m.test(path))
+
+/** Wraps `mock.get` (the path the screens read through) so `onMatch` can replace the first call whose path matches. */
+function interceptGet(mock: MockApiService, match: PathMatch, onMatch: (real: () => Promise<unknown>) => Promise<unknown>) {
+  const real = mock.get.bind(mock) as (path: string, options?: unknown) => Promise<unknown>
+  let used = false
+  spyOf(mock, "get").mockImplementation(async (path: string, options?: unknown) => {
+    if (!used && matches(match, path)) {
+      used = true
+      return onMatch(() => real(path, options))
+    }
+    return real(path, options)
+  })
+}
+
+/** Holds the first GET whose path matches until release() runs, then answers as the real mock does. */
+export function holdGet(mock: MockApiService, match: PathMatch) {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  interceptGet(mock, match, async (real) => {
+    await gate
+    return real()
+  })
+  return release
+}
+
+/** The first GET whose path matches fails with an ApiError (a 5xx with a JSON body); later calls answer normally. */
+export function failGet(mock: MockApiService, match: PathMatch, status = 500, message = "internal error") {
+  interceptGet(mock, match, async () => {
+    throw new ApiError(status, message)
+  })
+}
+
+/** The first GET whose path matches fails like a dropped connection (what fetch throws). */
+export function networkErrorGet(mock: MockApiService, match: PathMatch) {
+  interceptGet(mock, match, async () => {
+    throw new TypeError("Failed to fetch")
+  })
+}
