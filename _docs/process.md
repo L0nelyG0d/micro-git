@@ -38,7 +38,7 @@ The orchestrator is a controller: it assigns issues to branches, launches engine
 - Do not skip step 2. A dependent issue starts only after its dependency is merged and closed; independent issues may run in parallel on separate branches
 - The engineer does not close the issue and does not merge. QA does not fix code, it only outputs PASS or FAIL. The code reviewer does not fix code, it only outputs APPROVE or CHANGES REQUESTED
 - Only the code reviewer merges into `main` and pushes. The review starts only after a QA PASS comment, and any new commit on the branch needs a new QA PASS
-- Close an issue only after QA outputs PASS, the reviewer APPROVED and merged, and the tests are green: `go test ./...` and `go test -race ./...` for backend work, `npm test` for frontend work
+- Close an issue only after QA outputs PASS, the reviewer APPROVED and merged, and the tests are green: `go test ./...` and `go test -race ./...` for backend work (`make test-all` when the work touches a store), `npm test` for frontend work
 - If an issue is unclear or conflicts with `_docs/plan.md`, ask the user before building
 - If a decision needs the user (architecture, data model, stack, endpoint set) and they are away, do not wait: append the question to `_docs/questions.md` with the default you used, take the simplest reversible default, comment on the issue, and keep going. The user reviews that file on return
 - When a user decision is pending and the user is present, ask and wait about one minute. No answer: stash the question as above and keep working. Never stop the pipeline to wait

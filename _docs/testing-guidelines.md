@@ -25,10 +25,10 @@
 - No network calls to external services; use `httptest.NewServer`
 
 ## Database tests
-- Tests that need PostgreSQL run against a separate Neon branch, never the
+- Tests that need PostgreSQL run against a throwaway database (the local :54329 server below, or a separate Neon branch if the user asks), never the
   main one. The connection string comes from the `TEST_DATABASE_URL`
   environment variable
-- If `TEST_DATABASE_URL` is not set, the test calls `t.Skip` with a clear message
+- If `TEST_DATABASE_URL` is not set, a Postgres-only test calls `t.Skip` with a clear message (through `requirePostgres(t)`), and the skip must be listed in `backend/known_skips.txt`
 - Each test creates its own data (unique emails, its own user) and removes it
   with `t.Cleanup()`, so tests do not depend on each other or on leftover rows
 - Do not use `t.Parallel()` in tests that share the same database rows
@@ -53,5 +53,5 @@
 
 ## Running
 - `go test ./...` must pass before committing; `make test-all` before closing a task that touches a store
-- `TEST_DATABASE_URL=<neon test branch url> go test ./...` to include database tests
+- `TEST_DATABASE_URL=<test database url> go test ./...` to include the Postgres tests (or `make test-all`)
 - `go test -race ./...` before closing a task

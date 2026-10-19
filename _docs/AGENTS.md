@@ -3,10 +3,13 @@
 - `go mod download` - install dependencies
 - `go test ./...` - the whole suite
 - `go test -race ./...` - the whole suite with the race detector
-- Backend tests hit Neon (~200ms per statement): run `go test -p 1 -race -timeout 30m ./...` (the root package takes ~12 min)
+- `make test-all` - backend on memory, sqlite and postgres (`scripts/test-matrix.sh`, own database on the local :54329 server or `TEST_DATABASE_URL`), then the frontend tests. Run it before closing a task that touches a store
+- `TEST_STORE=memory|sqlite|postgres go test -p 1 -race ./...` - the API suite on one store (`TEST_STORE` unset: postgres if `TEST_DATABASE_URL` is set, else sqlite). `memory` and `sqlite` need no database
+- Against a remote Neon test branch (~200ms per statement, only if the user asks) use `go test -p 1 -race -timeout 30m ./...` (the root package takes ~12 min); on the local :54329 server it takes minutes
 - `go test ./path/to/pkg` - one package
 - `go test -run TestName ./...` - one test by name
 - `npm test` (in `frontend/`) - frontend tests
+- `make run-sqlite` - backend on SQLite (`data/mg.db`, git-ignored), no Postgres; `make dev-sqlite` adds the frontend; `make run-memory` for the in-memory store; `make clean-data` deletes the SQLite files; `make smoke-sqlite` is the integration smoke (README "Quick start")
 
 Rules
 

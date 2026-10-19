@@ -34,6 +34,8 @@ Out of scope: clone/push/fetch, pack files, real merges and conflict resolution,
 
 ## Tables (`backend/db/schema.sql`)
 
+The same four tables exist on both drivers: `schema.sql` is the Postgres reference, and on SQLite the GORM models (`backend/models.go`) create them at startup (`Migrate`, idempotent); column types differ per driver (`oid` is `char(40)` on Postgres and `text` on SQLite, `data` is `bytea` or a BLOB, `timestamptz` or a datetime). A parity test keeps the two in step. `STORE=memory` has no tables. See "Storage" below.
+
 | table | columns |
 |---|---|
 | `users` | `id`, `username` (unique case-insensitively, `[a-z0-9-]{3,32}`), `password_hash`, `created_at` |
@@ -296,14 +298,15 @@ In-memory, standard library only; constants and their meaning are at the top of 
 | `DB_DRIVER` | no | `postgres` (default) or `sqlite`; validated even when `STORE=memory` |
 | `DATABASE_URL` | when `STORE` is not `memory` and `DB_DRIVER` is `postgres` | PostgreSQL connection string |
 | `SQLITE_PATH` | no | SQLite file when `DB_DRIVER=sqlite`, default `./data/mg.db` |
-| `DB_MAX_CONNS` | no | Postgres pool size, 1 to 1000, default `10` |
+| `DB_MAX_CONNS` | no | Postgres pool size (not used by SQLite or memory), 1 to 1000, default `10` |
 | `DB_STATEMENT_TIMEOUT` | no | Postgres `statement_timeout` per pooled connection, duration from `1ms` to `1h`, default `15s` |
 | `JWT_SECRET` | yes | HMAC key for the session JWT; at least 32 bytes, otherwise the process refuses to start |
 | `COOKIE_SECURE` | no | exactly `true` adds `Secure` to the session cookie |
 | `PORT` | no | 1 to 65535, default `8080` |
-| `TEST_DATABASE_URL` | for tests | separate database; DB tests are skipped without it |
+| `TEST_DATABASE_URL` | for Postgres tests | separate database; Postgres-only tests are skipped without it |
+| `TEST_STORE` | no | tests only: `postgres`, `memory` or `sqlite`, the store the API suite runs on (default `postgres` if `TEST_DATABASE_URL` is set, else `sqlite`) |
 
-`DB_DRIVER=sqlite` opens `SQLITE_PATH` (pure Go, no cgo; the file and its directory are created when missing), migrates it with GORM and serves the same API; data survives a restart. `DATABASE_URL` is ignored then.
+`DB_DRIVER=sqlite` opens `SQLITE_PATH` (pure Go, no cgo; the file and its directory are created when missing), migrates it with GORM and serves the same API; data survives a restart. `DATABASE_URL` is ignored then. Pragmas, the single-writer limit, the stores and the test matrix are described once, in "Storage" below; how to run each store is in the README.
 
 Process: `http.Server` with read-header, read, write and idle timeouts, graceful shutdown on SIGINT / SIGTERM, `X-Content-Type-Options: nosniff` on every response and `Cache-Control: no-store` on `/auth/*`.
 
@@ -350,11 +353,12 @@ Styling follows `_docs/design-system.md`.
 
 Decision (user, 2026-10-19): the backend gets three interchangeable stores behind one Go interface, so the app runs without a database (memory), on a single file (SQLite) and on Postgres. Issues #79-#99.
 
-- Interface: `Store` (extracted from the pgx code in `backend/store.go`) with groups for users, repos, objects, refs (compare-and-swap commit), history walk, ancestry (ahead/behind, merge base), branches and visibility. Handlers use only the interface. Store errors are sentinels (`ErrNotFound`, `ErrConflict`, `ErrForeignKey`); each store translates its own driver errors.
-- Implementations: `pgxStore` (today's code, kept until GORM reaches parity), `memStore` (maps and a mutex, for tests and the mock iteration), `gormStore` (GORM, one code path for SQLite and Postgres).
+- Interface: `Store` (`backend/storage.go`, extracted from the original pgx code) with groups for users, repos, objects, refs (compare-and-swap commit), history walk, ancestry (ahead/behind, merge base), branches and visibility. Handlers use only the interface. Store errors are sentinels (`ErrNotFound`, `ErrConflict`, `ErrForeignKey`); each store translates its own driver errors.
+- Implementations: `pgxStore` (`store.go`; serves `DB_DRIVER=postgres` in the running backend), `memStore` (`memstore.go`; maps and a mutex, serves `STORE=memory`), `gormStore` (`gormstore.go`, `gormobjects.go`, `gormrefs.go`; GORM, serves `DB_DRIVER=sqlite`; its Postgres dialect is exercised by the tests, not used by the server). Models and `Migrate` are in `models.go`, `OpenSQLite` in `sqlite.go`.
 - ORM and drivers: `gorm.io/gorm`, `gorm.io/driver/postgres`, `github.com/glebarez/sqlite` (pure Go, no cgo, `CGO_ENABLED=0` builds). Raw SQL is allowed only where portability needs it (the recursive CTEs for history and ancestry, written once and tested on both dialects).
 - Config: `STORE=memory` (no database), else `DB_DRIVER=postgres` (default, needs `DATABASE_URL`) or `DB_DRIVER=sqlite` (needs `SQLITE_PATH`, default `./data/mg.db`, git-ignored). Unknown values stop startup with a message. Connection strings are never logged or documented.
 - Schema: GORM models create the same logical tables on both drivers (users, repos, objects, refs; composite keys, unique constraints, ON DELETE CASCADE, BLOB/BYTEA bodies). `backend/db/schema.sql` stays the Postgres reference, guarded by a parity test. Migrations are idempotent at startup.
 - SQLite specifics: every pooled connection gets `foreign_keys=ON`, `journal_mode=WAL`, `synchronous=NORMAL`, `busy_timeout=10000` and `_txlock=immediate` (DSN params in `sqliteDSNParams`). Write concurrency limit: one writer at a time, enforced by SQLite's write lock rather than a one-connection pool; other writers wait up to 10 s on the busy timeout instead of failing with `SQLITE_BUSY`, readers are not blocked (WAL). The pool is not capped, because a cap of one would deadlock a write on the outer store while a transaction is open; the object batch reads chunk below SQLite's variable limit.
-- Tests: one shared API suite selected by `TEST_STORE=memory|sqlite|postgres`. Default is the fast local Postgres on :54329 (`TEST_DATABASE_URL`); sqlite uses `t.TempDir()` files; `make test-all` runs all three and CI runs sqlite and memory beside Postgres.
+- Tests: one shared API suite selected by `TEST_STORE=memory|sqlite|postgres`. Default is the fast local Postgres on :54329 (`TEST_DATABASE_URL`); sqlite uses `t.TempDir()` files; `make test-all` runs all three through `scripts/test-matrix.sh` (own database `mg_matrix_<pid>`, dropped at the end; every skip must be listed in `backend/known_skips.txt`) and CI runs sqlite and memory in the `backend-store` job beside the Postgres `backend` job.
+- Make targets: `run-sqlite`, `dev-sqlite`, `smoke-sqlite`, `run-memory`, `run-pg`, `test-all`, `clean-data` (see the README quick start).
 - Frontend side of the same assignment: all network access through one `ApiService`; `MockApiService` selected by `VITE_USE_MOCK=true`; `openapi.yaml` is the contract both sides are tested against.
