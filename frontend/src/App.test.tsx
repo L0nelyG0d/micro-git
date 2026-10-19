@@ -1,4 +1,5 @@
-import { MemoryRouter } from "@/test-utils"
+import { MemoryRouter, renderWithMock } from "@/test-utils"
+import { MockApiService } from "@/services/MockApiService"
 import React from "react"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
@@ -47,6 +48,16 @@ function renderAt(path: string) {
   )
 }
 
+/** A mock with alice (and her empty repo hello), logged in or not. */
+async function aliceMock(loggedIn: boolean) {
+  const mock = new MockApiService()
+  await mock.register("alice", "secret123")
+  await mock.login("alice", "secret123")
+  await mock.createRepo({ name: "hello" })
+  if (!loggedIn) await mock.logout()
+  return mock
+}
+
 const me = () => json(200, { id: 1, username: "alice" })
 const loggedOut = () => json(401, { error: "authentication required" })
 const emptyRepo = () =>
@@ -87,13 +98,7 @@ it("shows the indication on a network error", async () => {
 })
 
 it("logs in and goes back to the page the user came from", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["POST /api/auth/login"] = (b) => {
-    expect(b).toEqual({ username: "alice", password: "secret123" })
-    return me()
-  }
-  routes["GET /api/repos/alice/hello"] = emptyRepo
-  renderAt("/alice/hello")
+  renderWithMock("/alice/hello", await aliceMock(false))
   await userEvent.click(await screen.findByRole("link", { name: "Log in" }))
   await userEvent.type(await screen.findByLabelText("Username"), "alice")
   await userEvent.type(screen.getByLabelText("Password"), "secret123")
@@ -103,9 +108,7 @@ it("logs in and goes back to the page the user came from", async () => {
 })
 
 it("shows the login error inline, clears the password and re-enables submit", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["POST /api/auth/login"] = () => json(401, { error: "invalid username or password" })
-  renderAt("/login")
+  renderWithMock("/login", await aliceMock(false))
   await screen.findByRole("link", { name: "Register" })
   await userEvent.type(await screen.findByLabelText("Username"), "alice")
   await userEvent.type(screen.getByLabelText("Password"), "wrongpass")
@@ -165,24 +168,21 @@ it("disables submit while the request is in flight", async () => {
 })
 
 it("registers then logs in, in that order", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["POST /api/auth/register"] = () => json(201, { id: 1, username: "alice" })
-  routes["POST /api/auth/login"] = () => me()
-  renderAt("/register")
+  const mock = new MockApiService()
+  renderWithMock("/register", mock)
   // Scoped to <main>: the lazy Register page is what we wait for; the nav also has a "Log in" link.
   await within(screen.getByRole("main")).findByRole("link", { name: "Log in" })
   await userEvent.type(await screen.findByLabelText("Username"), "Alice")
   await userEvent.type(screen.getByLabelText("Password"), "secret123")
   await userEvent.click(screen.getByRole("button", { name: "Register" }))
   expect(await screen.findByText("alice")).toBeInTheDocument()
-  expect(calls.filter((c) => c.startsWith("POST"))).toEqual(["POST /api/auth/register", "POST /api/auth/login"])
+  // Register itself starts no session: the user is logged in only because the page logged in next.
+  expect(await mock.me()).toMatchObject({ username: "alice" })
   expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
 })
 
 it("shows a 409 on register inline", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["POST /api/auth/register"] = () => json(409, { error: "username already taken" })
-  renderAt("/register")
+  renderWithMock("/register", await aliceMock(false))
   // Scoped to <main>: the lazy Register page is what we wait for; the nav also has a "Log in" link.
   await within(screen.getByRole("main")).findByRole("link", { name: "Log in" })
   await userEvent.type(await screen.findByLabelText("Username"), "alice")
@@ -206,19 +206,17 @@ it("sends the user to /login with a message if login after register fails", asyn
 })
 
 it("redirects a logged-in user from /login and /register to /", async () => {
-  routes["GET /api/auth/me"] = me
-  renderAt("/login")
+  renderWithMock("/login", await aliceMock(true))
   expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
 })
 
 it("logs out, clears the session and goes to /", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["POST /api/auth/logout"] = () => json(204)
-  routes["GET /api/repos/alice/hello"] = emptyRepo
-  renderAt("/alice/hello")
+  const mock = await aliceMock(true)
+  renderWithMock("/alice/hello", mock)
   await userEvent.click(await screen.findByRole("button", { name: "Log out" }))
   expect(await screen.findByRole("link", { name: "Log in" })).toBeInTheDocument()
   expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
+  await expect(mock.me()).rejects.toMatchObject({ status: 401 })
 })
 
 it("stays logged in and shows an error when logout fails", async () => {
