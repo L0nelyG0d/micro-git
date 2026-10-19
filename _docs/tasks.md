@@ -250,3 +250,7 @@ Suggested order: #79, #81 and #100, #104 in parallel; then #82, #84, #101, #103;
 ## 121. Backend: remove stale pgx skip in TestStoreObjectsRepoGone
 Goal: `TestStoreObjectsRepoGone` runs on the pgx store again, so a write into a deleted repo is checked on every store.
 Description: Remove the `t.Skip("pgx store returns the raw driver error here")` at `backend/objectstore_test.go:273`. pgx already maps the error to `ErrForeignKey` (#88). Test-only change. Found in QA of #88.
+
+## 125. E2E journey script: enforce the console check and the layout render check
+Goal: `_docs/e2e/journey.js` reports FAIL when the console check documented in `_docs/e2e.md` fails or when the layout pass did not see rendered pages.
+Description: The script only collected console errors (status-only 401/404 filter, any URL) and returned them while all steps passed; the layout step checked only `scrollWidth`, so it passed with the backend down. Add a final "console clean" step with an exact status + URL-path allow-list, make the layout step assert expected page content, and return an overall PASS/FAIL verdict with counts. Label `user-test-bug`. Found in QA of #107.
