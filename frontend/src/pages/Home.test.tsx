@@ -240,132 +240,6 @@ it("disables submit in flight and discards input on cancel", async () => {
 const pageOf = (page: number, hasMore: boolean, repos: unknown[] = [repo()]) =>
   json(200, { repos, page, per_page: 50, has_more: hasMore })
 
-it("page 1 with more shows a disabled Previous and a Next linking to page 2", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=1"] = () => pageOf(1, true)
-  renderHome()
-  const nav = await screen.findByRole("navigation", { name: "Pagination" })
-  expect(within(nav).getByRole("button", { name: "Previous" })).toBeDisabled()
-  expect(within(nav).getByText("Page 1")).toBeInTheDocument()
-  expect(within(nav).getByRole("link", { name: "Next" })).toHaveAttribute("href", "/?page=2")
-})
-
-it("a single page shows no pagination controls", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=1"] = () => pageOf(1, false)
-  renderHome()
-  await screen.findByRole("link", { name: "alice/hello" })
-  expect(screen.queryByRole("navigation", { name: "Pagination" })).not.toBeInTheDocument()
-})
-
-it("page 2 requests ?page=2 and enables Previous back to the first page", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=2"] = () => pageOf(2, true)
-  renderHome("/?page=2")
-  const nav = await screen.findByRole("navigation", { name: "Pagination" })
-  expect(within(nav).getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/")
-  expect(within(nav).getByRole("link", { name: "Next" })).toHaveAttribute("href", "/?page=3")
-  expect(within(nav).getByText("Page 2")).toBeInTheDocument()
-})
-
-it("page 3 links Previous to page 2", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=3"] = () => pageOf(3, false)
-  renderHome("/?page=3")
-  const nav = await screen.findByRole("navigation", { name: "Pagination" })
-  expect(within(nav).getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/?page=2")
-})
-
-it("the last page has Next disabled", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=2"] = () => pageOf(2, false)
-  renderHome("/?page=2")
-  const nav = await screen.findByRole("navigation", { name: "Pagination" })
-  expect(within(nav).getByRole("button", { name: "Next" })).toBeDisabled()
-  expect(within(nav).getByRole("link", { name: "Previous" })).toBeInTheDocument()
-})
-
-it("an empty page past the end links to the first page", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=9"] = () => pageOf(9, false, [])
-  renderHome("/?page=9")
-  const link = await screen.findByRole("link", { name: "Go to the first page" })
-  expect(link).toHaveAttribute("href", "/")
-  expect(screen.queryByText("No repositories yet.", { exact: false })).not.toBeInTheDocument()
-})
-
-it("an invalid ?page= falls back to page 1", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=1"] = () => pageOf(1, false)
-  renderHome("/?page=abc")
-  await screen.findByRole("link", { name: "alice/hello" })
-  expect(calls).toContain("GET /api/repos?page=1")
-})
-
-it("creating on a full page 1 keeps the page size and enables Next", async () => {
-  routes["GET /api/auth/me"] = me
-  const full = Array.from({ length: 50 }, (_, i) => repo({ id: 100 - i, name: `r${i}` }))
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: full, page: 1, per_page: 50, has_more: false })
-  routes["POST /api/repos"] = () => json(201, repo({ id: 200, name: "fresh" }))
-  renderHome()
-  await openForm()
-  await userEvent.type(screen.getByLabelText("Name"), "fresh")
-  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
-  expect(await screen.findByText(/alice\/fresh created/i)).toBeInTheDocument()
-  const links = screen.getAllByRole("link", { name: /^alice\// })
-  expect(links).toHaveLength(50)
-  expect(links[0].textContent).toBe("alice/fresh")
-  expect(screen.queryByRole("link", { name: "alice/r49" })).not.toBeInTheDocument()
-  expect(screen.getByRole("link", { name: "Next" })).toHaveAttribute("href", "/?page=2")
-})
-
-it("moves focus to the Name input when the New repository form opens", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  renderHome()
-  await openForm()
-  expect(screen.getByLabelText("Name")).toHaveFocus()
-  expect(screen.getByLabelText("Name")).toHaveAttribute("name", "name")
-  expect(screen.getByLabelText("Name")).toHaveAttribute("spellcheck", "false")
-})
-
-it("focuses the invalid Name after a failed submit and links it to the error", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  renderHome()
-  await openForm()
-  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
-  const alert = await screen.findByRole("alert")
-  const name = screen.getByLabelText("Name")
-  expect(name).toHaveFocus()
-  expect(name).toHaveAttribute("aria-invalid", "true")
-  expect(name).toHaveAttribute("aria-describedby", alert.id)
-})
-
-it("focuses the Description when only it is invalid", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  renderHome()
-  await openForm()
-  await userEvent.type(screen.getByLabelText("Name"), "ok")
-  await userEvent.click(screen.getByLabelText(/Description/))
-  await userEvent.paste("x".repeat(501))
-  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
-  expect(await screen.findByLabelText(/Description/)).toHaveFocus()
-})
-
-it("focuses Name after the server rejects it with 409", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  routes["POST /api/repos"] = () => json(409, { error: "repository already exists" })
-  renderHome()
-  await openForm()
-  await userEvent.type(screen.getByLabelText("Name"), "hello")
-  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
-  await screen.findByRole("alert")
-  expect(screen.getByLabelText("Name")).toHaveFocus()
-})
-
 it("shows the cached list at once on a revisit while it revalidates", async () => {
   routes["GET /api/auth/me"] = loggedOut
   routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo()] })
@@ -397,4 +271,107 @@ it("refetches the list when the user logs out", async () => {
   await userEvent.click(screen.getByRole("button", { name: /log ?out/i }))
   await waitFor(() => expect(screen.queryByRole("link", { name: "alice/secret" })).not.toBeInTheDocument(), { timeout: 5000 })
   expect(screen.getByRole("link", { name: "alice/public" })).toBeInTheDocument()
+})
+
+const many = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `r${i}` }))
+const repoLinks = () => screen.queryAllByRole("link", { name: /^alice\// })
+
+it("mock: page 1 with more shows a disabled Previous and a Next linking to page 2", async () => {
+  renderWithMock("/", await homeMock(false, many(51)))
+  const nav = await screen.findByRole("navigation", { name: "Pagination" })
+  expect(within(nav).getByRole("button", { name: "Previous" })).toBeDisabled()
+  expect(within(nav).getByText("Page 1")).toBeInTheDocument()
+  expect(within(nav).getByRole("link", { name: "Next" })).toHaveAttribute("href", "/?page=2")
+  expect(repoLinks()).toHaveLength(50)
+})
+
+it("mock: a single page shows no pagination controls", async () => {
+  renderWithMock("/", await homeMock(false, many(3)))
+  await screen.findByRole("link", { name: "alice/r0" })
+  expect(screen.queryByRole("navigation", { name: "Pagination" })).not.toBeInTheDocument()
+})
+
+it("mock: the last page has Next disabled and Previous back to the first page", async () => {
+  renderWithMock("/?page=2", await homeMock(false, many(51)))
+  const nav = await screen.findByRole("navigation", { name: "Pagination" })
+  expect(within(nav).getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/")
+  expect(within(nav).getByRole("button", { name: "Next" })).toBeDisabled()
+  expect(within(nav).getByText("Page 2")).toBeInTheDocument()
+  expect(repoLinks()).toHaveLength(1)
+})
+
+it("mock: a middle page links Previous to page 1 and Next to page 3", async () => {
+  renderWithMock("/?page=2", await homeMock(false, many(101)))
+  const nav = await screen.findByRole("navigation", { name: "Pagination" })
+  expect(within(nav).getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/")
+  expect(within(nav).getByRole("link", { name: "Next" })).toHaveAttribute("href", "/?page=3")
+})
+
+it("mock: page 3 links Previous to page 2", async () => {
+  renderWithMock("/?page=3", await homeMock(false, many(101)))
+  const nav = await screen.findByRole("navigation", { name: "Pagination" })
+  expect(within(nav).getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/?page=2")
+})
+
+it("mock: an empty page past the end links to the first page", async () => {
+  renderWithMock("/?page=9", await homeMock(false, many(3)))
+  const link = await screen.findByRole("link", { name: "Go to the first page" })
+  expect(link).toHaveAttribute("href", "/")
+  expect(screen.queryByText("No repositories yet.", { exact: false })).not.toBeInTheDocument()
+})
+
+it("mock: an invalid ?page= falls back to page 1", async () => {
+  renderWithMock("/?page=abc", await homeMock(false, many(51)))
+  expect(await screen.findByRole("link", { name: "alice/r50" })).toBeInTheDocument()
+  expect(screen.getByText("Page 1")).toBeInTheDocument()
+})
+
+it("mock: creating on a full page 1 keeps the page size and enables Next", async () => {
+  renderWithMock("/", await homeMock(true, many(50)))
+  await screen.findByRole("link", { name: "alice/r0" })
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "fresh")
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  expect((await screen.findAllByText(/alice\/fresh created/i)).length).toBeGreaterThan(0)
+  expect(repoLinks()).toHaveLength(50)
+  expect(screen.getByRole("link", { name: "alice/fresh" })).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: "Next" })).toHaveAttribute("href", "/?page=2")
+})
+
+it("mock: moves focus to the Name input when the New repository form opens", async () => {
+  renderWithMock("/", await homeMock(true))
+  await openForm()
+  expect(screen.getByLabelText("Name")).toHaveFocus()
+  expect(screen.getByLabelText("Name")).toHaveAttribute("name", "name")
+  expect(screen.getByLabelText("Name")).toHaveAttribute("spellcheck", "false")
+})
+
+it("mock: focuses the invalid Name after a failed submit and links it to the error", async () => {
+  renderWithMock("/", await homeMock(true))
+  await openForm()
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  const alert = await screen.findByRole("alert")
+  const name = screen.getByLabelText("Name")
+  expect(name).toHaveFocus()
+  expect(name).toHaveAttribute("aria-invalid", "true")
+  expect(name).toHaveAttribute("aria-describedby", alert.id)
+})
+
+it("mock: focuses the Description when only it is invalid", async () => {
+  renderWithMock("/", await homeMock(true))
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "ok")
+  await userEvent.click(screen.getByLabelText(/Description/))
+  await userEvent.paste("x".repeat(501))
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  expect(await screen.findByLabelText(/Description/)).toHaveFocus()
+})
+
+it("mock: focuses Name after the server rejects it with 409", async () => {
+  renderWithMock("/", await homeMock(true, [{ name: "hello" }]))
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "hello")
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  await screen.findByRole("alert")
+  expect(screen.getByLabelText("Name")).toHaveFocus()
 })
