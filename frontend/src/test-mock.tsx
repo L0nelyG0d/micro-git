@@ -7,7 +7,7 @@ import type { createMemoryRouter } from "react-router-dom"
 import { afterEach, vi } from "vitest"
 import App from "@/App"
 import { cacheClear } from "@/lib/fetchCache"
-import { ApiError } from "@/services"
+import { ApiError } from "@/services/http"
 import { MockApiService } from "@/services/MockApiService"
 import { setServiceOverride } from "@/test-service"
 import { MemoryRouter } from "@/test-utils"
@@ -79,17 +79,25 @@ export function networkErrorNext<K extends keyof MockApiService>(mock: MockApiSe
 type PathMatch = string | RegExp
 const matches = (m: PathMatch, path: string) => (typeof m === "string" ? path.includes(m) : m.test(path))
 
-/** Wraps `mock.get` (the path the screens read through) so `onMatch` can replace the first call whose path matches. */
-function interceptGet(mock: MockApiService, match: PathMatch, onMatch: (real: () => Promise<unknown>) => Promise<unknown>) {
-  const real = mock.get.bind(mock) as (path: string, options?: unknown) => Promise<unknown>
-  let used = false
-  spyOf(mock, "get").mockImplementation(async (path: string, options?: unknown) => {
-    if (!used && matches(match, path)) {
-      used = true
-      return onMatch(() => real(path, options))
-    }
-    return real(path, options)
-  })
+type Interceptor = { match: PathMatch; used: boolean; run: (real: () => Promise<unknown>) => Promise<unknown> }
+const interceptors = new WeakMap<MockApiService, Interceptor[]>()
+
+/** Wraps `mock.get` (the path the screens read through) so `run` replaces the first call whose path matches. Several can be stacked. */
+function interceptGet(mock: MockApiService, match: PathMatch, run: Interceptor["run"]) {
+  let list = interceptors.get(mock)
+  if (!list) {
+    list = []
+    interceptors.set(mock, list)
+    const real = mock.get.bind(mock) as (path: string, options?: unknown) => Promise<unknown>
+    const all = list
+    spyOf(mock, "get").mockImplementation(async (path: string, options?: unknown) => {
+      const hit = all.find((i) => !i.used && matches(i.match, path))
+      if (!hit) return real(path, options)
+      hit.used = true
+      return hit.run(() => real(path, options))
+    })
+  }
+  list.push({ match, used: false, run })
 }
 
 /** Holds the first GET whose path matches until release() runs, then answers as the real mock does. */
@@ -115,4 +123,13 @@ export function networkErrorGet(mock: MockApiService, match: PathMatch) {
   interceptGet(mock, match, async () => {
     throw new TypeError("Failed to fetch")
   })
+}
+
+/** Renders the app at `path` on the mock that installMock() already set up, without clearing the fetch cache (for revisit tests). */
+export function renderApp(path = "/") {
+  return render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  )
 }

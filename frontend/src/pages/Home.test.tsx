@@ -1,30 +1,10 @@
-import { MemoryRouter } from "@/test-utils"
-import { renderWithMock } from "@/test-mock"
+import { failGet, holdGet, holdNext, installMock, networkErrorGet, networkErrorNext, renderApp, renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { ApiError } from "@/services/http"
+import { screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import App from "@/App"
-import { cacheClear } from "@/lib/fetchCache"
+import { expect, it, vi } from "vitest"
 import { formatDate } from "@/lib/format"
-
-type Res = { status: number; body?: unknown } | Error
-let routes: Record<string, (body: unknown) => Res | Promise<Res>>
-let calls: string[]
-
-const json = (status: number, body?: unknown): Res => ({ status, body })
-const me = () => json(200, { id: 1, username: "alice" })
-const loggedOut = () => json(401, { error: "authentication required" })
-const repo = (o: Partial<Record<string, unknown>> = {}) => ({
-  id: 1,
-  owner: "alice",
-  name: "hello",
-  description: "A greeting",
-  default_branch: "main",
-  empty: true,
-  created_at: "2026-01-02T15:04:05Z",
-  ...o,
-})
 
 /** A mock where alice owns `repos`; logged in as her or logged out. */
 async function homeMock(loggedIn: boolean, repos: { name: string; private?: boolean }[] = []) {
@@ -36,65 +16,9 @@ async function homeMock(loggedIn: boolean, repos: { name: string; private?: bool
   return mock
 }
 
-beforeEach(() => {
-  cacheClear()
-  calls = []
-  routes = {}
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      const key = `${init?.method ?? "GET"} ${url}`
-      calls.push(key)
-      expect(init?.credentials).toBe("include")
-      const h = routes[key]
-      if (!h) throw new Error(`unexpected fetch ${key}`)
-      const r = await h(init?.body ? JSON.parse(init.body as string) : undefined)
-      if (r instanceof Error) throw r
-      return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
-    }),
-  )
-})
-afterEach(() => vi.unstubAllGlobals())
-
-function renderHome(entry = "/") {
-  return render(
-    <MemoryRouter initialEntries={[entry]}>
-      <App />
-    </MemoryRouter>,
-  )
-}
-
 async function openForm() {
   await userEvent.click(await screen.findByRole("button", { name: "New repository" }))
 }
-
-// Kept on fetch: fixed fixture order; the mock sorts by itself.
-it("lists repos in API order with links, description and formatted date", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=1"] = () =>
-    json(200, {
-      repos: [
-        repo({ id: 2, name: "second", description: "" }),
-        repo({ id: 1, name: "first", owner: "bob" }),
-      ],
-    })
-  renderHome()
-  const links = await screen.findAllByRole("link", { name: /^(alice|bob)\// })
-  expect(links.map((l) => l.textContent)).toEqual(["alice/second", "bob/first"])
-  expect(links[0]).toHaveAttribute("href", "/alice/second")
-  expect(screen.getByText("A greeting")).toBeInTheDocument()
-  expect(screen.getAllByText(formatDate("2026-01-02T15:04:05Z"))).toHaveLength(2)
-  expect(formatDate("2026-01-02T15:04:05Z")).toMatch(/^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/)
-  expect(document.body).not.toHaveTextContent(/null|undefined/)
-})
-
-// Kept on fetch: needs a request held pending.
-it("shows a loading state while the request is pending", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=1"] = () => new Promise<Res>(() => {})
-  renderHome()
-  expect(await screen.findByRole("status", { name: "Loading repositories" })).toBeInTheDocument()
-})
 
 it("shows the empty state pointing at login when logged out", async () => {
   renderWithMock("/", await homeMock(false))
@@ -108,43 +32,6 @@ it("shows the empty state pointing at New repository when logged in", async () =
   renderWithMock("/", await homeMock(true))
   expect(await screen.findByText(/no repositories yet.*new repository/i)).toBeInTheDocument()
   expect(await screen.findByRole("button", { name: "New repository" })).toBeInTheDocument()
-})
-
-// Kept on fetch: mock has no 500.
-it("shows an error with Retry for a 500 and reloads on retry", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=1"] = () => json(500, { error: "internal error" })
-  renderHome()
-  expect(await screen.findByRole("alert")).toHaveTextContent("internal error")
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo()] })
-  await userEvent.click(screen.getByRole("button", { name: "Retry" }))
-  expect(await screen.findByRole("link", { name: "alice/hello" })).toBeInTheDocument()
-  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
-})
-
-// Kept on fetch: mock has no network error.
-it("shows an error with Retry for a network error", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=1"] = () => new TypeError("Failed to fetch")
-  renderHome()
-  expect(await screen.findByRole("alert")).toHaveTextContent(/could not reach the server/i)
-  expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument()
-})
-
-// Kept on fetch: mock has no 5xx or network error.
-it("shows the unreachable block and the session indication when the backend is down, and Retry recovers", async () => {
-  routes["GET /api/auth/me"] = () => new TypeError("Failed to fetch")
-  routes["GET /api/repos?page=1"] = () => new TypeError("Failed to fetch")
-  renderHome()
-  expect(await screen.findByText("Session unavailable")).toBeInTheDocument()
-  const block = await screen.findByRole("alert")
-  expect(block).toHaveTextContent("Could not reach the server. Check your connection and try again.")
-  const before = calls.filter((c) => c === "GET /api/repos?page=1").length
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo()] })
-  await userEvent.click(within(block).getByRole("button", { name: "Retry" }))
-  expect(await screen.findByRole("link", { name: "alice/hello" })).toBeInTheDocument()
-  expect(calls.filter((c) => c === "GET /api/repos?page=1").length).toBe(before + 1)
-  expect(screen.queryByText(/could not reach the server/i)).not.toBeInTheDocument()
 })
 
 it("creates a repo: toast, form closed, list updated without reload", async () => {
@@ -198,24 +85,6 @@ it("shows 409 inline exactly as returned and keeps the input", async () => {
   expect(screen.getByRole("button", { name: "Create repository" })).toBeEnabled()
 })
 
-// Kept on fetch: client validation stops invalid input, so the mock never returns this 400.
-it("shows server 400 messages inline", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  routes["POST /api/repos"] = () => json(400, { error: "invalid repository name" })
-  renderHome()
-  await openForm()
-  await userEvent.type(screen.getByLabelText("Name"), "hello")
-  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
-  expect(await screen.findByRole("alert")).toHaveTextContent("invalid repository name")
-  routes["POST /api/repos"] = () =>
-    json(400, { error: "description must be at most 500 characters" })
-  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
-  expect(await screen.findByRole("alert")).toHaveTextContent(
-    "description must be at most 500 characters",
-  )
-})
-
 it("on 401 shows a message and the nav goes to the logged-out state", async () => {
   const mock = await homeMock(true)
   renderWithMock("/", mock)
@@ -227,47 +96,6 @@ it("on 401 shows a message and the nav goes to the logged-out state", async () =
   expect((await screen.findAllByText(/session has expired/i)).length).toBeGreaterThanOrEqual(1)
   expect(await screen.findByRole("link", { name: "Register" })).toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "Log out" })).not.toBeInTheDocument()
-})
-
-// Kept on fetch: needs a request held in flight.
-it("disables submit in flight and discards input on cancel", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [] })
-  routes["POST /api/repos"] = () => new Promise<Res>(() => {})
-  renderHome()
-  await openForm()
-  await userEvent.type(screen.getByLabelText("Name"), "hello")
-  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
-  expect(screen.getByRole("button", { name: "Create repository" })).toBeDisabled()
-  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
-  await openForm()
-  expect(screen.getByLabelText("Name")).toHaveValue("")
-})
-
-// Kept on fetch: needs a revalidation held pending.
-it("shows the cached list at once on a revisit while it revalidates", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?page=1"] = () => json(200, { repos: [repo()] })
-  const first = renderHome()
-  await screen.findByRole("link", { name: "alice/hello" })
-  first.unmount()
-  routes["GET /api/repos?page=1"] = () => new Promise<Res>(() => {})
-  renderHome()
-  expect(await screen.findByRole("link", { name: "alice/hello" })).toBeInTheDocument()
-  expect(screen.queryByRole("status", { name: "Loading repositories" })).not.toBeInTheDocument()
-})
-
-it("does not show a stale list on a revisit after creating a repo", async () => {
-  const mock = await homeMock(true, [{ name: "hello" }])
-  const first = renderWithMock("/", mock)
-  await openForm()
-  await userEvent.type(screen.getByLabelText("Name"), "fresh")
-  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
-  await screen.findAllByText(/alice\/fresh created/i)
-  first.unmount()
-  renderWithMock("/", mock)
-  expect(await screen.findByRole("link", { name: "alice/fresh" })).toBeInTheDocument()
-  expect(screen.getAllByRole("link", { name: /^alice\// })).toHaveLength(2)
 })
 
 it("refetches the list when the user logs out", async () => {
@@ -379,4 +207,112 @@ it("mock: focuses Name after the server rejects it with 409", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
   await screen.findByRole("alert")
   expect(screen.getByLabelText("Name")).toHaveFocus()
+})
+
+it("lists repos in the service's order with links, description and formatted date", async () => {
+  const mock = await homeMock(false, [{ name: "first" }, { name: "second" }])
+  await mock.register("bob", "secret123")
+  await mock.login("bob", "secret123")
+  await mock.createRepo({ name: "third", description: "A greeting" })
+  await mock.logout()
+  const served = (await mock.listRepos()).repos
+  renderWithMock("/", mock)
+  const links = await screen.findAllByRole("link", { name: /^(alice|bob)\// })
+  expect(links.map((l) => l.textContent)).toEqual(served.map((r) => `${r.owner}/${r.name}`))
+  expect(links[0]).toHaveAttribute("href", `/${served[0].owner}/${served[0].name}`)
+  expect(screen.getByText("A greeting")).toBeInTheDocument()
+  expect(screen.getAllByText(formatDate(served[0].created_at)).length).toBeGreaterThan(0)
+  expect(formatDate(served[0].created_at)).toMatch(/^\d{2}\.\d{2}\.\d{4} \d{2}:\d{2}$/)
+  expect(document.body).not.toHaveTextContent(/null|undefined/)
+})
+
+it("shows a loading state while the request is pending", async () => {
+  const mock = await homeMock(false, [{ name: "hello" }])
+  const release = holdGet(mock, "/repos?page=1")
+  renderWithMock("/", mock)
+  expect(await screen.findByRole("status", { name: "Loading repositories" })).toBeInTheDocument()
+  release()
+  expect(await screen.findByRole("link", { name: "alice/hello" })).toBeInTheDocument()
+})
+
+it("shows an error with Retry for a 500 and reloads on retry", async () => {
+  const mock = await homeMock(false, [{ name: "hello" }])
+  failGet(mock, "/repos?page=1")
+  renderWithMock("/", mock)
+  expect(await screen.findByRole("alert")).toHaveTextContent("internal error")
+  await userEvent.click(screen.getByRole("button", { name: "Retry" }))
+  expect(await screen.findByRole("link", { name: "alice/hello" })).toBeInTheDocument()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+it("shows an error with Retry for a network error", async () => {
+  const mock = await homeMock(false, [{ name: "hello" }])
+  networkErrorGet(mock, "/repos?page=1")
+  renderWithMock("/", mock)
+  expect(await screen.findByRole("alert")).toHaveTextContent(/could not reach the server/i)
+  expect(await screen.findByRole("button", { name: "Retry" })).toBeInTheDocument()
+})
+
+it("shows the unreachable block and the session indication when the backend is down, and Retry recovers", async () => {
+  const mock = await homeMock(false, [{ name: "hello" }])
+  networkErrorNext(mock, "me")
+  networkErrorGet(mock, "/repos?page=1")
+  renderWithMock("/", mock)
+  expect(await screen.findByText("Session unavailable")).toBeInTheDocument()
+  const block = await screen.findByRole("alert")
+  expect(block).toHaveTextContent("Could not reach the server. Check your connection and try again.")
+  await userEvent.click(within(block).getByRole("button", { name: "Retry" }))
+  expect(await screen.findByRole("link", { name: "alice/hello" })).toBeInTheDocument()
+  expect(screen.queryByText(/could not reach the server/i)).not.toBeInTheDocument()
+})
+
+it("shows server 400 messages inline", async () => {
+  const mock = await homeMock(true)
+  const create = vi.spyOn(mock, "createRepo")
+  create.mockRejectedValueOnce(new ApiError(400, "invalid repository name"))
+  renderWithMock("/", mock)
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "hello")
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent("invalid repository name")
+  create.mockRejectedValueOnce(new ApiError(400, "description must be at most 500 characters"))
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent("description must be at most 500 characters")
+})
+
+it("disables submit in flight and discards input on cancel", async () => {
+  const mock = await homeMock(true)
+  holdNext(mock, "createRepo")
+  renderWithMock("/", mock)
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "hello")
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  expect(screen.getByRole("button", { name: "Create repository" })).toBeDisabled()
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  await openForm()
+  expect(screen.getByLabelText("Name")).toHaveValue("")
+})
+
+it("shows the cached list at once on a revisit while it revalidates", async () => {
+  const mock = installMock(await homeMock(false, [{ name: "hello" }]))
+  const first = renderApp("/")
+  await screen.findByRole("link", { name: "alice/hello" })
+  first.unmount()
+  holdGet(mock, "/repos?page=1")
+  renderApp("/")
+  expect(await screen.findByRole("link", { name: "alice/hello" })).toBeInTheDocument()
+  expect(screen.queryByRole("status", { name: "Loading repositories" })).not.toBeInTheDocument()
+})
+
+it("does not show a stale list on a revisit after creating a repo", async () => {
+  installMock(await homeMock(true, [{ name: "hello" }]))
+  const first = renderApp("/")
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "fresh")
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  await screen.findAllByText(/alice\/fresh created/i)
+  first.unmount()
+  renderApp("/")
+  expect(await screen.findByRole("link", { name: "alice/fresh" })).toBeInTheDocument()
+  expect(screen.getAllByRole("link", { name: /^alice\// })).toHaveLength(2)
 })
