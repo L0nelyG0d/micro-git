@@ -4,11 +4,14 @@ export class ApiError extends Error {
   status: number
   /** Whole seconds from the Retry-After header (429 answers), if present. */
   retryAfter?: number
-  constructor(status: number, message: string, retryAfter?: number) {
+  /** `current_tip` of a 409 "branch tip has moved" answer, if present. */
+  currentTip?: string
+  constructor(status: number, message: string, retryAfter?: number, currentTip?: string) {
     super(message)
     this.name = "ApiError"
     this.status = status
     this.retryAfter = retryAfter
+    this.currentTip = currentTip
   }
 }
 
@@ -50,7 +53,8 @@ export async function request<T = unknown>(path: string, options: RequestOptions
         ? data.error
         : "Something went wrong. Try again."
     const ra = Number(res.headers?.get?.("Retry-After"))
-    throw new ApiError(res.status, msg, Number.isInteger(ra) && ra > 0 ? ra : undefined)
+    const tip = data && typeof data === "object" && "current_tip" in data && typeof data.current_tip === "string" ? data.current_tip : undefined
+    throw new ApiError(res.status, msg, Number.isInteger(ra) && ra > 0 ? ra : undefined, tip)
   }
   return data as T
 }

@@ -375,7 +375,7 @@ export class MockApiService implements ApiService {
       if (e instanceof GitError) return fail(400, e.message)
       throw e
     }
-    if (expected !== tip) fail(409, "branch tip has moved")
+    if (expected !== tip) throw new ApiError(409, "branch tip has moved", undefined, tip)
 
     const sig = { name: user.username, email: `${user.username}@micro-git.local`, unix: Math.floor(Date.now() / 1000) }
     const oid = await putObject(
@@ -463,7 +463,8 @@ export class MockApiService implements ApiService {
     if (!reaches(r.objects, headTip, baseTip)) fail(409, "not a fast-forward")
     await this.beforeMergeSwap?.()
     // Compare-and-swap on the base tip, as UpdateRef(baseTip, headTip) in backend/merge.go.
-    if (r.refs.get(base) !== baseTip) fail(409, "branch tip has moved")
+    const current = r.refs.get(base) ?? ""
+    if (current !== baseTip) throw new ApiError(409, "branch tip has moved", undefined, current)
     r.refs.set(base, headTip)
     invalidateAfterWrite(this.repoPath(r))
     return { branch: base, oid: headTip, previous_oid: baseTip }
