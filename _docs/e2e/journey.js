@@ -23,10 +23,10 @@ async (page) => {
   const R = [], overflow = [], notRendered = [];
   // Console policy: only these exact entries are expected, matched on status AND URL path.
   //   401 on /api/auth/me (anonymous visitor), 404 on /favicon.ico,
-  //   404 on /api/repos/<alice>/demo... (private repo read by anonymous or the second user).
+  //   404 on /api/repos/<alice>/demo and /api/repos/<alice>/demo/... (private repo read by anonymous or the second user).
   // Everything else (any other console.error, any pageerror) is unexpected and fails the run.
   const unexpected = [], expected = [];
-  const allowed = (status, path) => (status === 401 && path === '/api/auth/me') || (status === 404 && (path === '/favicon.ico' || path.startsWith(`/api/repos/${A}/demo`)));
+  const allowed = (status, path) => (status === 401 && path === '/api/auth/me') || (status === 404 && (path === '/favicon.ico' || path === `/api/repos/${A}/demo` || path.startsWith(`/api/repos/${A}/demo/`)));
   page.on('console', m => {
     if (m.type() !== 'error') return;
     const t = m.text(), st = /status of (\d+)/.exec(t), url = m.location().url || '';
