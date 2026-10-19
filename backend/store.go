@@ -515,7 +515,8 @@ UNION ALL SELECT 'tree', o.oid, o.data FROM objects o
 }
 
 // DeleteNonDefaultRef deletes a branch unless it is the repo's default, checked
-// inside the DELETE so a concurrent set-default cannot slip in between.
+// inside the DELETE. The caller must hold the repos row lock (pgxStore.lockRepo)
+// or a concurrent set-default can slip in between.
 // ErrNotFound if the branch does not exist, errDefaultBranch if it is the default.
 func (rs *RepoStore) DeleteNonDefaultRef(ctx context.Context, name string) error {
 	tag, err := rs.db.Exec(ctx,
@@ -676,9 +677,33 @@ func (p *pgxStore) UpdateRepo(ctx context.Context, repoID int64, patch RepoPatch
 	if branchArg > 0 { // the branch must still exist when the row is written
 		where += " AND EXISTS (SELECT 1 FROM refs WHERE repo_id = repos.id AND name = $" + strconv.Itoa(branchArg) + ")"
 	}
-	r, err := scanRepo(p.q.QueryRow(ctx,
-		returningRepo(`UPDATE repos SET `+strings.Join(sets, ", ")+` WHERE `+where), args...))
+	update := func(q querier) (Repo, error) {
+		return scanRepo(q.QueryRow(ctx,
+			returningRepo(`UPDATE repos SET `+strings.Join(sets, ", ")+` WHERE `+where), args...))
+	}
+	if branchArg == 0 {
+		r, err := update(p.q)
+		return r, mapErr(err)
+	}
+	var r Repo
+	err := p.lockRepo(ctx, repoID, func(q querier) (err error) { r, err = update(q); return })
 	return r, mapErr(err)
+}
+
+// lockRepo runs fn in a transaction (or the current one) that holds the
+// repos row FOR UPDATE. Setting the default branch and deleting a branch both
+// take it, so under READ COMMITTED they run one after the other and the later
+// statement sees the earlier one's commit; without it each could miss the
+// other's uncommitted write (#122). ErrNotFound if the repository is gone.
+func (p *pgxStore) lockRepo(ctx context.Context, repoID int64, fn func(q querier) error) error {
+	return p.InTx(ctx, func(s Store) error {
+		q := s.(*pgxStore).q
+		var one int
+		if err := q.QueryRow(ctx, `SELECT 1 FROM repos WHERE id = $1 FOR UPDATE`, repoID).Scan(&one); err != nil {
+			return err
+		}
+		return fn(q)
+	})
 }
 
 func (p *pgxStore) DeleteRepo(ctx context.Context, repoID int64) error {
@@ -755,7 +780,9 @@ func (p *pgxStore) DeleteRef(ctx context.Context, repoID int64, name string) err
 }
 
 func (p *pgxStore) DeleteNonDefaultRef(ctx context.Context, repoID int64, name string) error {
-	return mapErr(p.rs(repoID).DeleteNonDefaultRef(ctx, name))
+	return mapErr(p.lockRepo(ctx, repoID, func(q querier) error {
+		return NewRepoStore(q, repoID).DeleteNonDefaultRef(ctx, name)
+	}))
 }
 
 func (p *pgxStore) UpdateRef(ctx context.Context, repoID int64, name, oldOID, newOID string) error {
