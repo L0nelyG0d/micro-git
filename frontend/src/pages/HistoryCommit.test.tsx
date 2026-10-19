@@ -2,7 +2,9 @@ import { render, screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
-import { MemoryRouter, nextTask } from "@/test-utils"
+import { MemoryRouter, nextTask, renderWithMock } from "@/test-utils"
+import { MockApiService } from "@/services/MockApiService"
+import type { Change } from "@/lib/git"
 import { cacheClear } from "@/lib/fetchCache"
 import { formatDate } from "@/lib/format"
 
@@ -48,6 +50,22 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals())
 
 const renderAt = (p: string) => render(<MemoryRouter initialEntries={[p]}><App /></MemoryRouter>)
+/** Logged-out visitor on a mock where alice/hello got these commits in order; returns the oids. */
+async function withCommits(...commits: { message: string; changes: Change[] }[]) {
+  const mock = new MockApiService()
+  await mock.register("alice", "password1")
+  await mock.login("alice", "password1")
+  await mock.createRepo({ name: "hello" })
+  const oids: string[] = []
+  let tip = ""
+  for (const c of commits) {
+    tip = (await mock.createCommit("alice", "hello", { branch: "main", expected_tip: tip, ...c })).oid
+    oids.push(tip)
+  }
+  await mock.logout()
+  return { mock, oids }
+}
+const put = (path: string, content: string): Change => ({ path, content })
 const main = () => within(screen.getByRole("main"))
 
 it("lists commits with first line, author, date and full-oid link", async () => {
@@ -85,16 +103,16 @@ it("paginates with page in the URL: Previous disabled on page 1, Next follows ha
 })
 
 it("a page past the end shows an empty state", async () => {
-  routes[`${H}?ref=main&page=9`] = () => json(200, page({ page: 9, commits: [] }))
-  renderAt("/alice/hello/commits/main?page=9")
+  const { mock } = await withCommits({ message: "first", changes: [put("a.txt", "a")] })
+  renderWithMock("/alice/hello/commits/main?page=9", mock)
   expect(await screen.findByText(/no more commits/i)).toBeInTheDocument()
   expect(screen.getByRole("link", { name: "Go to the first page" })).toBeInTheDocument()
   expect(screen.getByRole("button", { name: "Next" })).toBeDisabled()
 })
 
-it("unknown ref is not found; 500 shows retry", async () => {
-  routes[`${H}?ref=nope&page=1`] = () => json(404, { error: "ref not found" })
-  renderAt("/alice/hello/commits/nope")
+it("unknown ref is not found", async () => {
+  const { mock } = await withCommits({ message: "first", changes: [put("a.txt", "a")] })
+  renderWithMock("/alice/hello/commits/nope", mock)
   expect(await screen.findByText("History not found")).toBeInTheDocument()
 })
 
@@ -108,15 +126,15 @@ it("500 shows an error that retries", async () => {
 })
 
 it("empty repo shows the message", async () => {
-  routes["GET /api/repos/alice/hello"] = () => json(200, repo({ empty: true }))
-  renderAt("/alice/hello/commits/main")
+  const { mock } = await withCommits()
+  renderWithMock("/alice/hello/commits/main", mock)
   expect(await screen.findByText(/repository is empty/i)).toBeInTheDocument()
 })
 
 it("a commit oid works as ref", async () => {
-  routes[`${H}?ref=${A}&page=1`] = () => json(200, page({ ref: A }))
-  renderAt(`/alice/hello/commits/${A}`)
-  expect(await screen.findByRole("link", { name: "aaaaaaa" })).toBeInTheDocument()
+  const { mock, oids } = await withCommits({ message: "first", changes: [put("a.txt", "a")] })
+  renderWithMock(`/alice/hello/commits/${oids[0]}`, mock)
+  expect(await screen.findByRole("link", { name: oids[0].slice(0, 7) })).toBeInTheDocument()
   expect(main().getByText(/read-only/)).toBeInTheDocument()
 })
 
@@ -159,6 +177,33 @@ it("commit detail: header, parent link, summary, modified file with hunk and mar
   expect(del.getByTestId("hunk-header")).toHaveTextContent("@@ -1,1 @@")
 })
 
+it("root commit shows as such, and a later commit links to its parent with added, modified and deleted files", async () => {
+  const { mock, oids } = await withCommits(
+    { message: "first", changes: [put("src/a.txt", "keep\nold <script>x</script>\n"), put("gone.txt", "bye\n")] },
+    {
+      message: "second\n\nbody text",
+      changes: [put("src/a.txt", "keep\nnew\n"), put("z.txt", "hi\n"), { path: "gone.txt", delete: true }],
+    },
+  )
+  const view = renderWithMock(`/alice/hello/commit/${oids[0]}`, mock)
+  expect(await screen.findByText("root commit")).toBeInTheDocument()
+  view.unmount()
+
+  renderWithMock(`/alice/hello/commit/${oids[1]}`, mock)
+  expect(await screen.findByRole("heading", { level: 1 })).toHaveTextContent("second")
+  expect(main().getByText(/body text/)).toBeInTheDocument()
+  expect(screen.getByRole("link", { name: oids[0].slice(0, 7) })).toHaveAttribute("href", `/alice/hello/commit/${oids[0]}`)
+  expect(main().getByTestId("summary")).toHaveTextContent("3 files changed")
+  const status = (path: string) => within(screen.getByRole("region", { name: path })).getByTestId("file-status")
+  expect(status("src/a.txt")).toHaveTextContent("modified")
+  expect(status("z.txt")).toHaveTextContent("added")
+  expect(status("gone.txt")).toHaveTextContent("deleted")
+  const mod = within(screen.getByRole("region", { name: "src/a.txt" }))
+  expect(mod.getByTestId("line-add")).toHaveTextContent("+new")
+  expect(mod.getByTestId("line-del")).toHaveTextContent("-old <script>x</script>")
+  expect(document.querySelector("script")).toBeNull()
+})
+
 it("root commit, truncated file and zero-hunk file", async () => {
   routes[D] = () =>
     json(200, detail([
@@ -179,11 +224,11 @@ it("commit with no files", async () => {
 })
 
 it.each([
-  [400, "invalid commit id"],
-  [404, "commit not found"],
-])("%i shows not found", async (status, error) => {
-  routes[D] = () => json(status, { error })
-  renderAt(`/alice/hello/commit/${A}`)
+  ["an invalid commit id", "nope"],
+  ["an unknown commit", "c".repeat(40)],
+])("%s shows not found", async (_what, oid) => {
+  const { mock } = await withCommits({ message: "first", changes: [put("a.txt", "a")] })
+  renderWithMock(`/alice/hello/commit/${oid}`, mock)
   expect(await screen.findByText("Commit not found")).toBeInTheDocument()
 })
 
