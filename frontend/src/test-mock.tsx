@@ -133,3 +133,24 @@ export function renderApp(path = "/") {
     </MemoryRouter>,
   )
 }
+
+/** The first GET whose path matches answers with `shape(real answer)`, for states the git model cannot build (e.g. an empty directory). */
+export function alterGet<T = unknown>(mock: MockApiService, match: PathMatch, shape: (real: T) => T) {
+  interceptGet(mock, match, async (real) => shape((await real()) as T))
+}
+
+/** Paths the screens have read through `mock.get` so far, in call order (needs a hold/fail/alter helper installed first). */
+export function readPaths(mock: MockApiService): string[] {
+  return (mock.get as unknown as { mock: { calls: [string][] } }).mock.calls.map((c) => c[0])
+}
+
+/** Like failGet, but the failure is delivered only after release() runs, so the loading state can be seen first. */
+export function failGetAfterHold(mock: MockApiService, match: PathMatch, status = 500, message = "internal error") {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  interceptGet(mock, match, async () => {
+    await gate
+    throw new ApiError(status, message)
+  })
+  return release
+}

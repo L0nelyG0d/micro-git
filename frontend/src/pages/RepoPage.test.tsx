@@ -1,128 +1,19 @@
-import { render, screen, within } from "@testing-library/react"
+import { screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useLocation } from "react-router-dom"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import App from "@/App"
-import { MemoryRouter, nextTask } from "@/test-utils"
-import { renderWithMock } from "@/test-mock"
+import { expect, it, vi } from "vitest"
+import { alterGet, failGet, failGetAfterHold, failNext, holdGet, readPaths, renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
-import { cacheClear } from "@/lib/fetchCache"
-
-type Res = { status: number; body?: unknown } | Error
-let routes: Record<string, (body: unknown) => Res | Promise<Res>>
-let calls: string[]
-
-const json = (status: number, body?: unknown): Res => ({ status, body })
-const me = (username = "alice") => () => json(200, { id: 1, username })
-const loggedOut = () => json(401, { error: "authentication required" })
-const OID = "a".repeat(40)
-const repo = (o: Record<string, unknown> = {}) => ({
-  id: 1,
-  owner: "alice",
-  name: "hello",
-  description: "A greeting",
-  default_branch: "main",
-  empty: false,
-  created_at: "2026-01-02T15:04:05Z",
-  ...o,
-})
-const branches = {
-  branches: [
-    { name: "dev", oid: OID, is_default: false },
-    { name: "main", oid: OID, is_default: true },
-  ],
-}
-const tree = (path = "", entries?: unknown[]) => ({
-  ref: "main",
-  commit: OID,
-  path,
-  entries: entries ?? [
-    { name: "src", type: "tree", oid: OID },
-    { name: "README.md", type: "blob", oid: OID },
-  ],
-})
-const commits = {
-  commits: [
-    { oid: OID, message: "Add readme\n\nlong body", author: "alice", time: "2026-01-02T15:04:05Z", parents: [] },
-  ],
-}
-
-function setupRepo(user: "alice" | "bob" | null = "alice") {
-  routes["GET /api/auth/me"] = user ? me(user) : loggedOut
-  routes["GET /api/repos/alice/hello"] = () => json(200, repo())
-  routes["GET /api/repos/alice/hello/branches"] = () => json(200, branches)
-  routes["GET /api/repos/alice/hello/tree/main"] = () => json(200, tree())
-  routes["GET /api/repos/alice/hello/commits?page=1"] = () => json(200, commits)
-  routes["GET /api/repos/alice/hello/commits?ref=main&page=1"] = () => json(200, commits)
-}
-
-beforeEach(() => {
-  cacheClear()
-  calls = []
-  routes = {}
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      const key = `${init?.method ?? "GET"} ${url}`
-      calls.push(key)
-      await nextTask()
-      const h = routes[key]
-      if (!h) throw new Error(`unexpected fetch ${key}`)
-      const r = await h(init?.body ? JSON.parse(init.body as string) : undefined)
-      if (r instanceof Error) throw r
-      return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
-    }),
-  )
-})
-afterEach(() => vi.unstubAllGlobals())
 
 function Loc() {
   return <div data-testid="loc">{useLocation().pathname}</div>
 }
-function renderAt(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <App />
-      <Loc />
-    </MemoryRouter>,
-  )
-}
 const main = () => within(screen.getByRole("main"))
-
-// Kept on fetch: mock has no 500.
-it("500 shows an error with retry that reloads", async () => {
-  setupRepo(null)
-  routes["GET /api/repos/alice/hello"] = () => json(500, { error: "internal error" })
-  renderAt("/alice/hello")
-  expect(await screen.findByRole("alert")).toHaveTextContent("internal error")
-  routes["GET /api/repos/alice/hello"] = () => json(200, repo())
-  await userEvent.click(screen.getByRole("button", { name: "Retry" }))
-  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
-})
-
-// Kept on fetch: mock git cannot hold an empty directory.
-it("an empty directory shows a not-found state", async () => {
-  setupRepo(null)
-  routes["GET /api/repos/alice/hello/tree/main/empty"] = () => json(200, tree("empty", []))
-  renderAt("/alice/hello/tree/main/empty")
-  expect(await screen.findByTestId("not-found")).toBeInTheDocument()
-})
 
 async function openCreate() {
   await userEvent.click(await screen.findByRole("button", { name: "Create branch" }))
   return screen.getByLabelText("Branch name")
 }
-
-// Kept on fetch: the UI never offers the default branch, so only a transport stub can return this 400.
-it("delete branch: a 400 from the server is shown inline", async () => {
-  setupRepo("alice")
-  renderAt("/alice/hello")
-  routes["DELETE /api/repos/alice/hello/branches/dev"] = () => json(400, { error: "cannot delete the default branch" })
-  await userEvent.click(await screen.findByRole("button", { name: "Delete branch" }))
-  await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
-  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete branch" }))
-  expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("cannot delete the default branch")
-})
 
 const EXPIRED = "Your session has expired. Log in again."
 function expectToast() {
@@ -134,65 +25,6 @@ async function expectLoggedOut() {
   await vi.waitFor(() => expectToast())
   expect(await within(screen.getByRole("navigation", { name: "Main" })).findByRole("link", { name: "Log in" })).toBeInTheDocument()
 }
-
-// File viewer
-
-const blob = (o: Record<string, unknown> = {}) => ({
-  ref: "main",
-  commit: OID,
-  path: "src/main.go",
-  name: "main.go",
-  oid: OID,
-  size: 28,
-  content: "  <b>hi</b>\n\tindent  \n",
-  ...o,
-})
-
-// Kept on fetch: needs a request held pending and a 500.
-it("file viewer: loading and error with retry", async () => {
-  setupRepo(null)
-  routes["GET /api/repos/alice/hello/blob/main/x"] = () => json(500, { error: "internal error" })
-  renderAt("/alice/hello/blob/main/x")
-  expect(await screen.findByRole("status", { name: "Loading file" })).toBeInTheDocument()
-  expect(await screen.findByRole("alert")).toHaveTextContent("internal error")
-  routes["GET /api/repos/alice/hello/blob/main/x"] = () => json(200, blob({ name: "x", path: "x" }))
-  await userEvent.click(screen.getByRole("button", { name: "Retry" }))
-  expect(await screen.findByRole("heading", { name: "x" })).toBeInTheDocument()
-})
-
-// Kept on fetch: asserts request start order, which is transport timing.
-it("starts branches, tree and commits without waiting for the repo; README waits for the tree", async () => {
-  setupRepo(null)
-  let release: () => void = () => {}
-  const gate = new Promise<void>((r) => (release = r))
-  routes["GET /api/repos/alice/hello"] = async () => {
-    await gate
-    return json(200, repo())
-  }
-  renderAt("/alice/hello/tree/main")
-  await vi.waitFor(() => expect(calls.length).toBeGreaterThanOrEqual(4))
-  for (const k of ["/branches", "/tree/main", "/commits?ref=main&page=1"]) {
-    expect(calls.some((c) => c.endsWith(k))).toBe(true)
-  }
-  release()
-  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
-})
-
-it("without a ref in the URL, commits wait for the repo (empty repos have none); branches do not", async () => {
-  setupRepo(null)
-  let release: () => void = () => {}
-  const gate = new Promise<void>((r) => (release = r))
-  routes["GET /api/repos/alice/hello"] = async () => {
-    await gate
-    return json(200, repo())
-  }
-  renderAt("/alice/hello")
-  await vi.waitFor(() => expect(calls.some((c) => c.endsWith("/branches"))).toBe(true))
-  expect(calls.some((c) => c.includes("/commits"))).toBe(false) // needs repo.empty
-  expect(calls.some((c) => c.includes("/tree/"))).toBe(false) // needs the default branch
-  release()
-  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
-})
 
 // ---- Screens on top of MockApiService (#102) ----
 
@@ -548,4 +380,68 @@ it("mock: delete branch: a 404 (already deleted elsewhere) is shown inline", asy
   await mock.deleteBranch("alice", "hello", "dev")
   await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete branch" }))
   expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("branch not found")
+})
+
+it("500 shows an error with retry that reloads", async () => {
+  const mock = await hello(null)
+  failGet(mock, /\/repos\/alice\/hello$/)
+  at("/alice/hello", mock)
+  expect(await screen.findByRole("alert")).toHaveTextContent("internal error")
+  await userEvent.click(screen.getByRole("button", { name: "Retry" }))
+  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
+})
+
+// Git cannot store an empty directory, so the answer is shaped on the instance.
+it("an empty directory shows a not-found state", async () => {
+  const mock = await hello(null)
+  alterGet<{ entries: unknown[] }>(mock, "/tree/main/src", (t) => ({ ...t, entries: [] }))
+  at("/alice/hello/tree/main/src", mock)
+  expect(await screen.findByTestId("not-found")).toBeInTheDocument()
+})
+
+// The UI never offers the default branch; the 400 the service answers for it is injected for the dev branch.
+it("delete branch: a 400 from the server is shown inline", async () => {
+  const mock = await hello("alice")
+  failNext(mock, "deleteBranch", 400, "cannot delete the default branch")
+  at("/alice/hello", mock)
+  await userEvent.click(await screen.findByRole("button", { name: "Delete branch" }))
+  await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete branch" }))
+  expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("cannot delete the default branch")
+  expect(await branchNames(mock)).toEqual(["dev", "main"])
+})
+
+it("file viewer: loading and error with retry", async () => {
+  const mock = await hello(null)
+  const release = failGetAfterHold(mock, "/blob/main/a.txt")
+  at("/alice/hello/blob/main/a.txt", mock)
+  expect(await screen.findByRole("status", { name: "Loading file" })).toBeInTheDocument()
+  release()
+  expect(await screen.findByRole("alert")).toHaveTextContent("internal error")
+  await userEvent.click(screen.getByRole("button", { name: "Retry" }))
+  expect(await screen.findByRole("heading", { name: "a.txt" })).toBeInTheDocument()
+})
+
+it("starts branches, tree and commits without waiting for the repo; README waits for the tree", async () => {
+  const mock = await hello(null)
+  const release = holdGet(mock, /\/repos\/alice\/hello$/)
+  at("/alice/hello/tree/main", mock)
+  await vi.waitFor(() => expect(readPaths(mock).length).toBeGreaterThanOrEqual(4))
+  for (const k of ["/branches", "/tree/main", "/commits?ref=main&page=1"]) {
+    expect(readPaths(mock).some((c) => c.endsWith(k))).toBe(true)
+  }
+  release()
+  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
+  await vi.waitFor(() => expect(readPaths(mock).some((c) => c.endsWith("/blob/main/README.md"))).toBe(true))
+})
+
+it("without a ref in the URL, commits wait for the repo (empty repos have none); branches do not", async () => {
+  const mock = await hello(null)
+  const release = holdGet(mock, /\/repos\/alice\/hello$/)
+  at("/alice/hello", mock)
+  await vi.waitFor(() => expect(readPaths(mock).some((c) => c.endsWith("/branches"))).toBe(true))
+  expect(readPaths(mock).some((c) => c.includes("/commits"))).toBe(false) // needs repo.empty
+  expect(readPaths(mock).some((c) => c.includes("/tree/"))).toBe(false) // needs the default branch
+  release()
+  expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
 })
