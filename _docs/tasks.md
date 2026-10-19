@@ -246,3 +246,7 @@ Docs, e2e, connect
 - #113 connect real frontend to backend on SQLite, smoke (#93, #99, #102, #103)
 
 Suggested order: #79, #81 and #100, #104 in parallel; then #82, #84, #101, #103; GORM areas #85-#92 in sequence; #93, #95, #99; #97, #98, #102; #111, #105, #106; #113, #107.
+
+## 121. Backend: remove stale pgx skip in TestStoreObjectsRepoGone
+Goal: `TestStoreObjectsRepoGone` runs on the pgx store again, so a write into a deleted repo is checked on every store.
+Description: Remove the `t.Skip("pgx store returns the raw driver error here")` at `backend/objectstore_test.go:273`. pgx already maps the error to `ErrForeignKey` (#88). Test-only change. Found in QA of #88.

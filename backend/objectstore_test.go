@@ -270,9 +270,6 @@ func TestStoreCommitBundle(t *testing.T) {
 
 func TestStoreObjectsRepoGone(t *testing.T) {
 	objectStores(t, func(t *testing.T, st Store, repo, _ int64) {
-		if _, ok := st.(*pgxStore); ok {
-			t.Skip("pgx store returns the raw driver error here")
-		}
 		oid, err := st.Objects(t.Context(), repo).PutObject(gitobj.TypeBlob, []byte("x"))
 		if err != nil {
 			t.Fatal(err)
