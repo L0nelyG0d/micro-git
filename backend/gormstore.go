@@ -305,18 +305,13 @@ func (g *gormStore) DeleteNonDefaultRef(ctx context.Context, repoID int64, name 
 	return errDefaultBranch
 }
 
-// Not ported yet.
-
-func (g *gormStore) CommitReachability(ctx context.Context, repoID int64, a, b string) (Reachability, error) {
-	return Reachability{}, errNotPorted
-}
-
 // firstParentSQL returns, per dialect, the expression that reads the first
 // parent oid out of the commit body column o.data, or NULL when the header
 // has none. This is the only place the dialects differ (the one variant of the
-// statement), and #90 reuses it. Both read only the first 100 bytes, which
-// cover "tree <40>\nparent <40>\n" (93 bytes), so the message is never
-// searched; this is the same header-only rule as the pgx version (store.go).
+// statement), and CommitReachability reuses it through parentSQL. Both read
+// only the first 100 bytes, which cover "tree <40>\nparent <40>\n" (94 bytes),
+// so the message is never searched; this is the same header-only rule as the
+// pgx version (store.go).
 //
 //   - postgres: bytea has no text cast that survives non-UTF-8 bytes, so the
 //     window goes through encode(..., 'escape') and a regular expression.
@@ -324,16 +319,79 @@ func (g *gormStore) CommitReachability(ctx context.Context, repoID int64, a, b s
 //     with GLOB, then the oid is cut out at its fixed offset (bytes 54..93).
 //
 // The returned arguments go with the expression's "?" placeholders.
-func firstParentSQL(g *gorm.DB) (string, []any) {
+func firstParentSQL(g *gorm.DB) (string, []any) { return parentSQL(g, 0) }
+
+// parentSQL is firstParentSQL for the k-th parent (0 is the first). Header
+// lines are fixed width ("tree <40>\n" is 46 bytes, each "parent <40>\n" 48),
+// so the k-th parent needs k earlier parent lines and a window of 100+48k
+// bytes; the expression is NULL when the header has fewer parents. k = 0 gives
+// exactly the first-parent expression.
+func parentSQL(g *gorm.DB, k int) (string, []any) {
+	window := 100 + 48*k
 	if g.Dialector.Name() == "sqlite" {
 		hex40 := strings.Repeat("[0-9a-f]", 40)
-		pat := "tree " + hex40 + "\nparent " + hex40 + "\n*"
-		return `CASE WHEN CAST(substr(o.data, 1, 100) AS TEXT) GLOB ? THEN substr(CAST(substr(o.data, 1, 100) AS TEXT), 54, 40) END`, []any{pat}
+		pat := "tree " + hex40 + "\n" + strings.Repeat("parent "+hex40+"\n", k+1) + "*"
+		return fmt.Sprintf(`CASE WHEN CAST(substr(o.data, 1, %[1]d) AS TEXT) GLOB ? THEN substr(CAST(substr(o.data, 1, %[1]d) AS TEXT), %[2]d, 40) END`, window, 54+48*k), []any{pat}
 	}
 	// objects.oid is char(40): the cast keeps oid = parent a bpchar comparison
 	// so the primary key is used (text would turn it into a scan per step).
-	return `CAST(substring(encode(substring(o.data from 1 for 100), 'escape') from ?) AS char(40))`,
-		[]any{`^tree [0-9a-f]{40}\nparent ([0-9a-f]{40})\n`}
+	re := `^tree [0-9a-f]{40}\n` + strings.Repeat(`parent [0-9a-f]{40}\n`, k) + `parent ([0-9a-f]{40})\n`
+	return fmt.Sprintf(`CAST(substring(encode(substring(o.data from 1 for %d), 'escape') from ?) AS char(40))`, window), []any{re}
+}
+
+// maxReachParents is how many parents per commit CommitReachability follows.
+// Parent lines are read at fixed offsets, so the number is fixed in the
+// statement; a commit with more parents than this (an octopus merge of 17 or
+// more branches) is followed through its first 16 only.
+const maxReachParents = 16
+
+// CommitReachability walks the parents of a and of b together, following every
+// parent, in a single recursive statement, so the number of statements does
+// not depend on the number of commits. Rows are (root, oid) pairs
+// deduplicated by UNION, so each commit is visited once per walk and the
+// recursion ends by itself. Parents are read with parentSQL (the header-only
+// rule of WalkFirstParents). A missing or non-commit oid, or parent, ends that
+// side of the walk; the answer is false, never an error.
+func (g *gormStore) CommitReachability(ctx context.Context, repoID int64, a, b string) (Reachability, error) {
+	var (
+		cases []string
+		kArgs []any
+		ks    []string
+	)
+	for k := 0; k < maxReachParents; k++ {
+		expr, args := parentSQL(g.db, k)
+		cases = append(cases, fmt.Sprintf("WHEN %d THEN %s", k, expr))
+		kArgs = append(kArgs, args...)
+		if k == 0 {
+			ks = append(ks, "SELECT 0 AS k")
+		} else {
+			ks = append(ks, fmt.Sprintf("SELECT %d", k))
+		}
+	}
+	query := `
+WITH RECURSIVE walk(root, oid) AS (
+  SELECT s.root, o.oid
+    FROM (SELECT 1 AS root, CAST(? AS text) AS oid UNION ALL SELECT 2, CAST(? AS text)) s
+    JOIN objects o ON o.repo_id = ? AND o.oid = s.oid AND o.type = 'commit'
+  UNION
+  SELECT w.root, p.oid
+    FROM walk w
+    JOIN objects o ON o.repo_id = ? AND o.oid = w.oid
+    CROSS JOIN (` + strings.Join(ks, " UNION ALL ") + `) idx
+    JOIN objects p ON p.repo_id = ? AND p.type = 'commit' AND p.oid = CASE idx.k ` + strings.Join(cases, " ") + ` END
+)
+SELECT COALESCE(MAX(CASE WHEN root = 2 AND oid = ? THEN 1 ELSE 0 END), 0) AS a_from_b,
+       COALESCE(MAX(CASE WHEN root = 1 AND oid = ? THEN 1 ELSE 0 END), 0) AS b_from_a
+  FROM walk`
+	// Placeholder order: seeds a, b and repo; step repo (current commit), repo
+	// (parent); the parent expressions; then a and b in the final select.
+	args := append([]any{a, b, repoID, repoID, repoID}, kArgs...)
+	args = append(args, a, b)
+	var row struct{ AFromB, BFromA int }
+	if err := g.db.WithContext(ctx).Raw(query, args...).Scan(&row).Error; err != nil {
+		return Reachability{}, mapGormErr(err)
+	}
+	return Reachability{AFromB: row.AFromB != 0, BFromA: row.BFromA != 0}, nil
 }
 
 // WalkFirstParents returns the first-parent chain from tip, newest first, at
