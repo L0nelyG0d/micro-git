@@ -30,7 +30,7 @@ MVP:
 
 Stretch, cut in this order if late: fast-forward merge of one branch into another; compare two branches; render `README.md`; rename a repository.
 
-Out of scope: clone/push/fetch, pack files, real merges and conflict resolution, tags, forks, pull requests, issues, SSH keys, binary files, private repositories, organizations.
+Out of scope: clone/push/fetch, pack files, real merges and conflict resolution, tags, forks, pull requests, issues, SSH keys, binary files, organizations. (Private repositories are in: see `private` below and "Rules".)
 
 ## Tables (`backend/db/schema.sql`)
 
@@ -39,7 +39,7 @@ The same four tables exist on both drivers: `schema.sql` is the Postgres referen
 | table | columns |
 |---|---|
 | `users` | `id`, `username` (unique case-insensitively, `[a-z0-9-]{3,32}`), `password_hash`, `created_at` |
-| `repos` | `id`, `owner_id` → users, `name` (unique per owner, case-insensitive), `description`, `default_branch` (default `main`), `created_at` |
+| `repos` | `id`, `owner_id` → users, `name` (unique per owner, case-insensitive), `description`, `default_branch` (default `main`), `created_at`, `private` (boolean, default false; a private repo is visible to its owner only, `404` for everyone else) |
 | `objects` | `repo_id` → repos (on delete cascade), `oid` char(40), `type` (`blob`/`tree`/`commit`, CHECK), `data` bytea (raw object body); primary key `(repo_id, oid)` |
 | `refs` | `repo_id` → repos (on delete cascade), `name`, `oid`; primary key `(repo_id, name)`; foreign key `(repo_id, oid)` → objects, so a branch can only point at a stored object (write the commit object before moving the ref) |
 
@@ -54,7 +54,7 @@ Routing uses `net/http` patterns. Errors are JSON `{"error": "..."}`.
 | endpoint | auth | notes |
 |---|---|---|
 | `GET /health` | none | `200 OK` (plain text); `HEAD` answers `200` without a body |
-| `POST /auth/register` | none | `201`; `409` username taken; `400` password shorter than 8 or bad username; `429` more than 10 attempts per IP per 15 min |
+| `POST /auth/register` | none | `201`; `409` username taken; `400` password not 8 to 72 bytes or bad username; `429` more than 10 attempts per IP per 15 min |
 | `POST /auth/login` | none | sets the `session` and `known_device` cookies; token never in the body; `429` while throttled (see "Rate limiting") |
 | `POST /auth/logout` | none | clears the `session` and `known_device` cookies; works without one (never `401`) |
 | `GET /auth/me` | cookie | `{id, username}` |
@@ -314,12 +314,13 @@ Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid
 
 ## Frontend
 
-Styling follows `_docs/design-system.md`.
+Styling follows `DESIGN.md` and `frontend/src/index.css` (colors, radius, density); `_docs/design-system.md` is superseded for visual values and still holds the non-visual rules and the approved packages.
 
 | route | page |
 |---|---|
 | `/login`, `/register` | auth forms |
 | `/` | repository list and "New repository" |
+| `/:owner` | profile: the owner's repositories (ProfilePage) |
 | `/:owner/:repo` | file tree, branch switcher, latest commit bar, rendered root `README.md`, Compare link |
 | `/:owner/:repo/tree/:ref/*` | the same repository page for a branch or commit `ref` and a subdirectory path |
 | `/:owner/:repo/blob/:ref/*` | file viewer; "Edit" for the owner |
@@ -327,6 +328,7 @@ Styling follows `_docs/design-system.md`.
 | `/:owner/:repo/new/:ref` | editor for a new file (path field); linked from an "Add file" button on the repo page (owner only) |
 | `/:owner/:repo/commits/:ref` | history |
 | `/:owner/:repo/commit/:oid` | commit detail with diff |
+| `/:owner/:repo/settings` | repository settings (SettingsPage): visibility, rename, branches, delete |
 | `/:owner/:repo/compare?base=&head=` | compare two branches (file diff of the two tips), readable by anyone |
 | `*` | not found page |
 

@@ -51,8 +51,8 @@ The orchestrator is a controller: it assigns issues to branches, launches engine
 
 QA turns every finding into a new GitHub issue (use `_docs/task_template.md`, add the next number to `tasks.md`, label UI findings `ui`). These issues follow the normal lifecycle, plus:
 
-- UI issues use the project skills in `.claude/skills` (pinned in `skills-lock.json`): the PM and engineer invoke `web-design-guidelines` to audit the affected screens, then `design-taste-frontend` and `image-to-code` to implement the fix. QA re-audits the result with `web-design-guidelines`
-- The skills never override `_docs/design-system.md` or the AGENTS.md rule for design questions: show the user several options before changing the look
+- UI issues use the project skills in `.claude/skills` (pinned in `skills-lock.json`; `.claude/` is git-ignored, so a fresh clone has no skills: restore them from `skills-lock.json` before a UI issue): the PM and engineer invoke `web-design-guidelines` to audit the affected screens, then `design-taste-frontend` and `image-to-code` to implement the fix. QA re-audits the result with `web-design-guidelines`
+- The skills never override `DESIGN.md` / `frontend/src/index.css` (the visual source of truth; `_docs/design-system.md` is superseded for visual values) or the AGENTS.md rule for design questions: show the user several options before changing the look
 - Non-UI issues (API, data, CLI) need none of these skills
 
 ## Dogfooding with mg

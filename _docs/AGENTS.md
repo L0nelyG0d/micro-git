@@ -5,7 +5,7 @@
 - `go test -race ./...` - the whole suite with the race detector
 - `make test-all` - backend on memory, sqlite and postgres (`scripts/test-matrix.sh`, own database on the local :54329 server or `TEST_DATABASE_URL`), then the frontend tests. Run it before closing a task that touches a store
 - `TEST_STORE=memory|sqlite|postgres go test -p 1 -race ./...` - the API suite on one store (`TEST_STORE` unset: postgres if `TEST_DATABASE_URL` is set, else sqlite). `memory` and `sqlite` need no database
-- Against a remote Neon test branch (~200ms per statement, only if the user asks) use `go test -p 1 -race -timeout 30m ./...` (the root package takes ~12 min); on the local :54329 server it takes minutes
+- Against a remote Neon test branch (~200ms per statement, only if the user asks) use `go test -p 1 -race -timeout 40m ./...` (the root package takes ~12 min; 40m is the value `make test` and `make test-all` use); on the local :54329 server it takes minutes
 - `go test ./path/to/pkg` - one package
 - `go test -run TestName ./...` - one test by name
 - `npm test` (in `frontend/`) - frontend tests
@@ -33,7 +33,7 @@ Documents - look these up when relevant, don't load them all up front
 - `_docs/tasks.md` - the backlog, one task per GitHub issue
 - `_docs/testing-guidelines.md` - read before writing tests
 - `_docs/process.md` sections "Testing-phase issues" (which skills the `ui` issues use: `web-design-guidelines`, `design-taste-frontend`, `image-to-code`) and "Dogfooding with mg" (committing our work with `bin/mg` and storing the hash) - read when QA files an issue or an issue is about to merge
-- `_docs/design-system.md` - read before anything touching the UI
+- `DESIGN.md` and `frontend/src/index.css` - the source of truth for colors, radius, density; read before anything touching the UI. `_docs/design-system.md` is superseded for visual values (it still holds the non-visual rules and the approved packages)
 
 Fast local test database (use this instead of Neon when time matters)
 

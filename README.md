@@ -211,8 +211,8 @@ tests run against `TEST_DATABASE_URL`; without it they are skipped. Point it at 
 database: tests write to it. On a small remote database (for example a
 suspended-on-idle Neon branch) keep `-p 1` (one package at a time, so the
 packages do not fight over the same database) and the long `-timeout`: the
-full backend suite takes roughly 10 minutes there (about 200 ms per
-statement). While developing, run one test: `go test -p 1 -run TestName .` in
+full backend suite takes roughly 10 to 12 minutes there (about 200 ms per
+statement; the `-timeout 40m` in `make test` and `make test-all` covers it). While developing, run one test: `go test -p 1 -run TestName .` in
 `backend/`. The backend tests include concurrency tests (`concurrency_test.go`:
 parallel commits, first commit, rename, branch create) and delete races
 (`delete_race_test.go`: reads and commits while the repository is deleted).
@@ -280,11 +280,14 @@ backend/                 package main: HTTP server (net/http patterns, no router
   treebuild/               apply file changes to a tree, rebuilding touched trees
   linediff/                line diffs of texts and of two trees
 frontend/                React + TypeScript + Vite + Tailwind + shadcn/ui
-  src/pages/               Home, Login, Register, RepoPage, BlobPage, EditorPage,
-                           HistoryPage, CommitPage, ComparePage, NotFound (+ AuthForm)
-  src/components/          Nav, FileTree, BranchSwitcher, RepoTable, NewRepoForm,
-                           MergeDialog, RenameRepoDialog, DeleteRepoDialog, ReadmeCard,
-                           LatestCommitBar, DiffView, Breadcrumbs, OidLink, StateViews, ui/
+  src/pages/               Home, Login, Register, ProfilePage, RepoPage, BlobPage,
+                           EditorPage, HistoryPage, CommitPage, SettingsPage,
+                           ComparePage, NotFound (+ AuthForm)
+  src/components/          Nav, PageToolbar, RepoHeader, RepoRows, RepoBadge, Avatar,
+                           Section, Pagination, NewRepoForm, FileTree, BranchSwitcher,
+                           MergeDialog, RenameRepoDialog, DeleteRepoDialog,
+                           VisibilityDialog, ReadmeCard, LatestCommitBar, DiffView,
+                           Breadcrumbs, OidLink, StateViews, ErrorBoundary, ui/
   src/auth/                AuthContext (current user)
   src/lib/                 api client, fetch hook, formatting, git helpers
 ```
@@ -310,7 +313,7 @@ Start the backend and frontend (Setup steps 5 and 6) and open
 <http://localhost:5173>.
 
 1. **Register.** Go to Register, enter a username (3 to 32 characters of
-   `a-z`, `0-9`, `-`) and a password of at least 8 characters, submit.
+   `a-z`, `0-9`, `-`) and a password of 8 to 72 bytes, submit.
    Expect: you are logged in and land on the home page without an error
    message (if the automatic login fails you land on the login page instead).
 2. **Log in.** Click Log out in the nav bar, then Log in with the same
@@ -378,8 +381,9 @@ Start the backend and frontend (Setup steps 5 and 6) and open
   here describes production hosting. Local-only is the accepted scope for this
   project (issue #22 closed as not planned).
 - Text files only (UTF-8, at most 1 MiB), at most 50 changes per commit; no
-  clone/push/fetch, tags, forks, pull requests or private repositories (see
-  "Out of scope" in `_docs/plan.md`).
+  clone/push/fetch, tags, forks or pull requests (see "Out of scope" in
+  `_docs/plan.md`). Repositories can be private: only the owner sees them, everyone
+  else gets `404`.
 - README rendering supports a safe subset only (headings, paragraphs, lists,
   fenced and inline code, bold, italic); links, images, tables and HTML are
   shown as plain text.
