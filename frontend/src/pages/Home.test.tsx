@@ -244,9 +244,6 @@ it("disables submit in flight and discards input on cancel", async () => {
   expect(screen.getByLabelText("Name")).toHaveValue("")
 })
 
-const pageOf = (page: number, hasMore: boolean, repos: unknown[] = [repo()]) =>
-  json(200, { repos, page, per_page: 50, has_more: hasMore })
-
 // Kept on fetch: needs a revalidation held pending.
 it("shows the cached list at once on a revisit while it revalidates", async () => {
   routes["GET /api/auth/me"] = loggedOut
