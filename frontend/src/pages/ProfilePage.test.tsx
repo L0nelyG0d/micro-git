@@ -3,7 +3,19 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import App from "@/App"
 import { cacheClear } from "@/lib/fetchCache"
-import { MemoryRouter, nextTask } from "@/test-utils"
+import { MemoryRouter, nextTask, renderWithMock } from "@/test-utils"
+import { MockApiService } from "@/services/MockApiService"
+
+const PW = "password1"
+/** A mock where alice owns `repos` and nobody is logged in. */
+async function withRepos(repos: { name: string; private?: boolean }[]) {
+  const mock = new MockApiService()
+  await mock.register("alice", PW)
+  await mock.login("alice", PW)
+  for (const r of repos) await mock.createRepo(r)
+  await mock.logout()
+  return mock
+}
 
 // Starting point for the ProfilePage suite (#56): extend here.
 let routes: Record<string, () => { status: number; body?: unknown }>
@@ -64,9 +76,9 @@ it("shows a loading state while the list is pending", async () => {
 })
 
 it("says so when the user has no visible repositories", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?owner=alice&page=1"] = aliceRepos([])
-  renderProfile()
+  const mock = new MockApiService()
+  await mock.register("alice", PW)
+  renderWithMock("/alice", mock)
   expect(await screen.findByText("alice has no repositories you can see.")).toBeInTheDocument()
   expect(screen.queryByRole("status", { name: "Loading repositories" })).not.toBeInTheDocument()
 })
@@ -86,13 +98,15 @@ it("shows the error block and Retry re-requests the same page", async () => {
 })
 
 it.each([
-  { who: "alice (the owner)", auth: me("alice"), shown: true },
-  { who: "another user", auth: me("bob"), shown: false },
-  { who: "a logged-out visitor", auth: loggedOut, shown: false },
-])("Create a repository link for $who: $shown", async ({ auth, shown }) => {
-  routes["GET /api/auth/me"] = auth
-  routes["GET /api/repos?owner=alice&page=1"] = aliceRepos([aRepo()])
-  renderProfile()
+  { who: "alice (the owner)", as: "alice", shown: true },
+  { who: "another user", as: "bob", shown: false },
+  { who: "a logged-out visitor", as: null, shown: false },
+])("Create a repository link for $who: $shown", async ({ as, shown }) => {
+  const mock = await withRepos([{ name: "hello" }])
+  await mock.register("bob", PW)
+  if (as) await mock.login(as, PW)
+  else await mock.logout()
+  renderWithMock("/alice", mock)
   await screen.findByRole("link", { name: "hello" })
   const link = screen.queryByRole("link", { name: "Create a repository" })
   if (shown) expect(link).toHaveAttribute("href", "/")
@@ -100,13 +114,11 @@ it.each([
 })
 
 it("badges private repos as Private and public ones as Public", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?owner=alice&page=1"] = aliceRepos([
-    aRepo({ id: 1, name: "open" }),
-    aRepo({ id: 2, name: "hidden", private: true }),
-  ])
-  renderProfile()
-  const rows = within(await screen.findByRole("list", { name: "Repository list" })).getAllByRole("listitem")
-  expect(within(rows[0]).getByText("Public")).toBeInTheDocument()
-  expect(within(rows[1]).getByText("Private")).toBeInTheDocument()
+  const mock = await withRepos([{ name: "open" }, { name: "hidden", private: true }])
+  await mock.login("alice", PW) // the owner sees both
+  renderWithMock("/alice", mock)
+  const list = within(await screen.findByRole("list", { name: "Repository list" }))
+  const row = (name: string) => list.getByRole("link", { name }).closest("li") as HTMLElement
+  expect(within(row("open")).getByText("Public")).toBeInTheDocument()
+  expect(within(row("hidden")).getByText("Private")).toBeInTheDocument()
 })
