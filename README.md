@@ -78,6 +78,10 @@ Run these steps in order.
    (`cd backend && DB_DRIVER=sqlite SQLITE_PATH=/tmp/mg.db JWT_SECRET=... go run .`).
    An empty `SQLITE_PATH` counts as unset and uses the default.
    The default `./data/` directory is git-ignored. `DATABASE_URL` is not used.
+   Shortcuts: `make run-sqlite` (data in `data/mg.db`, a random `JWT_SECRET` is
+   written to the git-ignored `.env` if missing), `make run-memory`, `make run-pg`,
+   `make test-all` (memory, sqlite, postgres, frontend) and `make clean-data`
+   (deletes only the SQLite files in `data/`).
 
    The pool also closes connections idle for more than 5 minutes
    (`MaxConnIdleTime`) and checks idle ones every 30 seconds

@@ -6,7 +6,8 @@
 # one process that needs it. Values are never echoed.
 
 .DEFAULT_GOAL := help
-.PHONY: help setup check-env schema backend frontend dev test test-fast build cli lint clean
+.PHONY: help setup check-env schema backend frontend dev test test-fast test-all build cli lint clean \
+	run-sqlite run-memory run-pg dev-secret clean-data
 
 # Backend port; override with `make dev PORT=9090`.
 PORT ?= 8080
@@ -17,6 +18,10 @@ VITE_PORT := 5173
 # No secrets: the role has no password.
 LOCAL_PG_PORT := 54329
 LOCAL_TEST_DB := postgres://test@localhost:$(LOCAL_PG_PORT)/mg?sslmode=disable
+
+# SQLite data directory owned by run-sqlite and clean-data (git-ignored data/).
+DATA_DIR := $(CURDIR)/data
+SQLITE_FILE := $(DATA_DIR)/mg.db
 
 # $(call envval,NAME) -> shell command printing the value of NAME from .env.
 envval = grep '^$(1)=' .env | head -n 1 | cut -d= -f2- | tr -d '\r'
@@ -42,7 +47,7 @@ cli: ## Build the command-line client to bin/mg (see README, "Command line")
 help: ## Show this help (default target)
 	@echo "Targets (PORT=$(PORT); override: make dev PORT=9090):"
 	@grep -E '^[a-z-]+:.*## ' $(MAKEFILE_LIST) | \
-		awk -F ':.*## ' '{ printf "  %-10s %s\n", $$1, $$2 }'
+		awk -F ':.*## ' '{ printf "  %-12s %s\n", $$1, $$2 }'
 
 setup: ## Install dependencies (go mod download, npm ci)
 	cd backend && go mod download
@@ -129,6 +134,49 @@ lint: ## gofmt -l (must list nothing), go vet, tsc -b, npm run lint if defined
 	cd backend && go vet ./...
 	cd frontend && npx --no-install tsc -b
 	@if grep -q '"lint"' frontend/package.json; then cd frontend && npm run lint; fi
+
+# Shell snippet: set JWT_SECRET from .env (made by dev-secret) and PORT, plus the
+# extra variables in $(1). The secret is never echoed.
+runenv = export JWT_SECRET="$$($(call envval,JWT_SECRET))" PORT="$(PORT)" $(1)
+
+dev-secret: ## Create .env with a random JWT_SECRET if it is missing (never printed)
+	@if [ -f .env ] && [ -n "$$($(call envval,JWT_SECRET))" ]; then exit 0; fi; \
+	if [ -f .env ]; then grep -v '^JWT_SECRET=' .env > .env.tmp || true; mv .env.tmp .env; \
+		if [ -s .env ] && [ -n "$$(tail -c 1 .env)" ]; then echo >> .env; fi; fi; \
+	if command -v openssl >/dev/null 2>&1; then s="$$(openssl rand -hex 32)"; \
+	else s="$$(LC_ALL=C head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"; fi; \
+	if [ "$${#s}" -lt 32 ]; then echo "dev-secret: could not generate a secret"; exit 1; fi; \
+	printf 'JWT_SECRET=%s\n' "$$s" >> .env; chmod 600 .env; \
+	echo "dev-secret: wrote a new JWT_SECRET to .env (git-ignored, not shown)"
+
+run-sqlite: dev-secret ## Run the backend on SQLite (data/mg.db), no Postgres needed
+	@$(call portcheck,$(PORT),run-sqlite)
+	@mkdir -p "$(DATA_DIR)"
+	@$(call runenv,DB_DRIVER=sqlite SQLITE_PATH="$(SQLITE_FILE)"); cd backend && exec go run .
+
+run-memory: dev-secret ## Run the backend with the in-memory store (data is lost on exit)
+	@$(call portcheck,$(PORT),run-memory)
+	@$(call runenv,STORE=memory); cd backend && exec go run .
+
+run-pg: check-env ## Run the backend on Postgres (DATABASE_URL from .env; same as backend)
+	@$(call portcheck,$(PORT),run-pg)
+	@$(loadenv) DB_DRIVER=postgres; cd backend && exec go run .
+
+test-all: ## Backend on memory, sqlite and postgres (TEST_STORE), then the frontend
+	cd backend && TEST_STORE=memory go test -p 1 -race -timeout 40m ./...
+	cd backend && TEST_STORE=sqlite go test -p 1 -race -timeout 40m ./...
+	$(MAKE) test
+
+clean-data: ## Delete the SQLite files in data/ (mg.db, -wal, -shm) and nothing else
+	@d="$(DATA_DIR)"; \
+	case "$$d" in ""|"/"|"$$HOME"|"$$HOME/") echo "clean-data: unsafe path '$$d'"; exit 1;; esac; \
+	if [ "$$(basename "$$d")" != "data" ] || [ ! -f "$(CURDIR)/Makefile" ]; then echo "clean-data: refusing '$$d'"; exit 1; fi; \
+	if [ -L "$$d" ]; then echo "clean-data: $$d is a symlink; refusing"; exit 1; fi; \
+	if [ ! -d "$$d" ]; then echo "clean-data: nothing to remove"; exit 0; fi; \
+	for f in mg.db mg.db-wal mg.db-shm mg.db-journal; do \
+		if [ -f "$$d/$$f" ] && [ ! -L "$$d/$$f" ]; then rm -f "$$d/$$f"; echo "clean-data: removed data/$$f"; fi; \
+	done; \
+	rmdir "$$d" 2>/dev/null || true
 
 clean: ## Remove backend/backend and frontend/dist (keeps .env and node_modules)
 	rm -rf backend/backend bin frontend/dist
