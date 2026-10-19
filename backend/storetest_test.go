@@ -12,7 +12,8 @@ import (
 
 // The shared API suite runs against the store named by TEST_STORE:
 //
-//	postgres (default)  the local Postgres in TEST_DATABASE_URL; tests skip when it is unset
+//	(unset)             postgres when TEST_DATABASE_URL is set, else sqlite
+//	postgres            the Postgres in TEST_DATABASE_URL; tests skip when it is unset, or fail when TEST_MATRIX_STRICT=1 (scripts/test-matrix.sh)
 //	memory              a new memStore per test, no database needed
 //	sqlite              gormStore on a temp file; every test runs except those named in sqlitePending (auth_test.go), which wait for #88 to #93 or need Postgres
 //
@@ -24,7 +25,10 @@ func testStoreKind() string {
 	if v := strings.ToLower(os.Getenv("TEST_STORE")); v != "" {
 		return v
 	}
-	return "postgres"
+	if os.Getenv("TEST_DATABASE_URL") != "" {
+		return "postgres"
+	}
+	return "sqlite"
 }
 
 // requirePostgres skips a test that is about Postgres itself (statement

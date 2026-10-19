@@ -120,6 +120,10 @@ test: ## Whole suite: backend, then frontend. DB: TEST_DATABASE_URL, else local 
 	cd backend && go test -p 1 -race -timeout 40m ./...
 	cd frontend && npm test -- --run
 
+.PHONY: test-all
+test-all: ## Backend suite on memory, sqlite and postgres (scripts/test-matrix.sh), per-store summary
+	scripts/test-matrix.sh
+
 test-fast: ## Quick tests without a database: pure Go packages and frontend
 	cd backend && go test ./gitobj/ ./treebuild/ ./linediff/
 	cd frontend && npm test -- --run
