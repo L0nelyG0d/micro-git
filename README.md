@@ -23,7 +23,7 @@ next free port) when `5173` is busy; use the URL Vite prints.
 
 ```sh
 make run-memory      # backend on :8080 with STORE=memory
-make frontend        # second terminal: http://localhost:5173 (or the port Vite prints)
+make frontend        # second terminal: http://localhost:$VITE_PORT (default 5173); if busy, make stops and tells you to set VITE_PORT=<other>
 ```
 
 **SQLite** (no Postgres, data kept in the git-ignored `data/mg.db`):
@@ -44,7 +44,7 @@ into the git-ignored `.env` if it has none; the value is never printed.
 ```sh
 make check-env       # DATABASE_URL and JWT_SECRET present?
 make schema          # apply backend/db/schema.sql (retries for Neon cold starts)
-make dev             # backend + frontend; open http://localhost:5173 (or the port Vite prints); Ctrl-C stops both
+make dev             # backend + frontend; open http://localhost:$VITE_PORT (default 5173; if busy, make stops and tells you to set VITE_PORT=<other>); Ctrl-C stops both
 ```
 
 `make run-pg` runs just the backend on Postgres (same as `make backend`).
@@ -176,7 +176,7 @@ Run these steps in order.
    `frontend/.env.local` and edit `VITE_USE_MOCK`. The default build
    (`npm run build` without the flag) contains no mock code.
 
-The Vite dev server on port 5173 (5174 if that is busy) proxies `/api/*` to `http://localhost:8080`,
+The Vite dev server on port 5173 (`VITE_PORT` under `make`; a direct `npm run dev` moves to 5174 if 5173 is busy) proxies `/api/*` to `http://localhost:8080`,
 stripping the `/api` prefix (`/api/repos` reaches the backend as `/repos`). If
 the backend listens elsewhere (a different `PORT`), start the frontend with the
 `API_PROXY_TARGET` environment variable, for example
@@ -293,7 +293,9 @@ frontend/                React + TypeScript + Vite + Tailwind + shadcn/ui
   src/auth/                AuthContext (current user)
   src/services/            api client (ApiService, HttpApiService, http.ts), mock
                            service (MockApiService, mockGit), index.ts picks one
-  src/lib/                 fetch hook, formatting, git helpers, markdown, pagination
+  src/lib/                 fetch hook and cache (useFetch, fetchCache), formatting, git
+                           helpers, markdown, pagination, repos types, editorDraft,
+                           lazyWithRetry, utils
 ```
 
 ### API contract
