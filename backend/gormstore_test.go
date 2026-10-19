@@ -121,7 +121,7 @@ func TestGormStoreRepos(t *testing.T) {
 			if _, err := st.UpdateRepo(ctx, 9999, RepoPatch{Description: s("x")}); !errors.Is(err, ErrNotFound) {
 				t.Errorf("missing repo err = %v, want ErrNotFound", err)
 			}
-			// Seed an object and a ref directly (their store methods are #87/#88).
+			// Seed an object and a ref directly (their ref methods are #88).
 			oid := OID(strings.Repeat("a", 40))
 			if err := db.Create(&ObjectModel{RepoID: other.ID, OID: oid, Type: "blob", Data: []byte("x")}).Error; err != nil {
 				t.Fatal(err)
@@ -226,13 +226,13 @@ func TestSqlitePendingIsValid(t *testing.T) {
 		}
 		src.Write(b)
 	}
-	reason := regexp.MustCompile(`#8[7-9]|#9[0-3]|needs Postgres`)
+	reason := regexp.MustCompile(`#8[89]|#9[0-3]|needs Postgres`)
 	for name, why := range sqlitePending {
 		if !strings.Contains(src.String(), "\nfunc "+name+"(t *testing.T)") {
 			t.Errorf("sqlitePending[%q]: no such Test function", name)
 		}
 		if !reason.MatchString(why) {
-			t.Errorf("sqlitePending[%q] = %q: reason must name #87 to #93 or say needs Postgres", name, why)
+			t.Errorf("sqlitePending[%q] = %q: reason must name #88 to #93 or say needs Postgres", name, why)
 		}
 	}
 }
