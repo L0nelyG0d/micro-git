@@ -28,6 +28,10 @@ frontend proxy follows automatically. `PORT` in `.env` is not used by `make`.
 `make` lists all targets (`backend`, `frontend`, `test`, `test-fast`, `build`,
 `lint`, `clean`). The manual steps below do the same by hand.
 
+No Postgres at hand? `make dev-sqlite` runs the same stack on a local SQLite
+file, and `make smoke-sqlite` is the integration smoke for it (steps and ports in
+`_docs/iterations.md`).
+
 ## Prerequisites
 
 - Go (the version in `backend/go.mod`)
