@@ -3,9 +3,11 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
+	"github.com/L0nelyG0d/micro-git/backend/treebuild"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
@@ -223,9 +225,81 @@ func (g *gormStore) DeleteRef(ctx context.Context, repoID int64, name string) er
 func (g *gormStore) DeleteNonDefaultRef(ctx context.Context, repoID int64, name string) error {
 	return errNotPorted
 }
-func (g *gormStore) WalkFirstParents(ctx context.Context, repoID int64, tip string, limit int) ([]CommitRow, error) {
-	return nil, errNotPorted
-}
 func (g *gormStore) CommitReachability(ctx context.Context, repoID int64, a, b string) (Reachability, error) {
 	return Reachability{}, errNotPorted
+}
+
+// firstParentSQL returns, per dialect, the expression that reads the first
+// parent oid out of the commit body column o.data, or NULL when the header
+// has none. This is the only place the dialects differ (the one variant of the
+// statement), and #90 reuses it. Both read only the first 100 bytes, which
+// cover "tree <40>\nparent <40>\n" (93 bytes), so the message is never
+// searched; this is the same header-only rule as the pgx version (store.go).
+//
+//   - postgres: bytea has no text cast that survives non-UTF-8 bytes, so the
+//     window goes through encode(..., 'escape') and a regular expression.
+//   - sqlite: no regular expressions; the window is cast to TEXT and matched
+//     with GLOB, then the oid is cut out at its fixed offset (bytes 54..93).
+//
+// The returned arguments go with the expression's "?" placeholders.
+func firstParentSQL(g *gorm.DB) (string, []any) {
+	if g.Dialector.Name() == "sqlite" {
+		hex40 := strings.Repeat("[0-9a-f]", 40)
+		pat := "tree " + hex40 + "\nparent " + hex40 + "\n*"
+		return `CASE WHEN CAST(substr(o.data, 1, 100) AS TEXT) GLOB ? THEN substr(CAST(substr(o.data, 1, 100) AS TEXT), 54, 40) END`, []any{pat}
+	}
+	// objects.oid is char(40): the cast keeps oid = parent a bpchar comparison
+	// so the primary key is used (text would turn it into a scan per step).
+	return `CAST(substring(encode(substring(o.data from 1 for 100), 'escape') from ?) AS char(40))`,
+		[]any{`^tree [0-9a-f]{40}\nparent ([0-9a-f]{40})\n`}
+}
+
+// WalkFirstParents returns the first-parent chain from tip, newest first, at
+// most limit commits, in one recursive statement (no query per commit). A
+// missing tip or a missing/non-commit parent in the middle of the chain gives
+// an error wrapping treebuild.ErrNotFound, not a shortened chain.
+func (g *gormStore) WalkFirstParents(ctx context.Context, repoID int64, tip string, limit int) ([]CommitRow, error) {
+	if limit < 1 {
+		return []CommitRow{}, nil
+	}
+	parent, parentArgs := firstParentSQL(g.db)
+	// Placeholders appear in this order: parent expr (anchor), repo, tip,
+	// parent expr (step), repo, limit, repo
+	// (the final join that fetches the bodies).
+	args := append([]any{}, parentArgs...)
+	args = append(args, repoID, tip)
+	args = append(args, parentArgs...)
+	args = append(args, repoID, limit, repoID)
+	query := `
+WITH RECURSIVE walk(oid, parent, depth) AS (
+  SELECT o.oid, ` + parent + `, 1
+    FROM objects o
+   WHERE o.repo_id = ? AND o.oid = ? AND o.type = 'commit'
+  UNION ALL
+  SELECT o.oid, ` + parent + `, w.depth + 1
+    FROM walk w
+    JOIN objects o ON o.repo_id = ? AND o.oid = w.parent AND o.type = 'commit'
+   WHERE w.depth < ?
+)
+SELECT w.oid, o.data, COALESCE(w.parent, '') AS parent
+  FROM walk w JOIN objects o ON o.repo_id = ? AND o.oid = w.oid ORDER BY w.depth`
+	var rows []struct {
+		OID    string `gorm:"column:oid"`
+		Data   []byte
+		Parent string
+	}
+	if err := g.db.WithContext(ctx).Raw(query, args...).Scan(&rows).Error; err != nil {
+		return nil, mapGormErr(err)
+	}
+	out := make([]CommitRow, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, CommitRow{OID: r.OID, Data: r.Data, Parent: r.Parent})
+	}
+	if len(out) == 0 {
+		return nil, fmt.Errorf("%w: %s", treebuild.ErrNotFound, tip)
+	}
+	if last := out[len(out)-1]; len(out) < limit && last.Parent != "" {
+		return nil, fmt.Errorf("%w: %s", treebuild.ErrNotFound, last.Parent)
+	}
+	return out, nil
 }
