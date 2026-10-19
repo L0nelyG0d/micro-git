@@ -1,5 +1,5 @@
 import { MemoryRouter } from "@/test-utils"
-import { renderWithMock } from "@/test-mock"
+import { installMock, renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
 import React from "react"
 import { render, screen, waitFor, within } from "@testing-library/react"
@@ -68,8 +68,7 @@ const emptyRepo = () =>
   })
 
 it("shows Log in and Register when logged out, and /auth/me 401 is not an error", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  renderAt("/")
+  renderWithMock("/", await aliceMock(false))
   expect(await screen.findByRole("link", { name: "Log in" })).toBeInTheDocument()
   expect(await screen.findByRole("link", { name: "Register" })).toBeInTheDocument()
   expect(screen.queryByText(/session unavailable/i)).not.toBeInTheDocument()
@@ -77,8 +76,7 @@ it("shows Log in and Register when logged out, and /auth/me 401 is not an error"
 })
 
 it("shows a loading state, then the username and Log out when logged in", async () => {
-  routes["GET /api/auth/me"] = me
-  renderAt("/")
+  renderWithMock("/", await aliceMock(true))
   expect(screen.getByRole("status", { name: "Loading session" })).toBeInTheDocument()
   expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument()
   expect(await screen.findByText("alice")).toBeInTheDocument()
@@ -232,8 +230,7 @@ it("stays logged in and shows an error when logout fails", async () => {
 })
 
 it("shows page not found with a link home for unknown URLs", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  renderAt("/nope/nope/nope/nope/nope/nope")
+  renderWithMock("/nope/nope/nope/nope/nope/nope", await aliceMock(false))
   expect(await screen.findByRole("heading", { name: "Page not found" })).toBeInTheDocument()
   expect(await screen.findByRole("link", { name: "Go home" })).toHaveAttribute("href", "/")
 })
@@ -250,14 +247,12 @@ it.each([
   ["/register", "Register · micro git"],
   ["/nope/nope/nope/nope/nope/nope", "Page not found · micro git"],
 ])("sets the document title for %s", async (path, title) => {
-  routes["GET /api/auth/me"] = loggedOut
-  renderAt(path)
+  renderWithMock(path, await aliceMock(false))
   await waitFor(() => expect(document.title).toBe(title))
 })
 
 it("has a skip link as the first tab stop that focuses main", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  renderAt("/")
+  renderWithMock("/", await aliceMock(false))
   await screen.findByRole("link", { name: "Register" })
   await userEvent.tab()
   expect(screen.getByRole("link", { name: "Skip to main content" })).toHaveFocus()
@@ -266,7 +261,7 @@ it("has a skip link as the first tab stop that focuses main", async () => {
 })
 
 it("under StrictMode does not focus main on first load and the skip link is the first tab stop", async () => {
-  routes["GET /api/auth/me"] = loggedOut
+  installMock(await aliceMock(false))
   render(
     <React.StrictMode>
       <MemoryRouter initialEntries={["/"]}>
@@ -281,8 +276,7 @@ it("under StrictMode does not focus main on first load and the skip link is the 
 })
 
 it("moves focus to main after a client-side navigation but not on first load", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  renderAt("/")
+  renderWithMock("/", await aliceMock(false))
   await screen.findByRole("link", { name: "Register" })
   expect(screen.getByRole("main")).not.toHaveFocus()
   await userEvent.click(screen.getByRole("link", { name: "Register" }))
@@ -290,8 +284,7 @@ it("moves focus to main after a client-side navigation but not on first load", a
 })
 
 it("focuses the first empty field after a failed submit and links it to its error", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  renderAt("/login")
+  renderWithMock("/login", await aliceMock(false))
   await screen.findByRole("link", { name: "Register" })
   await userEvent.click(await screen.findByRole("button", { name: "Log in" }))
   const username = screen.getByLabelText("Username")
@@ -307,9 +300,7 @@ it("focuses the first empty field after a failed submit and links it to its erro
 })
 
 it("focuses the password and ties it to the alert after a rejected login", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["POST /api/auth/login"] = () => json(401, { error: "invalid username or password" })
-  renderAt("/login")
+  renderWithMock("/login", await aliceMock(false))
   await screen.findByRole("link", { name: "Register" })
   await userEvent.type(await screen.findByLabelText("Username"), "alice")
   await userEvent.type(screen.getByLabelText("Password"), "wrongpass")
@@ -320,9 +311,7 @@ it("focuses the password and ties it to the alert after a rejected login", async
 })
 
 it("focuses the username and marks only it invalid when registering a taken username (409)", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["POST /api/auth/register"] = () => json(409, { error: "username already taken" })
-  renderAt("/register")
+  renderWithMock("/register", await aliceMock(false))
   await within(screen.getByRole("main")).findByRole("link", { name: "Log in" })
   await userEvent.type(await screen.findByLabelText("Username"), "alice")
   await userEvent.type(screen.getByLabelText("Password"), "secret123")
