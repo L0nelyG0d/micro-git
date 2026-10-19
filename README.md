@@ -2,44 +2,73 @@
 
 A small git-hosting site. Users register, create repositories, commit file
 changes from the browser, and browse branches, history, files and diffs. The
-backend (Go + PostgreSQL) stores blob / tree / commit objects in git's own
-format; the frontend (React + Vite) looks like a GitHub repository page.
+backend (Go) stores blob / tree / commit objects in git's own
+format on PostgreSQL, a SQLite file or in memory (your choice, see "Quick start"); the frontend (React + Vite) looks like a GitHub repository page.
 Clone, push and fetch of the git protocol are not supported; use the web UI or the `mg` command-line client (see "Command line"). See `_docs/plan.md` for the full
 feature list, endpoints, tables and rules.
 
 The original brainstorm chat, cleaned and redacted, is in [`_docs/brainstorm-history.md`](_docs/brainstorm-history.md).
 
-## Quick start with make
+## Quick start
 
-With Go, Node.js and npm, `psql` and a PostgreSQL database available, a fresh
-checkout needs no manual shell steps and no `source .env`:
+The backend has three interchangeable stores and the frontend can also run
+without any backend. Pick one. Every command is run from the repository root;
+`make setup` (go mod download + npm ci) comes first on a fresh checkout. The
+backend listens on `8080` and Vite on `5173`; if one is busy, `make` says so:
+add `PORT=<other>` (backend) or `VITE_PORT=<other>` (frontend).
+
+**Memory** (no database, data is lost on exit; good for a quick look):
 
 ```sh
-cp /path/to/your/.env .env   # or create it as described under "Setup", step 2
-make setup                   # go mod download + npm ci
-make check-env               # DATABASE_URL and JWT_SECRET (32+ bytes) present?
-make schema                  # apply backend/db/schema.sql (retries for Neon cold starts)
-make dev                     # backend + frontend; open http://localhost:5173; Ctrl-C stops both
+make run-memory      # backend on :8080 with STORE=memory
+make frontend        # second terminal: http://localhost:5173
 ```
 
-The backend port defaults to `8080`. If it is busy, `make` says so; pick
-another one with `make dev PORT=9090` (also `make backend PORT=9090`); the
-frontend proxy follows automatically. `PORT` in `.env` is not used by `make`.
-`make` lists all targets (`backend`, `frontend`, `test`, `test-fast`, `build`,
-`lint`, `clean`). The manual steps below do the same by hand.
+**SQLite** (no Postgres, data kept in the git-ignored `data/mg.db`):
 
-No Postgres at hand? `make dev-sqlite` runs the same stack on a local SQLite
-file, and `make smoke-sqlite` is the integration smoke for it (steps and ports in
-`_docs/iterations.md`). If a port is busy, add `PORT=<other>` (backend) or
-`VITE_PORT=<other>` (frontend, also for `make frontend` and `make dev`).
+```sh
+make dev-sqlite      # backend (DB_DRIVER=sqlite) + frontend together; Ctrl-C stops both
+make clean-data      # later: delete only the SQLite files in data/
+```
+
+`make run-sqlite` runs just the backend on SQLite (pair it with `make frontend`).
+`make smoke-sqlite` is the integration smoke on a temp SQLite file (steps in
+`_docs/iterations.md`). Memory and SQLite targets write a random `JWT_SECRET`
+into the git-ignored `.env` if it has none; the value is never printed.
+
+**PostgreSQL** (needs `psql` and a database; `.env` with `DATABASE_URL` and a
+32+ byte `JWT_SECRET`, see "Setup", step 2):
+
+```sh
+make check-env       # DATABASE_URL and JWT_SECRET present?
+make schema          # apply backend/db/schema.sql (retries for Neon cold starts)
+make dev             # backend + frontend; open http://localhost:5173; Ctrl-C stops both
+```
+
+`make run-pg` runs just the backend on Postgres (same as `make backend`).
+
+**Mock frontend** (no backend at all; the UI runs on an in-browser mock whose
+data is lost on reload):
+
+```sh
+cd frontend && npm ci && VITE_USE_MOCK=true npm run dev   # http://localhost:5173
+```
+
+`.env` is never sourced by `make` and `PORT` in `.env` is not used by `make`
+(use `PORT=` on the command line, for example `make dev PORT=9090`; the
+frontend proxy follows). `make help` lists all targets (`setup`, `check-env`,
+`schema`, `backend`, `frontend`, `dev`, `dev-secret`, `run-sqlite`, `dev-sqlite`,
+`smoke-sqlite`, `run-memory`, `run-pg`, `test`, `test-fast`, `test-all`,
+`clean-data`, `build`, `lint`, `cli`, `clean`). The manual steps below do the
+same by hand.
 
 ## Prerequisites
 
 - Go (the version in `backend/go.mod`)
 - Node.js and npm
-- A PostgreSQL database you can connect to (for example a Neon branch), plus a
-  second, separate one for tests
-- `psql` to apply the schema
+- For the Postgres store only: a PostgreSQL database you can connect to (for
+  example a Neon branch), plus a second, separate one for tests, and `psql` to
+  apply the schema. SQLite and memory need neither
 
 ## Setup
 
@@ -70,7 +99,8 @@ Run these steps in order.
    | `DB_DRIVER` | no | `postgres` (default) or `sqlite`. Validated even when `STORE=memory` |
    | `DATABASE_URL` | when `STORE` is not `memory` and `DB_DRIVER` is `postgres` | PostgreSQL connection string for the running backend |
    | `SQLITE_PATH` | no | SQLite file used when `DB_DRIVER=sqlite`. Defaults to `./data/mg.db` |
-   | `TEST_DATABASE_URL` | for DB tests | Connection string of a separate database or branch used by `go test`; the database tests are skipped when it is unset |
+   | `TEST_DATABASE_URL` | for Postgres tests | Connection string of a separate database or branch used by `go test`; the Postgres-only tests are skipped when it is unset (see "Tests") |
+   | `TEST_STORE` | no | Test only: `postgres`, `memory` or `sqlite`, the store the API test suite runs on (see "Tests") |
    | `JWT_SECRET` | yes | Key used to sign the session JWT. At least 32 bytes (the backend refuses to start with a shorter one); use a long random string, for example `openssl rand -base64 48` |
    | `DB_STATEMENT_TIMEOUT` | no | Postgres `statement_timeout` for every pooled connection, a Go duration from `1ms` to `1h` (default `15s`). A query that runs longer is cancelled and the request fails with a redacted 5xx |
    | `COOKIE_SECURE` | no | `true` adds the `Secure` attribute to the session cookie (needs HTTPS). Anything else, including unset, means off. Keep it off for local HTTP. Leaving it unset logs a startup warning |
@@ -83,12 +113,19 @@ Run these steps in order.
    (`cd backend && DB_DRIVER=sqlite SQLITE_PATH=/tmp/mg.db JWT_SECRET=... go run .`).
    An empty `SQLITE_PATH` counts as unset and uses the default.
    The default `./data/` directory is git-ignored. `DATABASE_URL` is not used.
+   The Postgres driver runs on `pgx`; the GORM store serves SQLite.
    Shortcuts: `make run-sqlite` (data in `data/mg.db`, a random `JWT_SECRET` is
    written to the git-ignored `.env` if missing), `make run-memory`, `make run-pg`,
    `make test-all` (memory, sqlite, postgres, frontend) and `make clean-data`
    (deletes only the SQLite files in `data/`).
+   SQLite settings: every connection gets `foreign_keys=ON`, `journal_mode=WAL`,
+   `synchronous=NORMAL`, `busy_timeout=10000` and `BEGIN IMMEDIATE`
+   transactions. There is one writer at a time (SQLite's write lock, not a
+   one-connection pool): a second writer waits up to 10 seconds instead of
+   failing with `SQLITE_BUSY`, and readers are not blocked. The pool
+   settings below (`DB_MAX_CONNS`, `DB_STATEMENT_TIMEOUT`) apply to Postgres only.
 
-   The pool also closes connections idle for more than 5 minutes
+   For Postgres the pool also closes connections idle for more than 5 minutes
    (`MaxConnIdleTime`) and checks idle ones every 30 seconds
    (`HealthCheckPeriod`); these two are fixed in code. An invalid
    `DB_MAX_CONNS` stops the backend at startup. Startup errors never include
@@ -147,18 +184,35 @@ the backend listens elsewhere (a different `PORT`), start the frontend with the
 ## Tests
 
 ```sh
-cd backend && go test -p 1 -race -timeout 40m ./...   # whole backend suite
+make test-all                                         # backend on memory, sqlite, postgres, then frontend
+cd backend && go test -p 1 -race -timeout 40m ./...   # whole backend suite on one store
 cd backend && go test ./gitobj/ ./treebuild/ ./linediff/  # pure packages, no database, seconds
 cd frontend && npm test -- --run                       # frontend tests (Vitest), once
 ```
 
-Export `.env` first (step 3) so the database tests run against
-`TEST_DATABASE_URL`; without it they are skipped. Point it at a throwaway
+The API suite runs against one store, chosen by `TEST_STORE`
+(`postgres`, `memory` or `sqlite`). Unset, it is `postgres` when
+`TEST_DATABASE_URL` is set and `sqlite` otherwise, so
+`TEST_STORE=memory go test -p 1 -race ./...` needs no database. Tests about
+Postgres itself (pgx store, statement counts, pool) skip on the other stores.
+
+`make test-all` runs `scripts/test-matrix.sh` (all three stores, one
+`pass/fail/skip` line each) and then the frontend tests;
+`scripts/test-matrix.sh sqlite` runs only the named stores. The postgres pass
+uses `TEST_DATABASE_URL`, else the local throwaway server on `:54329`
+(`_docs/AGENTS.md`), creates its own database `mg_matrix_<pid>` on it and drops
+it at the end; an unreachable server fails the matrix, it is not skipped. Every
+skipped test must be listed in `backend/known_skips.txt` (`<store> <test>`); an
+unlisted skip fails the run (after adding one on purpose, run
+`scripts/test-matrix.sh --update-skips`). Details: `_docs/testing-guidelines.md`.
+
+For the Postgres pass of a plain `go test`, export `.env` first (step 3) so the
+tests run against `TEST_DATABASE_URL`; without it they are skipped. Point it at a throwaway
 database: tests write to it. On a small remote database (for example a
 suspended-on-idle Neon branch) keep `-p 1` (one package at a time, so the
 packages do not fight over the same database) and the long `-timeout`: the
-full backend suite takes roughly 10 minutes there (about 200 ms per
-statement). While developing, run one test: `go test -p 1 -run TestName .` in
+full backend suite takes roughly 10 to 12 minutes there (about 200 ms per
+statement; the `-timeout 40m` in `make test` and `make test-all` covers it). While developing, run one test: `go test -p 1 -run TestName .` in
 `backend/`. The backend tests include concurrency tests (`concurrency_test.go`:
 parallel commits, first commit, rename, branch create) and delete races
 (`delete_race_test.go`: reads and commits while the repository is deleted).
@@ -168,7 +222,8 @@ parallel commits, first commit, rename, branch create) and delete races
 `.github/workflows/ci.yml` (GitHub Actions) runs on every push to `main`, every pull
 request and manually (`workflow_dispatch`). It runs only the mechanical gates: gofmt,
 `go vet`, the backend tests against a temporary Postgres service container (schema from
-`backend/db/schema.sql`, no secrets, no Neon), the frontend tests and build, the
+`backend/db/schema.sql`, no secrets, no Neon), the `backend-store` job (the same suite with
+`TEST_STORE=sqlite` and `TEST_STORE=memory`, no database), the frontend tests and build, the
 `openapi.yaml` lint and a secret scan. QA covers the rest: acceptance criteria,
 exploratory and browser checks (see `_docs/process.md`, "CI and QA").
 
@@ -210,19 +265,29 @@ backend/                 package main: HTTP server (net/http patterns, no router
   commits.go               POST commits (compare-and-swap on the ref)
   reading.go, history.go   tree/blob reads, commit log and commit detail
   compare.go               diff between two branch tips or commits
-  store.go, db.go          PostgreSQL access (pgx) for objects and refs
-  db/schema.sql            users, repos, objects, refs
+  storage.go               the Store interface and its error sentinels; handlers use only this
+  store.go, db.go          Postgres store (pgxStore on a pgx pool) for objects and refs
+  gormstore.go, gormobjects.go, gormrefs.go
+                           GORM store (SQLite; the Postgres dialect is tested too);
+                           sqliteDSNParams (pragmas) and InTx are in gormrefs.go
+  models.go, sqlite.go     GORM models + idempotent Migrate; OpenSQLite (pure-Go driver)
+  memstore.go              in-memory store (STORE=memory)
+  db/schema.sql            users, repos, objects, refs (the Postgres reference)
+  known_skips.txt          test skips the matrix accepts, per store
   *_test.go                tests next to the code, including concurrency_test.go and
                            delete_race_test.go (races on refs, unique indexes and deletes)
   gitobj/                  serialize, hash and parse blob/tree/commit (no DB, no HTTP)
   treebuild/               apply file changes to a tree, rebuilding touched trees
   linediff/                line diffs of texts and of two trees
 frontend/                React + TypeScript + Vite + Tailwind + shadcn/ui
-  src/pages/               Home, Login, Register, RepoPage, BlobPage, EditorPage,
-                           HistoryPage, CommitPage, ComparePage, NotFound (+ AuthForm)
-  src/components/          Nav, FileTree, BranchSwitcher, RepoTable, NewRepoForm,
-                           MergeDialog, RenameRepoDialog, DeleteRepoDialog, ReadmeCard,
-                           LatestCommitBar, DiffView, Breadcrumbs, OidLink, StateViews, ui/
+  src/pages/               Home, Login, Register, ProfilePage, RepoPage, BlobPage,
+                           EditorPage, HistoryPage, CommitPage, SettingsPage,
+                           ComparePage, NotFound (+ AuthForm)
+  src/components/          Nav, PageToolbar, RepoHeader, RepoRows, RepoBadge, Avatar,
+                           Section, Pagination, NewRepoForm, FileTree, BranchSwitcher,
+                           MergeDialog, RenameRepoDialog, DeleteRepoDialog,
+                           VisibilityDialog, ReadmeCard, LatestCommitBar, DiffView,
+                           Breadcrumbs, OidLink, StateViews, ErrorBoundary, ui/
   src/auth/                AuthContext (current user)
   src/lib/                 api client, fetch hook, formatting, git helpers
 ```
@@ -248,7 +313,7 @@ Start the backend and frontend (Setup steps 5 and 6) and open
 <http://localhost:5173>.
 
 1. **Register.** Go to Register, enter a username (3 to 32 characters of
-   `a-z`, `0-9`, `-`) and a password of at least 8 characters, submit.
+   `a-z`, `0-9`, `-`) and a password of 8 to 72 bytes, submit.
    Expect: you are logged in and land on the home page without an error
    message (if the automatic login fails you land on the login page instead).
 2. **Log in.** Click Log out in the nav bar, then Log in with the same
@@ -316,8 +381,9 @@ Start the backend and frontend (Setup steps 5 and 6) and open
   here describes production hosting. Local-only is the accepted scope for this
   project (issue #22 closed as not planned).
 - Text files only (UTF-8, at most 1 MiB), at most 50 changes per commit; no
-  clone/push/fetch, tags, forks, pull requests or private repositories (see
-  "Out of scope" in `_docs/plan.md`).
+  clone/push/fetch, tags, forks or pull requests (see "Out of scope" in
+  `_docs/plan.md`). Repositories can be private: only the owner sees them, everyone
+  else gets `404`.
 - README rendering supports a safe subset only (headings, paragraphs, lists,
   fenced and inline code, bold, italic); links, images, tables and HTML are
   shown as plain text.
