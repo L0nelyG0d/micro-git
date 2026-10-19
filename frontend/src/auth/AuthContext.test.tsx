@@ -17,7 +17,10 @@ async function mockMe(loggedIn: boolean) {
   await mock.register("alice", "password1")
   if (loggedIn) await mock.login("alice", "password1")
   installMock(mock)
+  current = mock
 }
+let current: MockApiService
+const installedMock = () => current
 
 let errorSpy: ReturnType<typeof vi.spyOn>
 beforeEach(() => {
@@ -25,7 +28,6 @@ beforeEach(() => {
 })
 afterEach(() => {
   errorSpy.mockRestore()
-  vi.unstubAllGlobals()
 })
 
 it("expireSession logs the user out with one toast, even when called twice in a row", async () => {
@@ -50,18 +52,18 @@ it("expireSession shows no toast when nobody is logged in", async () => {
 })
 
 it("a revalidation answered after a local logout does not bring the user back", async () => {
-  let release!: () => void
-  const gate = new Promise<void>((r) => (release = r))
-  let calls = 0
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => {
-      if (++calls === 2) await gate
-      return { status: 200, ok: true, json: async () => ({ id: calls === 1 ? 1 : 2, username: "alice" }) } as Response
-    }),
-  )
+  await mockMe(true)
+  const mock = installedMock()
   render(<AuthProvider><Probe /></AuthProvider>)
   await screen.findByText("user alice")
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  const real = mock.me.bind(mock)
+  vi.spyOn(mock, "me").mockImplementationOnce(async (...args) => {
+    const u = await real(...args) // the answer is read now (alice) but delivered late
+    await gate
+    return u
+  })
   await act(async () => { window.dispatchEvent(new Event("focus")) })
   act(() => auth.expireSession())
   expect(await screen.findByText("logged out")).toBeInTheDocument()
