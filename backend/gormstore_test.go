@@ -180,8 +180,8 @@ func TestGormStoreUnportedMethods(t *testing.T) {
 	if err := st.InTx(ctx, func(Store) error { return nil }); !errors.Is(err, errNotPorted) {
 		t.Errorf("InTx err = %v, want errNotPorted", err)
 	}
-	if _, _, err := st.Objects(ctx, 1).GetObject("x"); !errors.Is(err, errNotPorted) {
-		t.Errorf("Objects.GetObject err = %v, want errNotPorted", err)
+	if _, err := st.GetRef(ctx, 1, "main"); !errors.Is(err, errNotPorted) {
+		t.Errorf("GetRef err = %v, want errNotPorted", err)
 	}
 	if got := errNotPorted.Error(); got != "not implemented in gormStore yet" {
 		t.Errorf("message = %q", got)

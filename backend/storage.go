@@ -3,8 +3,10 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
+	"github.com/L0nelyG0d/micro-git/backend/gitobj"
 	"github.com/L0nelyG0d/micro-git/backend/linediff"
 	"github.com/L0nelyG0d/micro-git/backend/treebuild"
 )
@@ -20,7 +22,23 @@ var (
 	// ErrForeignKey: the write points at a row that no longer exists, for
 	// example objects of a repository that was deleted meanwhile.
 	ErrForeignKey = errors.New("foreign key violation")
+	// ErrInvalidOID: an object id that is not 40 lowercase hex characters.
+	// Postgres (char(40)) would reject a longer value while SQLite's text
+	// column accepts anything, so every store checks it in Go.
+	ErrInvalidOID = errors.New("invalid object id")
 )
+
+// checkOID returns ErrInvalidOID (wrapped with the offending value, cut to 64
+// bytes) unless oid is 40 lowercase hex characters.
+func checkOID(oid string) error {
+	if gitobj.ValidOID(oid) {
+		return nil
+	}
+	if len(oid) > 64 {
+		oid = oid[:64] + "..."
+	}
+	return fmt.Errorf("%w: %q", ErrInvalidOID, oid)
+}
 
 // errDefaultBranch is returned by DeleteNonDefaultRef when the branch is the
 // repository's default branch.
