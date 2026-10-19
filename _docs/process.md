@@ -45,7 +45,7 @@ The orchestrator is a controller: it assigns issues to branches, launches engine
 
 ## CI and QA
 
-`.github/workflows/ci.yml` runs the repeatable mechanical gates on every push to `main`, every pull request and on demand: gofmt, `go vet`, the backend suite (`go test -p 1 -race ./...` against a throwaway Postgres service container, never Neon), the frontend tests and build, `openapi.yaml` lint, and a secret scan. It needs no repository secrets. QA owns what CI cannot: acceptance criteria, exploratory and adversarial testing, browser and visual checks, and review of the tests. QA no longer re-runs gofmt, vet and the unit suites as its main evidence; it may rely on a green CI run plus its own targeted checks.
+`.github/workflows/ci.yml` runs the repeatable mechanical gates on every push to `main`, every pull request and on demand: gofmt, `go vet`, the backend suite (`go test -p 1 -race ./...` against a throwaway Postgres service container, never Neon; the same suite also runs with `TEST_STORE=sqlite` and `TEST_STORE=memory` in a parallel job with no database), the frontend tests and build, `openapi.yaml` lint, and a secret scan. It needs no repository secrets. QA owns what CI cannot: acceptance criteria, exploratory and adversarial testing, browser and visual checks, and review of the tests. QA no longer re-runs gofmt, vet and the unit suites as its main evidence; it may rely on a green CI run plus its own targeted checks.
 
 ## Testing-phase issues
 

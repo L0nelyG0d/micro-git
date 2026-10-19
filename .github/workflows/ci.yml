@@ -1,7 +1,8 @@
 # CI: mechanical gates only (format, vet, tidy go.mod, govulncheck,
 # unit/integration suites, build, OpenAPI lint, secret scan). Acceptance,
 # exploratory and browser checks stay with QA (see _docs/process.md, "CI and QA"). No repository secrets, no Neon:
-# the backend tests run against a throwaway Postgres service container.
+# the Postgres backend job uses a throwaway service container; the sqlite and
+# memory jobs need no database.
 name: CI
 
 on:
@@ -77,6 +78,35 @@ jobs:
           echo "::add-mask::$JWT_SECRET"
           export JWT_SECRET
           go test -p 1 -race -timeout 20m ./...
+
+  # The same suite on the two stores that need no service container. Runs in
+  # parallel with `backend` (Postgres). A failing store fails the workflow.
+  # Calls go test directly; when scripts/test-matrix.sh (#97) is on main this can
+  # call `scripts/test-matrix.sh ${{ matrix.store }}` to share its skip accounting.
+  backend-store:
+    name: Backend tests (${{ matrix.store }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        store: [sqlite, memory]
+    env:
+      TEST_STORE: ${{ matrix.store }}
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - uses: actions/setup-go@44694675825211faa026b3c33043df3e48a5fa00 # v6.0.0
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - name: Backend tests (TEST_STORE=${{ matrix.store }}, no database)
+        working-directory: backend
+        run: |
+          JWT_SECRET="$(openssl rand -base64 48)"
+          echo "::add-mask::$JWT_SECRET"
+          export JWT_SECRET
+          go test -p 1 -race -timeout 12m ./...
 
   frontend:
     name: Frontend (tests, build)
