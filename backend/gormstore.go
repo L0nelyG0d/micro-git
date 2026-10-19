@@ -6,15 +6,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/L0nelyG0d/micro-git/backend/gitobj"
-	"github.com/L0nelyG0d/micro-git/backend/linediff"
 	"github.com/L0nelyG0d/micro-git/backend/treebuild"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
 )
 
 // errNotPorted is returned by the gormStore methods that a later issue
-// (#86 to #92) ports. It is never a sentinel the handlers match on.
+// (#88 to #92) ports. It is never a sentinel the handlers match on.
 var errNotPorted = errors.New("not implemented in gormStore yet")
 
 // gormStore is the Store on GORM: one code path for SQLite and Postgres.
@@ -216,14 +214,6 @@ func (g *gormStore) ListRepos(ctx context.Context, viewerID int64, owner *string
 	return nil, errNotPorted
 }
 
-// Objects returns a treebuild.Store whose every call fails with errNotPorted,
-// because the interface has no error return.
-func (g *gormStore) Objects(ctx context.Context, repoID int64) treebuild.Store {
-	return notPortedObjects{}
-}
-func (g *gormStore) CommitBundle(ctx context.Context, repoID int64, oid string) (map[string]linediff.Object, bool, error) {
-	return nil, false, errNotPorted
-}
 func (g *gormStore) GetRef(ctx context.Context, repoID int64, name string) (string, error) {
 	return "", errNotPorted
 }
@@ -258,13 +248,3 @@ func (g *gormStore) CommitReachability(ctx context.Context, repoID int64, a, b s
 	return Reachability{}, errNotPorted
 }
 func (g *gormStore) InTx(ctx context.Context, fn func(Store) error) error { return errNotPorted }
-
-// notPortedObjects is the treebuild.Store of an unported gormStore.
-type notPortedObjects struct{}
-
-func (notPortedObjects) GetObject(oid string) (gitobj.Type, []byte, error) {
-	return "", nil, errNotPorted
-}
-func (notPortedObjects) PutObject(t gitobj.Type, body []byte) (string, error) {
-	return "", errNotPorted
-}

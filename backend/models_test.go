@@ -336,7 +336,7 @@ func toSet(lines []string) map[string]bool {
 // schema.sql (Postgres), table.column -> {SQLite type, reason}. Everything
 // else has the same declared type on both drivers.
 var sqliteTypeDifferences = map[string][2]string{
-	"objects.oid": {"text", "SQLite has no fixed-width char; char(40) on Postgres rejects values longer than 40, SQLite does not, so oid length is to be validated in the store layer, see #87"},
+	"objects.oid": {"text", "SQLite has no fixed-width char; char(40) on Postgres rejects values longer than 40, SQLite does not, so oid length is validated in the store layer (checkOID, #87)"},
 	"refs.oid":    {"text", "same as objects.oid"},
 }
 

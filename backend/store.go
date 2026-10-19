@@ -121,6 +121,11 @@ func (o *objectStore) PutObjects(objs []treebuild.Object) error {
 
 // GetObjects returns the existing objects among oids in one statement.
 func (o *objectStore) GetObjects(oids []string) (map[string]treebuild.Object, error) {
+	for _, oid := range oids {
+		if err := checkOID(oid); err != nil {
+			return nil, err
+		}
+	}
 	rows, err := o.rs.db.Query(o.ctx,
 		`SELECT oid, type, data FROM objects WHERE repo_id = $1 AND oid = ANY($2::text[])`,
 		o.rs.repoID, oids)
@@ -719,6 +724,9 @@ func (p *pgxStore) Objects(ctx context.Context, repoID int64) treebuild.Store {
 }
 
 func (p *pgxStore) CommitBundle(ctx context.Context, repoID int64, oid string) (map[string]linediff.Object, bool, error) {
+	if err := checkOID(oid); err != nil {
+		return nil, false, err
+	}
 	objs, found, err := p.rs(repoID).CommitBundle(ctx, oid)
 	return objs, found, mapErr(err)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/L0nelyG0d/micro-git/backend/gitobj"
 	"github.com/L0nelyG0d/micro-git/backend/treebuild"
@@ -28,13 +29,31 @@ func newRepoStore(t *testing.T, s *Server) *RepoStore {
 	return NewRepoStore(rawDB(s), id)
 }
 
+// newStoreRepo creates a user and a repository through the Store and returns
+// the repository id; both are removed when the test ends.
+func newStoreRepo(t *testing.T, s *Server) int64 {
+	t.Helper()
+	name := uniqueName(t)
+	uid, err := s.Store.CreateUser(context.Background(), name, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupUser(t, s, name)
+	r, err := s.Store.CreateRepo(context.Background(), uid, "r", "", false, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { s.Store.DeleteRepo(context.Background(), r.ID) }) // before the user cleanup (LIFO)
+	return r.ID
+}
+
+// TestObjectStore runs on whichever store TEST_STORE selects.
 func TestObjectStore(t *testing.T) {
-	requirePostgres(t)
 	s := testServer(t)
 	ctx := context.Background()
-	rs := newRepoStore(t, s)
-	other := newRepoStore(t, s)
-	objs := rs.Objects(ctx)
+	repo := newStoreRepo(t, s)
+	other := newStoreRepo(t, s)
+	objs := s.Store.Objects(ctx, repo)
 
 	oid, err := objs.PutObject(gitobj.TypeBlob, []byte("test content\n"))
 	if err != nil || oid != "d670460b4b4aece5915caf5c68d12f560a9fe3e4" {
@@ -43,9 +62,8 @@ func TestObjectStore(t *testing.T) {
 	if again, err := objs.PutObject(gitobj.TypeBlob, []byte("test content\n")); err != nil || again != oid {
 		t.Fatalf("second put = %q, %v", again, err)
 	}
-	var n int
-	if err := rawDB(s).QueryRow(ctx, `SELECT count(*) FROM objects WHERE repo_id = $1`, rs.repoID).Scan(&n); err != nil || n != 1 {
-		t.Errorf("rows = %d, err %v, want 1", n, err)
+	if n := countObjects(t, s, repo); n != 1 {
+		t.Errorf("rows = %d, want 1", n)
 	}
 
 	typ, body, err := objs.GetObject(oid)
@@ -55,7 +73,7 @@ func TestObjectStore(t *testing.T) {
 	if _, _, err := objs.GetObject("0000000000000000000000000000000000000000"); !errors.Is(err, treebuild.ErrNotFound) {
 		t.Errorf("missing oid: err = %v, want ErrNotFound", err)
 	}
-	if _, _, err := other.Objects(ctx).GetObject(oid); !errors.Is(err, treebuild.ErrNotFound) {
+	if _, _, err := s.Store.Objects(ctx, other).GetObject(oid); !errors.Is(err, treebuild.ErrNotFound) {
 		t.Errorf("object visible from another repo: err = %v", err)
 	}
 

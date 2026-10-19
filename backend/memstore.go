@@ -408,6 +408,11 @@ func (o *memObjects) PutObjects(objs []treebuild.Object) error {
 }
 
 func (o *memObjects) GetObjects(oids []string) (map[string]treebuild.Object, error) {
+	for _, oid := range oids {
+		if err := checkOID(oid); err != nil {
+			return nil, err
+		}
+	}
 	o.m.d.mu.RLock()
 	defer o.m.d.mu.RUnlock()
 	out := make(map[string]treebuild.Object, len(oids))
@@ -446,6 +451,9 @@ func (m *memStore) putLocked(repoID int64, oids []string, objs []treebuild.Objec
 }
 
 func (m *memStore) CommitBundle(ctx context.Context, repoID int64, oid string) (map[string]linediff.Object, bool, error) {
+	if err := checkOID(oid); err != nil {
+		return nil, false, err
+	}
 	m.d.mu.RLock()
 	defer m.d.mu.RUnlock()
 	objs := map[string]linediff.Object{}
