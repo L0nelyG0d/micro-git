@@ -1,53 +1,12 @@
 import { MemoryRouter } from "@/test-utils"
-import { installMock, renderWithMock } from "@/test-mock"
+import { ApiError } from "@/services/http"
+import { failNext, holdNext, installMock, networkErrorNext, renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
 import React from "react"
 import { render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
+import { expect, it, vi } from "vitest"
 import App from "./App"
-import { cacheClear } from "@/lib/fetchCache"
-
-type Handler = (body: unknown) => { status: number; body?: unknown; headers?: Record<string, string> } | Error
-let routes: Record<string, Handler>
-const calls: string[] = []
-
-function json(status: number, body?: unknown, headers: Record<string, string> = {}) {
-  return { status, body, headers }
-}
-
-beforeEach(() => {
-  cacheClear()
-  calls.length = 0
-  routes = { "GET /api/repos?page=1": () => json(200, { repos: [], page: 1, per_page: 50, has_more: false }) }
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      const key = `${init?.method ?? "GET"} ${url}`
-      calls.push(key)
-      expect(init?.credentials).toBe("include")
-      const h = routes[key]
-      if (!h) throw new Error(`unexpected fetch ${key}`)
-      const r = h(init?.body ? JSON.parse(init.body as string) : undefined)
-      if (r instanceof Error) throw r
-      return {
-        status: r.status,
-        ok: r.status >= 200 && r.status < 300,
-        json: async () => r.body,
-        headers: new Headers(r.headers),
-      } as Response
-    }),
-  )
-})
-afterEach(() => vi.unstubAllGlobals())
-
-function renderAt(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <App />
-    </MemoryRouter>,
-  )
-}
 
 /** A mock with alice (and her empty repo hello), logged in or not. */
 async function aliceMock(loggedIn: boolean) {
@@ -58,14 +17,6 @@ async function aliceMock(loggedIn: boolean) {
   if (!loggedIn) await mock.logout()
   return mock
 }
-
-const me = () => json(200, { id: 1, username: "alice" })
-const loggedOut = () => json(401, { error: "authentication required" })
-const emptyRepo = () =>
-  json(200, {
-    id: 1, owner: "alice", name: "hello", description: "", default_branch: "main",
-    empty: true, created_at: "2026-01-02T15:04:05Z",
-  })
 
 it("shows Log in and Register when logged out, and /auth/me 401 is not an error", async () => {
   renderWithMock("/", await aliceMock(false))
@@ -81,21 +32,6 @@ it("shows a loading state, then the username and Log out when logged in", async 
   expect(screen.queryByRole("link", { name: "Log in" })).not.toBeInTheDocument()
   expect(await screen.findByText("alice")).toBeInTheDocument()
   expect(await screen.findByRole("button", { name: "Log out" })).toBeInTheDocument()
-})
-
-// Kept on fetch: mock has no 500.
-it("shows a non-blocking indication on a 500 from /auth/me", async () => {
-  routes["GET /api/auth/me"] = () => json(500, { error: "internal error" })
-  renderAt("/")
-  expect(await screen.findByText(/session unavailable/i)).toBeInTheDocument()
-  expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
-})
-
-// Kept on fetch: mock has no network error.
-it("shows the indication on a network error", async () => {
-  routes["GET /api/auth/me"] = () => new TypeError("Failed to fetch")
-  renderAt("/")
-  expect(await screen.findByText(/session unavailable/i)).toBeInTheDocument()
 })
 
 it("logs in and goes back to the page the user came from", async () => {
@@ -117,58 +53,6 @@ it("shows the login error inline, clears the password and re-enables submit", as
   expect(await screen.findByRole("alert")).toHaveTextContent("invalid username or password")
   expect(await screen.findByLabelText("Password")).toHaveValue("")
   expect(await screen.findByRole("button", { name: "Log in" })).toBeEnabled()
-})
-
-// Kept on fetch: mock has no network error.
-it.each([
-  ["/login", "Log in", "POST /api/auth/login"],
-  ["/register", "Register", "POST /api/auth/register"],
-])("shows the unreachable text, not the browser's, on a network failure at %s", async (path, button, key) => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes[key] = () => new TypeError("Failed to fetch")
-  renderAt(path)
-  await within(screen.getByRole("main")).findByRole("button", { name: button })
-  await userEvent.type(await screen.findByLabelText("Username"), "alice")
-  await userEvent.type(screen.getByLabelText("Password"), "secret123")
-  await userEvent.click(screen.getByRole("button", { name: button }))
-  const alert = await screen.findByRole("alert")
-  expect(alert).toHaveTextContent("Could not reach the server. Check your connection and try again.")
-  expect(alert).not.toHaveTextContent(/failed to fetch/i)
-})
-
-// Kept on fetch: mock has no 429 or Retry-After.
-it("shows a friendly wait message when login is rate limited", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["POST /api/auth/login"] = () =>
-    json(429, { error: "too many attempts, try again later" }, { "Retry-After": "90" })
-  renderAt("/login")
-  await screen.findByRole("link", { name: "Register" })
-  await userEvent.type(await screen.findByLabelText("Username"), "alice")
-  await userEvent.type(screen.getByLabelText("Password"), "wrongpass")
-  await userEvent.click(screen.getByRole("button", { name: "Log in" }))
-  expect(await screen.findByRole("alert")).toHaveTextContent("Too many attempts. Please wait 2 minutes and try again.")
-  expect(await screen.findByRole("button", { name: "Log in" })).toBeEnabled()
-})
-
-// Kept on fetch: needs a request held in flight.
-it("disables submit while the request is in flight", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  let release!: () => void
-  const gate = new Promise<void>((r) => (release = r))
-  routes["POST /api/auth/login"] = () => me()
-  const inner = vi.mocked(fetch).getMockImplementation()!
-  vi.mocked(fetch).mockImplementation(async (u, i) => {
-    if (i?.method === "POST") await gate
-    return inner(u, i)
-  })
-  renderAt("/login")
-  await screen.findByRole("link", { name: "Register" })
-  await userEvent.type(await screen.findByLabelText("Username"), "alice")
-  await userEvent.type(screen.getByLabelText("Password"), "secret123")
-  await userEvent.click(screen.getByRole("button", { name: "Log in" }))
-  expect(screen.getByRole("button", { name: "Log in" })).toBeDisabled()
-  release()
-  await screen.findByRole("heading", { name: "Repositories" })
 })
 
 it("registers then logs in, in that order", async () => {
@@ -195,21 +79,6 @@ it("shows a 409 on register inline", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("username already taken")
 })
 
-// Kept on fetch: mock cannot fail the login step after a successful register.
-it("sends the user to /login with a message if login after register fails", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["POST /api/auth/register"] = () => json(201, { id: 1, username: "alice" })
-  routes["POST /api/auth/login"] = () => json(500, { error: "internal error" })
-  renderAt("/register")
-  // Scoped to <main>: the lazy Register page is what we wait for; the nav also has a "Log in" link.
-  await within(screen.getByRole("main")).findByRole("link", { name: "Log in" })
-  await userEvent.type(await screen.findByLabelText("Username"), "alice")
-  await userEvent.type(screen.getByLabelText("Password"), "secret123")
-  await userEvent.click(screen.getByRole("button", { name: "Register" }))
-  expect(await screen.findByRole("heading", { name: "Log in" })).toBeInTheDocument()
-  expect(await screen.findByRole("status", { name: "" })).toHaveTextContent(/account was created/i)
-})
-
 it("redirects a logged-in user from /login and /register to /", async () => {
   renderWithMock("/login", await aliceMock(true))
   expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
@@ -222,18 +91,6 @@ it("logs out, clears the session and goes to /", async () => {
   expect(await screen.findByRole("link", { name: "Log in" })).toBeInTheDocument()
   expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
   await expect(mock.me()).rejects.toMatchObject({ status: 401 })
-})
-
-// Kept on fetch: mock logout cannot fail.
-it("stays logged in and shows an error when logout fails", async () => {
-  routes["GET /api/auth/me"] = me
-  routes["POST /api/auth/logout"] = () => json(500, { error: "internal error" })
-  routes["GET /api/repos/alice/hello"] = emptyRepo
-  renderAt("/alice/hello")
-  await userEvent.click(await screen.findByRole("button", { name: "Log out" }))
-  expect(await screen.findByText(/could not log out/i)).toBeInTheDocument()
-  expect(await within(screen.getByRole("navigation", { name: "Main" })).findByText("alice")).toBeInTheDocument()
-  expect(await screen.findByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
 })
 
 it("shows page not found with a link home for unknown URLs", async () => {
@@ -329,4 +186,83 @@ it("focuses the username and marks only it invalid when registering a taken user
   expect(username).toHaveAttribute("aria-invalid", "true")
   expect(username).toHaveAttribute("aria-describedby", alert.id)
   expect(screen.getByLabelText("Password")).not.toHaveAttribute("aria-invalid", "true")
+})
+
+it("shows a non-blocking indication on a 500 from /auth/me", async () => {
+  const mock = await aliceMock(true)
+  failNext(mock, "me")
+  renderWithMock("/", mock)
+  expect(await screen.findByText(/session unavailable/i)).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: "Repositories" })).toBeInTheDocument()
+})
+
+it("shows the indication on a network error", async () => {
+  const mock = await aliceMock(true)
+  networkErrorNext(mock, "me")
+  renderWithMock("/", mock)
+  expect(await screen.findByText(/session unavailable/i)).toBeInTheDocument()
+})
+
+it.each([
+  ["/login", "Log in", "login"],
+  ["/register", "Register", "register"],
+] as const)("shows the unreachable text, not the browser's, on a network failure at %s", async (path, button, method) => {
+  const mock = await aliceMock(false)
+  networkErrorNext(mock, method)
+  renderWithMock(path, mock)
+  await within(screen.getByRole("main")).findByRole("button", { name: button })
+  await userEvent.type(await screen.findByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "secret123")
+  await userEvent.click(screen.getByRole("button", { name: button }))
+  const alert = await screen.findByRole("alert")
+  expect(alert).toHaveTextContent("Could not reach the server. Check your connection and try again.")
+  expect(alert).not.toHaveTextContent(/failed to fetch/i)
+})
+
+it("shows a friendly wait message when login is rate limited", async () => {
+  const mock = await aliceMock(false)
+  vi.spyOn(mock, "login").mockRejectedValueOnce(new ApiError(429, "too many attempts, try again later", 90))
+  renderWithMock("/login", mock)
+  await screen.findByRole("link", { name: "Register" })
+  await userEvent.type(await screen.findByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "wrongpass")
+  await userEvent.click(screen.getByRole("button", { name: "Log in" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent("Too many attempts. Please wait 2 minutes and try again.")
+  expect(await screen.findByRole("button", { name: "Log in" })).toBeEnabled()
+})
+
+it("disables submit while the request is in flight", async () => {
+  const mock = await aliceMock(false)
+  const release = holdNext(mock, "login")
+  renderWithMock("/login", mock)
+  await screen.findByRole("link", { name: "Register" })
+  await userEvent.type(await screen.findByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "secret123")
+  await userEvent.click(screen.getByRole("button", { name: "Log in" }))
+  expect(screen.getByRole("button", { name: "Log in" })).toBeDisabled()
+  release()
+  await screen.findByRole("heading", { name: "Repositories" })
+})
+
+it("sends the user to /login with a message if login after register fails", async () => {
+  const mock = new MockApiService()
+  failNext(mock, "login")
+  renderWithMock("/register", mock)
+  // Scoped to <main>: the lazy Register page is what we wait for; the nav also has a "Log in" link.
+  await within(screen.getByRole("main")).findByRole("link", { name: "Log in" })
+  await userEvent.type(await screen.findByLabelText("Username"), "alice")
+  await userEvent.type(screen.getByLabelText("Password"), "secret123")
+  await userEvent.click(screen.getByRole("button", { name: "Register" }))
+  expect(await screen.findByRole("heading", { name: "Log in" })).toBeInTheDocument()
+  expect(await screen.findByRole("status", { name: "" })).toHaveTextContent(/account was created/i)
+})
+
+it("stays logged in and shows an error when logout fails", async () => {
+  const mock = await aliceMock(true)
+  failNext(mock, "logout")
+  renderWithMock("/alice/hello", mock)
+  await userEvent.click(await screen.findByRole("button", { name: "Log out" }))
+  expect(await screen.findByText(/could not log out/i)).toBeInTheDocument()
+  expect(await within(screen.getByRole("navigation", { name: "Main" })).findByText("alice")).toBeInTheDocument()
+  expect(await screen.findByRole("heading", { name: "alice/hello" })).toBeInTheDocument()
 })
