@@ -1,6 +1,12 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
 import { pageRoutes } from "@/routes"
+import App from "@/App"
+import { cacheClear } from "@/lib/fetchCache"
+import { MockApiService } from "@/services/MockApiService"
+import { setServiceOverride } from "@/test-service"
+import { render } from "@testing-library/react"
+import { afterEach } from "vitest"
 import { createMemoryRouter, RouterProvider } from "react-router-dom"
 /**
  * Resolves on the next macrotask. Fetch mocks await it before answering so a
@@ -36,4 +42,24 @@ export function MemoryRouter({
     return r
   })
   return <RouterProvider router={router} />
+}
+
+afterEach(() => setServiceOverride(null))
+
+/**
+ * Renders the whole app (App layout + routes) at `path` on top of a fresh
+ * MockApiService, with the service swapped through the `@/services` mock in
+ * test-setup.ts. Returns the mock so a test can seed data or call its methods
+ * (e.g. logout() to expire the session) on the same instance the screens use.
+ * The mock is reset after each test.
+ */
+export function renderWithMock(path = "/", mock = new MockApiService()) {
+  cacheClear()
+  setServiceOverride(mock)
+  const view = render(
+    <MemoryRouter initialEntries={[path]}>
+      <App />
+    </MemoryRouter>,
+  )
+  return { mock, ...view }
 }
