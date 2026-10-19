@@ -105,7 +105,7 @@ func TestStoreSentinels(t *testing.T) {
 		if err := st.DeleteRepo(ctx, gone.ID); err != nil {
 			t.Fatal(err)
 		}
-		if err := st.CreateRef(ctx, gone.ID, "main", "a"); !errors.Is(err, ErrForeignKey) {
+		if err := st.CreateRef(ctx, gone.ID, "main", strings.Repeat("a", 40)); !errors.Is(err, ErrForeignKey) {
 			t.Errorf("got %v, want ErrForeignKey", err)
 		}
 		if ok, err := st.RepoExists(ctx, gone.ID); err != nil || ok {

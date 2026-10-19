@@ -177,8 +177,8 @@ func TestGormStoreUnportedMethods(t *testing.T) {
 	if _, err := st.ListRepos(ctx, 0, nil, 10, 0); !errors.Is(err, errNotPorted) {
 		t.Errorf("ListRepos err = %v, want errNotPorted", err)
 	}
-	if _, err := st.ListRefs(ctx, 1); !errors.Is(err, errNotPorted) {
-		t.Errorf("ListRefs err = %v, want errNotPorted", err)
+	if _, err := st.CommitReachability(ctx, 1, "", ""); !errors.Is(err, errNotPorted) {
+		t.Errorf("CommitReachability err = %v, want errNotPorted", err)
 	}
 	if got := errNotPorted.Error(); got != "not implemented in gormStore yet" {
 		t.Errorf("message = %q", got)

@@ -10,6 +10,7 @@ import (
 	"github.com/L0nelyG0d/micro-git/backend/treebuild"
 	"github.com/jackc/pgx/v5/pgconn"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 // errNotPorted is returned by the gormStore methods that a later issue
@@ -213,18 +214,81 @@ func (g *gormStore) ListRepos(ctx context.Context, viewerID int64, owner *string
 	return nil, errNotPorted
 }
 
+// Branches.
+
+// ListRefs returns the branches sorted bytewise by name, never nil. SQLite's
+// default BINARY collation is bytewise; Postgres needs COLLATE "C".
 func (g *gormStore) ListRefs(ctx context.Context, repoID int64) ([]Ref, error) {
-	return nil, errNotPorted
+	order := "name"
+	if g.db.Dialector.Name() == "postgres" {
+		order = `name COLLATE "C"`
+	}
+	var rows []RefModel
+	err := g.db.WithContext(ctx).Select("name", "oid").Where("repo_id = ?", repoID).Order(order).Find(&rows).Error
+	if err != nil {
+		return nil, mapGormErr(err)
+	}
+	refs := make([]Ref, 0, len(rows))
+	for _, r := range rows {
+		refs = append(refs, Ref{Name: r.Name, OID: string(r.OID)})
+	}
+	return refs, nil
 }
+
+// CreateRef adds a branch: ErrInvalidOID for a bad oid (before any write),
+// ErrConflict if the name is taken.
 func (g *gormStore) CreateRef(ctx context.Context, repoID int64, name, oid string) error {
-	return errNotPorted
+	if err := checkOID(oid); err != nil {
+		return err
+	}
+	res := g.db.WithContext(ctx).Clauses(clause.OnConflict{DoNothing: true}).
+		Create(&RefModel{RepoID: repoID, Name: name, OID: OID(oid)})
+	if res.Error != nil {
+		return mapGormErr(res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return ErrConflict
+	}
+	return nil
 }
+
+// DeleteRef removes a branch; ErrNotFound if it does not exist.
 func (g *gormStore) DeleteRef(ctx context.Context, repoID int64, name string) error {
-	return errNotPorted
+	res := g.db.WithContext(ctx).Where("repo_id = ? AND name = ?", repoID, name).Delete(&RefModel{})
+	if res.Error != nil {
+		return mapGormErr(res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
+
+// DeleteNonDefaultRef deletes a branch unless it is the default, decided inside
+// the DELETE so a concurrent set-default cannot slip in between. ErrNotFound if
+// the branch is missing, errDefaultBranch if it is the default.
 func (g *gormStore) DeleteNonDefaultRef(ctx context.Context, repoID int64, name string) error {
-	return errNotPorted
+	db := g.db.WithContext(ctx)
+	res := db.Exec(`DELETE FROM refs WHERE repo_id = ? AND name = ?
+		AND NOT EXISTS (SELECT 1 FROM repos WHERE id = ? AND default_branch = ?)`, repoID, name, repoID, name)
+	if res.Error != nil {
+		return mapGormErr(res.Error)
+	}
+	if res.RowsAffected > 0 {
+		return nil
+	}
+	var n int64
+	if err := db.Model(&RefModel{}).Where("repo_id = ? AND name = ?", repoID, name).Count(&n).Error; err != nil {
+		return mapGormErr(err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return errDefaultBranch
 }
+
+// Not ported yet.
+
 func (g *gormStore) CommitReachability(ctx context.Context, repoID int64, a, b string) (Reachability, error) {
 	return Reachability{}, errNotPorted
 }
