@@ -160,6 +160,33 @@ func reachSuite(t *testing.T, store Store, repoID int64) {
 		}
 	}
 
+	// Octopus merges with more parents than any fixed cap: the target is
+	// reachable only through the last parent (and the first), never skipped.
+	for _, n := range []int{16, 17, 18, 20, 40} {
+		var ps []string
+		for i := 0; i < n; i++ {
+			ps = append(ps, put(fmt.Sprint("leaf ", n, " ", i)))
+		}
+		big := put(fmt.Sprint("octopus ", n), ps...)
+		for _, i := range []int{0, n / 2, n - 1} {
+			got, err := store.CommitReachability(ctx, repoID, ps[i], big)
+			if err != nil || got != (Reachability{AFromB: true}) {
+				t.Errorf("octopus of %d, parent %d: %+v %v", n, i, got, err)
+			}
+		}
+		if got, err := store.CommitReachability(ctx, repoID, big, ps[n-1]); err != nil || got != (Reachability{BFromA: true}) {
+			t.Errorf("octopus of %d reversed: %+v %v", n, got, err)
+		}
+		if got, err := store.CommitReachability(ctx, repoID, c, big); err != nil || got != (Reachability{}) {
+			t.Errorf("octopus of %d, unrelated commit: %+v %v", n, got, err)
+		}
+		// a parent that is not stored skips only itself
+		gap := put(fmt.Sprint("gap ", n), append([]string{strings.Repeat("d", 40)}, ps...)...)
+		if got, err := store.CommitReachability(ctx, repoID, ps[n-1], gap); err != nil || got != (Reachability{AFromB: true}) {
+			t.Errorf("octopus of %d after a missing parent: %+v %v", n, got, err)
+		}
+	}
+
 	// A chain far deeper than any limit used elsewhere, with a merge at the
 	// bottom: the walk reaches both parents without a depth cap.
 	if _, ok := store.(*pgxStore); ok {
