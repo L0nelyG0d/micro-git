@@ -51,13 +51,22 @@ afterEach(() => setServiceOverride(null))
  * MockApiService, with the service swapped through the `@/services` mock in
  * test-setup.ts. Returns the mock so a test can seed data or call its methods
  * (e.g. logout() to expire the session) on the same instance the screens use.
- * `extra` renders next to the app inside the router. The mock is dropped after each test.
+ * `nav.history` are entries before `path` (for Back) and `nav.routerRef` receives the router. `extra` renders next to the app inside the router. The mock is dropped after each test.
  */
-export function renderWithMock(path = "/", mock = new MockApiService(), extra?: ReactNode) {
+export function renderWithMock(
+  path = "/",
+  mock = new MockApiService(),
+  extra?: ReactNode,
+  nav: { history?: string[]; routerRef?: (r: ReturnType<typeof createMemoryRouter>) => void } = {},
+) {
   cacheClear()
   setServiceOverride(mock)
   const view = render(
-    <MemoryRouter initialEntries={[path]}>
+    <MemoryRouter
+      initialEntries={[...(nav.history ?? []), path]}
+      initialIndex={nav.history?.length ?? 0}
+      routerRef={nav.routerRef}
+    >
       <App />
       {extra}
     </MemoryRouter>,
