@@ -180,21 +180,6 @@ it("409 not a fast-forward shows the message and advice, dialog stays open", asy
   expect(within(dlg).getByRole("button", { name: "Merge" })).toBeEnabled()
 })
 
-it("409 branch tip has moved offers Reload, which reloads the page data", async () => {
-  setup()
-  routes["POST /api/repos/alice/hello/merge"] = () =>
-    json(409, { error: "branch tip has moved", current_tip: OID2 })
-  renderAt("/alice/hello")
-  const dlg = await openDialog()
-  await userEvent.click(within(dlg).getByRole("button", { name: "Merge" }))
-  const alert = await within(dlg).findByRole("alert")
-  expect(alert).toHaveTextContent("branch tip has moved")
-  await userEvent.click(within(alert).getByRole("button", { name: "Reload" }))
-  await vi.waitFor(() =>
-    expect(calls.filter((c) => c === "GET /api/repos/alice/hello/branches").length).toBe(2),
-  )
-})
-
 it("400 already up to date is shown inline", async () => {
   renderWithMock("/alice/hello", await merging("same"))
   const dlg = await openDialog()
@@ -217,28 +202,41 @@ it("401 expires the session with a toast and hides owner actions", async () => {
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
 })
 
-it("long branch names are clipped inside the dialog and keep the full name as a title", async () => {
-  const long = "feature/" + "x".repeat(24) // 32 characters
-  setup("alice", {
-    branches: [
-      { name: long, oid: OID2, is_default: false },
-      { name: "main", oid: OID, is_default: true },
-    ],
-  })
+// Kept on fetch: the mock's merge has no compare-and-swap, so it never answers "branch tip has moved" (a backend race).
+it("409 branch tip has moved offers Reload, which reloads the page data", async () => {
+  setup()
+  routes["POST /api/repos/alice/hello/merge"] = () =>
+    json(409, { error: "branch tip has moved", current_tip: OID2 })
   renderAt("/alice/hello")
+  const dlg = await openDialog()
+  await userEvent.click(within(dlg).getByRole("button", { name: "Merge" }))
+  const alert = await within(dlg).findByRole("alert")
+  expect(alert).toHaveTextContent("branch tip has moved")
+  await userEvent.click(within(alert).getByRole("button", { name: "Reload" }))
+  await vi.waitFor(() =>
+    expect(calls.filter((c) => c === "GET /api/repos/alice/hello/branches").length).toBe(2),
+  )
+})
+it("long branch names are clipped inside the dialog and keep the full name as a title", async () => {
+  const long = "feature/" + "x".repeat(24) // 32 characters; "/" is not a valid branch character, so use dots
+  const name = long.replace("/", ".")
+  const mock = await merging("single")
+  await mock.logout()
+  await mock.login("alice", "password1")
+  await mock.createBranch("alice", "hello", { name, from: "main" })
+  renderWithMock("/alice/hello", mock)
   const dlg = await openDialog()
   // jsdom has no layout; the 320px result is checked in a real browser. Here:
   // the classes that stop the select from widening the dialog grid.
   expect(dlg.className).toContain("grid-cols-[minmax(0,1fr)]")
   const from = within(dlg).getByRole("combobox", { name: "Merge from" })
-  expect(from).toHaveAttribute("title", long)
+  expect(from).toHaveAttribute("title", name)
   expect(from.className).toContain("min-w-0")
-  expect(within(from).getByText(long).className).toContain("truncate")
+  expect(within(from).getByText(name).className).toContain("truncate")
 })
 
 it("dialog title and description wrap long unbroken strings", async () => {
-  setup()
-  renderAt("/alice/hello")
+  renderWithMock("/alice/hello", await merging("dev-ahead"))
   const dlg = await openDialog()
   for (const el of [within(dlg).getByText("Merge branches"), within(dlg).getByText(/^Fast-forward only/)]) {
     expect(el.className).toContain("min-w-0")
