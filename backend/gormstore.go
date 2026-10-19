@@ -208,10 +208,28 @@ func (g *gormStore) RepoExists(ctx context.Context, repoID int64) (bool, error) 
 	return n > 0, mapGormErr(err)
 }
 
-// Not ported yet.
-
+// ListRepos lists the repositories the viewer may see, newest first (id breaks
+// ties). Private ones are listed for their owner only (viewerID 0 is anonymous
+// and owns nothing); limit and offset apply after that filter. owner, when
+// set, matches the username case-insensitively.
 func (g *gormStore) ListRepos(ctx context.Context, viewerID int64, owner *string, limit, offset int) ([]Repo, error) {
-	return nil, errNotPorted
+	q := repoQuery + ` WHERE (NOT r.private OR r.owner_id = ?)`
+	args := []any{viewerID}
+	if owner != nil {
+		q += ` AND lower(u.username) = lower(?)`
+		args = append(args, *owner)
+	}
+	q += ` ORDER BY r.created_at DESC, r.id DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+	var rows []repoRow
+	if err := g.db.WithContext(ctx).Raw(q, args...).Scan(&rows).Error; err != nil {
+		return nil, mapGormErr(err)
+	}
+	repos := make([]Repo, 0, len(rows))
+	for _, r := range rows {
+		repos = append(repos, r.repo())
+	}
+	return repos, nil
 }
 
 // Branches.

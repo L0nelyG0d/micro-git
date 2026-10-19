@@ -160,6 +160,91 @@ func TestGormStoreRepos(t *testing.T) {
 	}
 }
 
+// ListRepos: the viewer rule, the case-insensitive owner filter, the newest-
+// first order with the id tie-break, and limit/offset after the filter.
+func TestGormStoreListReposVisibility(t *testing.T) {
+	for _, d := range dialects {
+		t.Run(d.name, func(t *testing.T) {
+			db := d.open(t)
+			if err := Migrate(db); err != nil {
+				t.Fatal(err)
+			}
+			st := newGormStore(db)
+			ctx := context.Background()
+			t0 := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+			alice, _ := st.CreateUser(ctx, "Alice", "h")
+			bob, _ := st.CreateUser(ctx, "bob", "h")
+			mk := func(owner int64, name string, private bool, sec int) {
+				t.Helper()
+				if _, err := st.CreateRepo(ctx, owner, name, "", private, t0.Add(time.Duration(sec)*time.Second)); err != nil {
+					t.Fatal(err)
+				}
+			}
+			mk(alice, "a1", false, 1)
+			mk(alice, "a2-priv", true, 2)
+			mk(bob, "b1", false, 3)
+			mk(bob, "b2-priv", true, 4)
+			mk(alice, "a3", false, 5)
+			names := func(viewer int64, owner *string, limit, offset int) string {
+				t.Helper()
+				rs, err := st.ListRepos(ctx, viewer, owner, limit, offset)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var n []string
+				for _, r := range rs {
+					n = append(n, r.Name)
+				}
+				return strings.Join(n, ",")
+			}
+			aliceName := "ALICE"
+			if got := names(0, nil, 10, 0); got != "a3,b1,a1" {
+				t.Errorf("anonymous = %q", got)
+			}
+			if got := names(bob, nil, 10, 0); got != "a3,b2-priv,b1,a1" {
+				t.Errorf("bob = %q (must not see a2-priv)", got)
+			}
+			if got := names(alice, nil, 10, 0); got != "a3,b1,a2-priv,a1" {
+				t.Errorf("alice = %q (must not see b2-priv)", got)
+			}
+			if got := names(0, &aliceName, 10, 0); got != "a3,a1" {
+				t.Errorf("anonymous, owner ALICE = %q", got)
+			}
+			if got := names(alice, &aliceName, 10, 0); got != "a3,a2-priv,a1" {
+				t.Errorf("alice, owner ALICE = %q", got)
+			}
+			if got := names(bob, &aliceName, 10, 0); got != "a3,a1" {
+				t.Errorf("bob, owner ALICE = %q", got)
+			}
+			// Pagination applies after the visibility filter: no gaps from hidden rows.
+			if got := names(0, nil, 2, 0) + "|" + names(0, nil, 2, 2) + "|" + names(0, nil, 2, 4); got != "a3,b1|a1|" {
+				t.Errorf("anonymous pages = %q", got)
+			}
+			if got := names(alice, nil, 2, 1); got != "b1,a2-priv" {
+				t.Errorf("alice limit 2 offset 1 = %q", got)
+			}
+			// Same created_at: the larger id comes first.
+			mk(bob, "t1", false, 9)
+			mk(bob, "t2", false, 9)
+			if got := names(0, nil, 2, 0); got != "t2,t1" {
+				t.Errorf("tie-break = %q", got)
+			}
+			// Toggling private is visible on the next list.
+			r, _ := st.FindRepo(ctx, "bob", "t2")
+			yes := true
+			if _, err := st.UpdateRepo(ctx, r.ID, RepoPatch{Private: &yes}); err != nil {
+				t.Fatal(err)
+			}
+			if got := names(0, nil, 2, 0); got != "t1,a3" {
+				t.Errorf("after making t2 private, anonymous = %q", got)
+			}
+			if fr, err := st.FindRepo(ctx, "bob", "t2"); err != nil || !fr.Private {
+				t.Errorf("FindRepo Private = %+v, %v", fr, err)
+			}
+		})
+	}
+}
+
 func TestGormStoreMapErrPassesOtherErrors(t *testing.T) {
 	boom := errors.New("boom")
 	if got := mapGormErr(boom); got != boom {
@@ -174,9 +259,6 @@ func TestGormStoreUnportedMethods(t *testing.T) {
 	db := openSQLiteForTest(t)
 	st := newGormStore(db)
 	ctx := context.Background()
-	if _, err := st.ListRepos(ctx, 0, nil, 10, 0); !errors.Is(err, errNotPorted) {
-		t.Errorf("ListRepos err = %v, want errNotPorted", err)
-	}
 	if _, err := st.CommitReachability(ctx, 1, "", ""); !errors.Is(err, errNotPorted) {
 		t.Errorf("CommitReachability err = %v, want errNotPorted", err)
 	}

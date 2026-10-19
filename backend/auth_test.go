@@ -77,19 +77,12 @@ func testServer(t *testing.T) *Server {
 // removed; "read": found by reading the test. An issue that ports methods
 // deletes the entries it unblocks.
 var sqlitePending = map[string]string{
-	"TestCommitReachabilityParents":    "#90 (ancestry; read)",
-	"TestCompare":                      "#90 (ancestry; read)",
-	"TestEmptyFlag":                    "#92 (ListRepos; run)",
-	"TestListRepos":                    "#92 (ListRepos; run)",
-	"TestListReposDefaultPageBoundary": "#92 (ListRepos; run)",
-	"TestListReposPagination":          "#92 (ListRepos; run)",
-	"TestListReposTieBreaker":          "#92 (ListRepos; run)",
-	"TestMergeEqualTipsUpToDate":       "#90 (ancestry; read)",
-	"TestMergeErrors":                  "#90 (ancestry; read)",
-	"TestMergeFastForward":             "#90 (ancestry; read)",
-	"TestMergeTipMoved":                "#90 (ancestry; read)",
-	"TestPrivateRepoPaginationHides":   "#92 (ListRepos; run)",
-	"TestPrivateRepoVisibility":        "#92 (ListRepos; run)",
+	"TestCommitReachabilityParents": "#90 (ancestry; read)",
+	"TestCompare":                   "#90 (ancestry; read)",
+	"TestMergeEqualTipsUpToDate":    "#90 (ancestry; read)",
+	"TestMergeErrors":               "#90 (ancestry; read)",
+	"TestMergeFastForward":          "#90 (ancestry; read)",
+	"TestMergeTipMoved":             "#90 (ancestry; read)",
 }
 
 // newSQLiteServer builds a Server on a gormStore over a temp SQLite file, or
