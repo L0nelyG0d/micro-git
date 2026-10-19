@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -188,7 +189,7 @@ func TestMemInTxRollback(t *testing.T) {
 		objs := []treebuild.Object{{Type: gitobj.TypeBlob, Body: []byte("rolled back")}}
 		oid := gitobj.Hash(gitobj.TypeBlob, []byte("rolled back"))
 		err := f.st.InTx(ctx, func(ts Store) error {
-			return ts.PutObjectsMoveRef(ctx, id, objs, "main", "stale", oid)
+			return ts.PutObjectsMoveRef(ctx, id, objs, "main", strings.Repeat("e", 40), oid)
 		})
 		if !errors.Is(err, ErrConflict) {
 			t.Fatalf("err = %v, want ErrConflict", err)

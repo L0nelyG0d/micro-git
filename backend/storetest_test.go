@@ -131,6 +131,10 @@ func dropBlobs(t *testing.T, s *Server, repoID int64) {
 		if _, err := st.pool.Exec(context.Background(), `DELETE FROM objects WHERE repo_id = $1 AND type = 'blob'`, repoID); err != nil {
 			t.Fatal(err)
 		}
+	case *gormStore:
+		if err := st.db.Exec(`DELETE FROM objects WHERE repo_id = ? AND type = 'blob'`, repoID).Error; err != nil {
+			t.Fatal(err)
+		}
 	case *memStore:
 		st.d.mu.Lock()
 		defer st.d.mu.Unlock()
