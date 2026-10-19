@@ -56,6 +56,9 @@ func testServer(t *testing.T) *Server {
 		t.Fatalf("TEST_STORE=%q: want memory, sqlite or postgres", kind)
 	}
 	url := os.Getenv("TEST_DATABASE_URL")
+	if url == "" && os.Getenv("TEST_MATRIX_STRICT") == "1" {
+		t.Fatal("TEST_STORE=postgres but TEST_DATABASE_URL is not set (TEST_MATRIX_STRICT=1: no silent skips)")
+	}
 	if url == "" {
 		t.Skip("TEST_DATABASE_URL is not set; skipping database test")
 	}

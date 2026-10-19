@@ -34,8 +34,16 @@
 - Do not use `t.Parallel()` in tests that share the same database rows
 
 ## Choosing the store (`TEST_STORE`)
-- The API suite runs against one store, chosen by `TEST_STORE`: `postgres` (default, needs `TEST_DATABASE_URL`), `memory` (no database, a fresh `memStore` per test), `sqlite` (not built yet, #93: every test skips)
+- The API suite runs against one store, chosen by `TEST_STORE`: `postgres` (needs `TEST_DATABASE_URL`), `memory` (no database, a fresh `memStore` per test), `sqlite` (`gormStore` on a temp file). With `TEST_STORE` unset the store is `postgres` when `TEST_DATABASE_URL` is set, else `sqlite`
 - `TEST_STORE=memory go test -p 1 -race ./...` runs with `TEST_DATABASE_URL` unset
+- Local Postgres for tests (throwaway, no password, no secret): `TEST_DATABASE_URL=postgres://test@localhost:54329/mg?sslmode=disable` (setup in `_docs/AGENTS.md`)
+
+### The matrix: `make test-all`
+- `make test-all` runs `scripts/test-matrix.sh` and then the frontend tests; the script runs `go test -p 1 -race ./...` on memory, sqlite and postgres in turn and prints one line per store: `pass`, `fail` and `skip` counts. `scripts/test-matrix.sh sqlite` runs only the named stores
+- Postgres uses `TEST_DATABASE_URL`; when it is unset the script falls back to the local :54329 server above (the throwaway server from `_docs/AGENTS.md`, no password). If the server it picked is not reachable the matrix FAILS with "not reachable", it never skips the postgres pass. The URL may have or lack a database path and a query string, and may carry user:password (shapes checked by `scripts/test-pgurl.sh`, which needs no database); a value that is not a `postgres://` URL fails the matrix
+- The script creates its own database `mg_matrix_<pid>` on that server (always, whatever database the URL named), applies `backend/db/schema.sql` to it and drops it at the end, so parallel runs and the shared `mg` database are untouched. TERM or Ctrl-C stops `go test` and still drops the database
+- No silent skips: every skipped test must be listed for its store in `backend/known_skips.txt` (`<store> <test name>`, one per line). A skip that is not listed fails the matrix; after adding a skip on purpose run `scripts/test-matrix.sh --update-skips` and review the diff. The script also sets `TEST_MATRIX_STRICT=1`: the script always hands the postgres pass a URL, so this only guards the Go side, making `testServer` fail instead of skip if `TEST_STORE=postgres` ever runs without `TEST_DATABASE_URL`
+- Known skips, all in `backend/known_skips.txt`: on memory and sqlite the Postgres-only tests (pgx store, statement counts, pool settings, migration checks, the `/postgres`, `/pgx`, `/gorm-postgres` subtests) skip because `TEST_DATABASE_URL` is unset for those passes; on postgres only `TestBaseline` (needs `BASELINE=1`) and the 10005-commit walk skip. `sqlitePending` (auth_test.go) is empty
 - Reach the store through `Server.Store`. For what the interface cannot do (count rows, drop objects, delete a user) use the helpers in `backend/storetest_test.go` (`countObjects`, `dropBlobs`, `deleteRepo`, `deleteUser`, `viewOf`), never `rawDB`
 - A test that is about Postgres itself (statement counts, the pgx store, the pool) starts with `requirePostgres(t)`, which skips it on the other stores
 
@@ -44,6 +52,6 @@
   not component internals
 
 ## Running
-- `go test ./...` must pass before committing
+- `go test ./...` must pass before committing; `make test-all` before closing a task that touches a store
 - `TEST_DATABASE_URL=<neon test branch url> go test ./...` to include database tests
 - `go test -race ./...` before closing a task

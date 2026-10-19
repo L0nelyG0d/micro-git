@@ -162,10 +162,9 @@ run-pg: check-env ## Run the backend on Postgres (DATABASE_URL from .env; same a
 	@$(call portcheck,$(PORT),run-pg)
 	@$(loadenv) DB_DRIVER=postgres; cd backend && exec go run .
 
-test-all: ## Backend on memory, sqlite and postgres (TEST_STORE), then the frontend
-	cd backend && TEST_STORE=memory go test -p 1 -race -timeout 40m ./...
-	cd backend && TEST_STORE=sqlite go test -p 1 -race -timeout 40m ./...
-	$(MAKE) test
+test-all: ## Backend on memory, sqlite, postgres (scripts/test-matrix.sh, isolated DB), then the frontend
+	scripts/test-matrix.sh
+	cd frontend && npm test -- --run
 
 clean-data: ## Delete the SQLite files in data/ (mg.db, -wal, -shm) and nothing else
 	@d="$(DATA_DIR)"; \
