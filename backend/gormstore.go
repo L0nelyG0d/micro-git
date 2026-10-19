@@ -183,6 +183,11 @@ func (g *gormStore) UpdateRepo(ctx context.Context, repoID int64, p RepoPatch) (
 	}
 	var out Repo
 	err := g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if p.DefaultBranch != nil {
+			if err := lockRepoRow(tx, repoID); err != nil {
+				return err
+			}
+		}
 		res := tx.Model(&RepoModel{}).Where(where, args...).Updates(set)
 		if res.Error != nil {
 			return res.Error
@@ -286,18 +291,39 @@ func (g *gormStore) DeleteRef(ctx context.Context, repoID int64, name string) er
 // the DELETE so a concurrent set-default cannot slip in between. ErrNotFound if
 // the branch is missing, errDefaultBranch if it is the default.
 func (g *gormStore) DeleteNonDefaultRef(ctx context.Context, repoID int64, name string) error {
-	db := g.db.WithContext(ctx)
+	return mapGormErr(g.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		if err := lockRepoRow(tx, repoID); err != nil {
+			return err
+		}
+		return deleteNonDefaultRef(tx, repoID, name)
+	}))
+}
+
+// lockRepoRow takes a transaction-scoped advisory lock keyed by the repo id on
+// Postgres (SQLite has a single writer, so it needs nothing). Setting the
+// default branch and deleting a branch both take it, so they run one after the
+// other and the later statement sees the earlier one's commit (#122). It is not
+// a lock on the repos row: that conflicts with the FK checks and cascade of
+// commits and DeleteRepo and made deadlocks more frequent.
+func lockRepoRow(tx *gorm.DB, repoID int64) error {
+	if tx.Dialector.Name() == "sqlite" {
+		return nil
+	}
+	return tx.Exec(`SELECT pg_advisory_xact_lock(?)`, repoID).Error
+}
+
+func deleteNonDefaultRef(db *gorm.DB, repoID int64, name string) error {
 	res := db.Exec(`DELETE FROM refs WHERE repo_id = ? AND name = ?
 		AND NOT EXISTS (SELECT 1 FROM repos WHERE id = ? AND default_branch = ?)`, repoID, name, repoID, name)
 	if res.Error != nil {
-		return mapGormErr(res.Error)
+		return res.Error
 	}
 	if res.RowsAffected > 0 {
 		return nil
 	}
 	var n int64
 	if err := db.Model(&RefModel{}).Where("repo_id = ? AND name = ?", repoID, name).Count(&n).Error; err != nil {
-		return mapGormErr(err)
+		return err
 	}
 	if n == 0 {
 		return ErrNotFound
