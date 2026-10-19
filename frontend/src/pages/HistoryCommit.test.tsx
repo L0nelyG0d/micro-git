@@ -69,38 +69,11 @@ async function withCommits(...commits: { message: string; changes: Change[] }[])
 const put = (path: string, content: string): Change => ({ path, content })
 const main = () => within(screen.getByRole("main"))
 
-it("lists commits with first line, author, date and full-oid link", async () => {
-  // Hold the repo answer so the loading state is observable (requests start in parallel and are fast).
-  let release: () => void = () => {}
-  const gate = new Promise<void>((r) => (release = r))
-  const repoRoute = routes["GET /api/repos/alice/hello"]
-  routes["GET /api/repos/alice/hello"] = async () => {
-    await gate
-    return repoRoute()
-  }
-  routes[`${H}?ref=main&page=1`] = () => json(200, page())
+// Kept on fetch: the mock answers at once, so a held request is the only way to observe the loading state.
+it("shows a loading state while the history request is pending", async () => {
+  routes[`${H}?ref=main&page=1`] = () => new Promise<Res>(() => {})
   renderAt("/alice/hello/commits/main")
   expect(await main().findByRole("status", { name: "Loading history" })).toBeInTheDocument()
-  release()
-  const link = await screen.findByRole("link", { name: "aaaaaaa" })
-  expect(link).toHaveAttribute("href", `/alice/hello/commit/${A}`)
-  expect(main().getByText("main", { selector: "span.font-mono" })).toHaveClass("max-sm:break-all")
-  expect(main().getByText("Add readme")).toBeInTheDocument()
-  expect(main().queryByText(/long body/)).not.toBeInTheDocument()
-  expect(main().getByText(formatDate(T))).toBeInTheDocument()
-})
-
-it("paginates with page in the URL: Previous disabled on page 1, Next follows has_more", async () => {
-  routes[`${H}?ref=main&page=1`] = () => json(200, page({ has_more: true }))
-  routes[`${H}?ref=main&page=2`] = () => json(200, page({ page: 2, has_more: false }))
-  renderAt("/alice/hello/commits/main")
-  await screen.findByRole("link", { name: "aaaaaaa" })
-  expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled()
-  await userEvent.click(screen.getByRole("link", { name: "Next" }))
-  await vi.waitFor(() => expect(calls).toContain(`${H}?ref=main&page=2`))
-  expect(await screen.findByText("Page 2")).toBeInTheDocument()
-  expect(screen.getByRole("button", { name: "Next" })).toBeDisabled()
-  expect(screen.getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/alice/hello/commits/main")
 })
 
 it("a page past the end shows an empty state", async () => {
@@ -217,13 +190,6 @@ it("root commit, truncated file and zero-hunk file", async () => {
   expect(main().getByText("no visible changes (only the final newline differs)")).toBeInTheDocument()
 })
 
-it("commit with no files", async () => {
-  routes[D] = () => json(200, detail([]))
-  renderAt(`/alice/hello/commit/${A}`)
-  expect(await screen.findByText("no files changed")).toBeInTheDocument()
-  expect(main().getByTestId("summary")).toHaveTextContent("0 files changed, 0 additions, 0 deletions")
-})
-
 it.each([
   ["an invalid commit id", "nope"],
   ["an unknown commit", "c".repeat(40)],
@@ -238,4 +204,39 @@ it("500 on commit detail shows retry", async () => {
   renderAt(`/alice/hello/commit/${A}`)
   expect(await screen.findByRole("alert")).toHaveTextContent("internal error")
   expect(screen.getByRole("button", { name: "Retry" })).toBeInTheDocument()
+})
+
+it("lists commits with first line, author, date and full-oid link", async () => {
+  const { mock, oids } = await withCommits({ message: "Add readme\n\nlong body", changes: [put("README.md", "# hi\n")] })
+  const when = (await mock.listCommits("alice", "hello", { ref: "main" })).commits[0].time
+  renderWithMock("/alice/hello/commits/main", mock)
+  const link = await screen.findByRole("link", { name: oids[0].slice(0, 7) })
+  expect(link).toHaveAttribute("href", `/alice/hello/commit/${oids[0]}`)
+  expect(main().getByText("main", { selector: "span.font-mono" })).toHaveClass("max-sm:break-all")
+  expect(main().getByText("Add readme")).toBeInTheDocument()
+  expect(main().queryByText(/long body/)).not.toBeInTheDocument()
+  expect(main().getByText("alice")).toBeInTheDocument()
+  expect(main().getByText(formatDate(when))).toBeInTheDocument()
+})
+
+it("paginates with page in the URL: Previous disabled on page 1, Next follows has_more", async () => {
+  const { mock } = await withCommits(
+    ...Array.from({ length: 51 }, (_, i) => ({ message: `c${i}`, changes: [put("a.txt", String(i))] })),
+  )
+  renderWithMock("/alice/hello/commits/main", mock)
+  await screen.findByText("c50")
+  expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled()
+  await userEvent.click(screen.getByRole("link", { name: "Next" }))
+  expect(await screen.findByText("Page 2")).toBeInTheDocument()
+  expect(await screen.findByText("c0")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Next" })).toBeDisabled()
+  expect(screen.getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/alice/hello/commits/main")
+})
+
+// Kept on fetch: the mock (like the backend) rejects a commit with no changes, so it cannot produce this.
+it("commit with no files", async () => {
+  routes[D] = () => json(200, detail([]))
+  renderAt(`/alice/hello/commit/${A}`)
+  expect(await screen.findByText("no files changed")).toBeInTheDocument()
+  expect(main().getByTestId("summary")).toHaveTextContent("0 files changed, 0 additions, 0 deletions")
 })
