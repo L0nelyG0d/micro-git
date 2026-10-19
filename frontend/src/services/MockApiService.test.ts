@@ -342,6 +342,19 @@ describe("merge", () => {
     expect(await message(svc.mergeBranches("ann", "r", { base: "main", head: "dev" }))).toBe("not a fast-forward")
   })
 
+  it("answers 409 branch tip has moved when the base moves before the swap, and changes nothing", async () => {
+    const c1 = await twoBranches()
+    const c2 = (await svc.createCommit("ann", "r", { branch: "dev", expected_tip: c1, message: "m", changes: [{ path: "a", content: "b" }] })).oid
+    svc.beforeMergeSwap = async () => {
+      await svc.createCommit("ann", "r", { branch: "main", expected_tip: c1, message: "race", changes: [{ path: "c", content: "d" }] })
+    }
+    const err = svc.mergeBranches("ann", "r", { base: "main", head: "dev" })
+    expect(await status(err)).toBe(409)
+    svc.beforeMergeSwap = async () => {}
+    expect(await message(svc.mergeBranches("ann", "r", { base: "main", head: "dev" }))).toBe("not a fast-forward")
+    expect((await svc.listBranches("ann", "r")).branches.find((b) => b.name === "dev")!.oid).toBe(c2)
+  })
+
   it("rejects bad input", async () => {
     await twoBranches()
     expect(await status(svc.mergeBranches("ann", "r", { base: "main", head: "main" }))).toBe(400)

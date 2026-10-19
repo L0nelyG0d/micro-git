@@ -1,64 +1,11 @@
-import { MemoryRouter } from "@/test-utils"
 import { renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
-import { render, screen, within } from "@testing-library/react"
+import { screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import App from "@/App"
-import { cacheClear } from "@/lib/fetchCache"
 import { toast } from "sonner"
 
-type Res = { status: number; body?: unknown }
-let routes: Record<string, (body: unknown) => Res>
-let calls: string[]
-
-const json = (status: number, body?: unknown): Res => ({ status, body })
-const OID = "a".repeat(40)
-const OID2 = "b".repeat(40)
-const branches = {
-  branches: [
-    { name: "dev", oid: OID2, is_default: false },
-    { name: "main", oid: OID, is_default: true },
-  ],
-}
-
-function setup(user: string | null = "alice", list = branches) {
-  routes["GET /api/auth/me"] = () =>
-    user ? json(200, { id: 1, username: user }) : json(401, { error: "authentication required" })
-  routes["GET /api/repos/alice/hello"] = () =>
-    json(200, {
-      id: 1, owner: "alice", name: "hello", description: "", default_branch: "main",
-      empty: false, created_at: "2026-01-02T15:04:05Z",
-    })
-  routes["GET /api/repos/alice/hello/branches"] = () => json(200, list)
-  routes["GET /api/repos/alice/hello/tree/main"] = () =>
-    json(200, { ref: "main", commit: OID, path: "", entries: [{ name: "a.txt", type: "blob", oid: OID }] })
-  routes["GET /api/repos/alice/hello/tree/dev"] = routes["GET /api/repos/alice/hello/tree/main"]
-  const commits = () =>
-    json(200, { commits: [{ oid: OID, message: "m", author: "alice", time: "2026-01-02T15:04:05Z", parents: [] }] })
-  routes["GET /api/repos/alice/hello/commits?page=1"] = commits
-  routes["GET /api/repos/alice/hello/commits?ref=main&page=1"] = commits
-  routes["GET /api/repos/alice/hello/commits?ref=dev&page=1"] = commits
-}
-
-beforeEach(() => {
-  cacheClear()
-  calls = []
-  routes = {}
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      const key = `${init?.method ?? "GET"} ${url}`
-      calls.push(key)
-      const h = routes[key]
-      if (!h) throw new Error(`unexpected fetch ${key}`)
-      const r = h(init?.body ? JSON.parse(init.body as string) : undefined)
-      return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
-    }),
-  )
-})
-afterEach(() => vi.unstubAllGlobals())
 beforeEach(() => {
   toastSpy = vi.spyOn(toast, "error").mockImplementation(() => "")
 })
@@ -93,14 +40,6 @@ const tipOf = async (mock: MockApiService, branch: string) =>
 
 function Loc() {
   return <div data-testid="loc">{useLocation().pathname}</div>
-}
-function renderAt(path: string) {
-  return render(
-    <MemoryRouter initialEntries={[path]}>
-      <App />
-      <Loc />
-    </MemoryRouter>,
-  )
 }
 async function openDialog() {
   await userEvent.click(await screen.findByRole("button", { name: "Merge" }))
@@ -202,20 +141,23 @@ it("401 expires the session with a toast and hides owner actions", async () => {
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello")
 })
 
-// Kept on fetch: the mock's merge has no compare-and-swap, so it never answers "branch tip has moved" (a backend race).
 it("409 branch tip has moved offers Reload, which reloads the page data", async () => {
-  setup()
-  routes["POST /api/repos/alice/hello/merge"] = () =>
-    json(409, { error: "branch tip has moved", current_tip: OID2 })
-  renderAt("/alice/hello")
+  const mock = await merging("dev-ahead")
+  const c1 = await tipOf(mock, "main")
+  renderWithMock("/alice/hello", mock)
   const dlg = await openDialog()
+  // Another tab moves main between the mock's checks and its compare-and-swap.
+  mock.beforeMergeSwap = async () => {
+    await mock.createCommit("alice", "hello", { branch: "main", expected_tip: c1, message: "race", changes: [{ path: "r.txt", content: "r" }] })
+    mock.beforeMergeSwap = undefined
+  }
   await userEvent.click(within(dlg).getByRole("button", { name: "Merge" }))
   const alert = await within(dlg).findByRole("alert")
   expect(alert).toHaveTextContent("branch tip has moved")
+  const loads = vi.spyOn(mock, "listBranches")
   await userEvent.click(within(alert).getByRole("button", { name: "Reload" }))
-  await vi.waitFor(() =>
-    expect(calls.filter((c) => c === "GET /api/repos/alice/hello/branches").length).toBe(2),
-  )
+  await vi.waitFor(() => expect(loads).toHaveBeenCalled())
+  expect(await tipOf(mock, "main")).not.toBe(await tipOf(mock, "dev"))
 })
 it("long branch names are clipped inside the dialog and keep the full name as a title", async () => {
   const long = "feature/" + "x".repeat(24) // 32 characters; "/" is not a valid branch character, so use dots
