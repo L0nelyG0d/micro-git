@@ -1,7 +1,7 @@
 import { MemoryRouter } from "@/test-utils"
 import { renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useLocation } from "react-router-dom"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
@@ -77,34 +77,6 @@ const type = async (label: string, text: string) => {
   await userEvent.clear(el)
   if (text) await userEvent.type(el, text)
 }
-
-it("400 file too large is shown inline and the form keeps its values", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  routes["POST /api/repos/alice/hello/commits"] = () => json(400, { error: "file too large: a.txt" })
-  renderAt("/alice/hello/edit/main/a.txt")
-  await screen.findByLabelText("File content")
-  await type("File content", "keep me")
-  await type("Commit message", "Msg")
-  await waitFor(() => expect(commitBtn()).toBeEnabled())
-  await userEvent.click(commitBtn())
-  expect(await screen.findByText("file too large: a.txt")).toBeInTheDocument()
-  expect(screen.getByLabelText("File content")).toHaveValue("keep me")
-  expect(screen.getByLabelText("Commit message")).toHaveValue("Msg")
-  expect(commitBtn()).toBeEnabled()
-})
-
-it("403 on submit shows an error", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  routes["POST /api/repos/alice/hello/commits"] = () => json(403, { error: "forbidden" })
-  renderAt("/alice/hello/edit/main/a.txt")
-  await screen.findByLabelText("File content")
-  await type("Commit message", "Msg")
-  await waitFor(() => expect(commitBtn()).toBeEnabled())
-  await userEvent.click(commitBtn())
-  expect(await screen.findByText("forbidden")).toBeInTheDocument()
-})
 
 it("disables Commit while submitting (no double submit)", async () => {
   setup()
@@ -455,4 +427,33 @@ it("mock: dirty editor: an in-app link asks first, Back after typing then revert
   void navRouter!.navigate(-1)
   await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(/^\/alice\/hello\/tree\/main$/))
   expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+})
+
+it("mock: 400 file too large is shown inline and the form keeps its values", async () => {
+  const mock = await editorMock("alice")
+  open(EDIT, mock)
+  await screen.findByLabelText("File content")
+  const big = "x".repeat((1 << 20) + 1)
+  fireEvent.change(screen.getByLabelText("File content"), { target: { value: big } })
+  await type("Commit message", "Msg")
+  await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await userEvent.click(commitBtn())
+  expect(await screen.findByText("file too large: a.txt")).toBeInTheDocument()
+  expect(screen.getByLabelText("File content")).toHaveValue(big)
+  expect(screen.getByLabelText("Commit message")).toHaveValue("Msg")
+  expect(commitBtn()).toBeEnabled()
+  expect(await contentAt(mock, "main")).toBe("hello\n")
+})
+
+it("mock: 403 on submit shows an error (the session switched to another user behind the page)", async () => {
+  const mock = await editorMock("alice")
+  open(EDIT, mock)
+  await screen.findByLabelText("File content")
+  await type("Commit message", "Msg")
+  await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await mock.logout()
+  await mock.login("bob", "password1")
+  await userEvent.click(commitBtn())
+  expect(await screen.findByText("forbidden")).toBeInTheDocument()
+  expect(await contentAt(mock, "main")).toBe("hello\n")
 })

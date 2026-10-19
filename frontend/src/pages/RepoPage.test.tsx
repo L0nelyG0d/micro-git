@@ -111,48 +111,16 @@ async function openCreate() {
   return screen.getByLabelText("Branch name")
 }
 
-it("create branch: a 400 from the server is shown inline in the dialog", async () => {
-  setupRepo("alice")
-  routes["POST /api/repos/alice/hello/branches"] = () => json(400, { error: "invalid branch name" })
-  renderAt("/alice/hello")
-  await userEvent.type(await openCreate(), "x")
-  await userEvent.click(within(screen.getByRole("dialog")).getByRole("button", { name: "Create branch" }))
-  expect(await within(screen.getByRole("dialog")).findByRole("alert")).toHaveTextContent("invalid branch name")
-})
-
-it("delete repo: cancel sends no request; failure shows the error", async () => {
-  setupRepo("alice")
-  renderAt("/alice/hello/settings")
-  await userEvent.click(await screen.findByRole("button", { name: "Delete repository" }))
-  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
-  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
-  expect(calls.some((c) => c.startsWith("DELETE"))).toBe(false)
-
-  routes["DELETE /api/repos/alice/hello"] = () => json(403, { error: "forbidden" })
-  await userEvent.click(screen.getByRole("button", { name: "Delete repository" }))
-  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete repository" }))
-  expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("forbidden")
-  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
-})
-
-it("delete branch: cancel sends nothing; 400 and 404 errors are shown inline", async () => {
+// Kept on fetch: the UI never offers the default branch, so only a transport stub can return this 400.
+it("delete branch: a 400 from the server is shown inline", async () => {
   setupRepo("alice")
   renderAt("/alice/hello")
+  routes["DELETE /api/repos/alice/hello/branches/dev"] = () => json(400, { error: "cannot delete the default branch" })
   await userEvent.click(await screen.findByRole("button", { name: "Delete branch" }))
   await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
-  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
-  expect(calls.some((c) => c.startsWith("DELETE"))).toBe(false)
-
-  for (const [status, msg] of [[400, "cannot delete the default branch"], [404, "branch not found"]] as const) {
-    routes["DELETE /api/repos/alice/hello/branches/dev"] = () => json(status, { error: msg })
-    await userEvent.click(screen.getByRole("button", { name: "Delete branch" }))
-    await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
-    await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete branch" }))
-    expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent(msg)
-    await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
-  }
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete branch" }))
+  expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("cannot delete the default branch")
 })
-
 
 const EXPIRED = "Your session has expired. Log in again."
 function expectToast() {
@@ -178,18 +146,11 @@ const blob = (o: Record<string, unknown> = {}) => ({
   ...o,
 })
 
-it("file viewer 404 ref not found shows a not-found state", async () => {
-  setupRepo(null)
-  routes["GET /api/repos/alice/hello/blob/main/x"] = () => json(404, { error: "ref not found" })
-  renderAt("/alice/hello/blob/main/x")
-  expect(await screen.findByTestId("not-found")).toHaveTextContent("ref not found")
-})
-
 it("file viewer: loading and error with retry", async () => {
   setupRepo(null)
   routes["GET /api/repos/alice/hello/blob/main/x"] = () => json(500, { error: "internal error" })
   renderAt("/alice/hello/blob/main/x")
-  expect(screen.getByRole("status", { name: "Loading file" })).toBeInTheDocument()
+  expect(await screen.findByRole("status", { name: "Loading file" })).toBeInTheDocument()
   expect(await screen.findByRole("alert")).toHaveTextContent("internal error")
   routes["GET /api/repos/alice/hello/blob/main/x"] = () => json(200, blob({ name: "x", path: "x" }))
   await userEvent.click(screen.getByRole("button", { name: "Retry" }))
@@ -537,4 +498,50 @@ it.each([
 ])("mock: file viewer on %s shows a not-found state", async (_w, path, msg) => {
   at(`/alice/hello/blob/main/${path}`, await hello(null))
   expect(await screen.findByTestId("not-found")).toHaveTextContent(msg)
+})
+
+it("mock: file viewer on an unknown ref shows a not-found state", async () => {
+  at("/alice/hello/blob/nope/a.txt", await hello(null))
+  expect(await screen.findByTestId("not-found")).toHaveTextContent("ref not found")
+})
+
+it("mock: delete repo: cancel keeps the repository and sends no delete", async () => {
+  const mock = await hello("alice")
+  const del = vi.spyOn(mock, "deleteRepo")
+  at("/alice/hello/settings", mock)
+  await userEvent.click(await screen.findByRole("button", { name: "Delete repository" }))
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+  expect(del).not.toHaveBeenCalled()
+})
+
+it("mock: delete repo: a 403 is shown in the dialog and the page stays (session switched to another user)", async () => {
+  const mock = await hello("alice")
+  at("/alice/hello/settings", mock)
+  await userEvent.click(await screen.findByRole("button", { name: "Delete repository" }))
+  await mock.logout()
+  await mock.login("bob", "password1")
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete repository" }))
+  expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("forbidden")
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
+  expect((await mock.getRepo("alice", "hello")).name).toBe("hello")
+})
+
+it("mock: delete branch: cancel keeps the branch", async () => {
+  const mock = await hello("alice")
+  at("/alice/hello", mock)
+  await userEvent.click(await screen.findByRole("button", { name: "Delete branch" }))
+  await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
+  await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
+  expect(await branchNames(mock)).toEqual(["dev", "main"])
+})
+
+it("mock: delete branch: a 404 (already deleted elsewhere) is shown inline", async () => {
+  const mock = await hello("alice")
+  at("/alice/hello", mock)
+  await userEvent.click(await screen.findByRole("button", { name: "Delete branch" }))
+  await userEvent.click(screen.getByRole("button", { name: "Delete dev" }))
+  await mock.deleteBranch("alice", "hello", "dev")
+  await userEvent.click(within(screen.getByRole("alertdialog")).getByRole("button", { name: "Delete branch" }))
+  expect(await within(screen.getByRole("alertdialog")).findByRole("alert")).toHaveTextContent("branch not found")
 })
