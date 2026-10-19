@@ -7,13 +7,17 @@
 #   scripts/test-matrix.sh --update-skips  rewrite backend/known_skips.txt from this run
 #
 # Postgres: TEST_DATABASE_URL, else the local :54329 throwaway server
-# (_docs/AGENTS.md). The run creates its own database (mg_matrix_<pid>), applies
+# (_docs/AGENTS.md); if that server is not reachable the matrix FAILS. The run creates its own database (mg_matrix_<pid>), applies
 # backend/db/schema.sql to it and drops it at the end, so parallel runs and the
 # shared `mg` database are never touched. A store that cannot run FAILS the
 # matrix; it is never skipped silently. A test skip that is not listed in
 # backend/known_skips.txt for that store also fails the matrix.
+# No `set -e`/pipefail: the script counts PASS/SKIP lines with grep (exit 1 on
+# zero matches) and records go test's exit code itself; -e would abort the
+# summary. Every step that can fail is checked explicitly instead.
 set -u
 root="$(cd "$(dirname "$0")/.." && pwd)"
+. "$root/scripts/pgurl.sh"
 known="$root/backend/known_skips.txt"
 local_url="postgres://test@localhost:54329/mg?sslmode=disable"
 update=0
@@ -37,7 +41,12 @@ cleanup() {
 	rm -rf "$work"
 }
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+gopid=""
+on_signal() {
+	[ -n "$gopid" ] && kill -TERM "$gopid" 2>/dev/null && wait "$gopid" 2>/dev/null
+	exit 130
+}
+trap on_signal INT TERM
 
 summary=()
 failed=0
@@ -51,6 +60,8 @@ run_store() {
 	if [ "$store" = postgres ]; then
 		local base="${TEST_DATABASE_URL:-$local_url}"
 		admin_url="$base"
+		# no database in the URL: connect to the maintenance database to create ours
+		if ! pg_url_has_db "$base"; then admin_url="$(pg_url_with_db "$base" postgres)" || admin_url="$base"; fi
 		if ! psql -q "$admin_url" -c 'select 1' >/dev/null 2>&1; then
 			echo "test-matrix: postgres is not reachable (set TEST_DATABASE_URL, or start the :54329 server from _docs/AGENTS.md)" >&2
 			summary+=("postgres  FAIL  not reachable")
@@ -58,9 +69,13 @@ run_store() {
 			return
 		fi
 		pgdb="mg_matrix_$$"
-		# swap the database name in the URL; the URL itself is never printed
+		# swap the database name in the URL (also when it has no path); the URL is never printed
 		local url
-		url="$(printf %s "$base" | sed -E "s#^([a-z]+://[^/]+/)[^?]*#\1$pgdb#")"
+		if ! url="$(pg_url_with_db "$base" "$pgdb")"; then
+			summary+=("postgres  FAIL  TEST_DATABASE_URL is not a postgres:// URL")
+			failed=1
+			return
+		fi
 		if ! psql -q "$admin_url" -c "CREATE DATABASE $pgdb" >/dev/null 2>&1 ||
 			! psql -q -v ON_ERROR_STOP=1 "$url" -f "$root/backend/db/schema.sql" >/dev/null 2>&1; then
 			summary+=("postgres  FAIL  could not create $pgdb")
@@ -73,8 +88,12 @@ run_store() {
 		:
 	fi
 	echo "== $store: go test -p 1 -race ./... =="
-	(cd "$root/backend" && env "${env_args[@]}" go test -p 1 -race -v -timeout 40m ./... >"$out" 2>&1)
+	# run in the background so a TERM/INT sent to this script reaches go test
+	(cd "$root/backend" && exec env "${env_args[@]}" go test -p 1 -race -v -timeout 40m ./... >"$out" 2>&1) &
+	gopid=$!
+	wait $gopid
 	rc=$?
+	gopid=""
 	grep -E -e '^(FAIL|panic)|--- FAIL' "$out" | head -20
 	local pass fail
 	pass=$(grep -c -E -e '^ *--- PASS:' "$out")
