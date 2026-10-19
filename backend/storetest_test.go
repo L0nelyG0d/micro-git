@@ -14,7 +14,7 @@ import (
 //
 //	postgres (default)  the local Postgres in TEST_DATABASE_URL; tests skip when it is unset
 //	memory              a new memStore per test, no database needed
-//	sqlite              gormStore on a temp file; only the groups in sqliteGroups run, the rest skip until #86 to #92
+//	sqlite              gormStore on a temp file; every test runs except those named in sqlitePending (auth_test.go), which wait for #87 to #93 or need Postgres
 //
 // Tests reach the store through Server.Store. What the interface cannot do
 // (seed a row, drop objects, count rows) goes through the helpers below, which
@@ -104,6 +104,12 @@ func countObjects(t *testing.T, s *Server, repoID int64) int {
 			t.Fatal(err)
 		}
 		return n
+	case *gormStore:
+		var n int64
+		if err := st.db.Model(&ObjectModel{}).Where("repo_id = ?", repoID).Count(&n).Error; err != nil {
+			t.Fatal(err)
+		}
+		return int(n)
 	case *memStore:
 		st.d.mu.RLock()
 		defer st.d.mu.RUnlock()
