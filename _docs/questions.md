@@ -77,3 +77,6 @@ Asked 2026-10-19 (PM). No YAML parser or JSON-schema validator is approved. Defa
 
 ## Issue #120 focus rings, stashed 2026-10-19
 - [ ] (#120) Focus ring fix: nav/page controls use `ring-ring/50` (about 2:1 contrast), so the ring is too faint to see. Default used: change to the full-opacity existing `--ring` token (about 4.9:1 light, 4.4:1 dark), and full `--destructive` for destructive buttons. No new look. Want a different option (for example a wider ring at 50%)?
+
+## SQLite round (#95), stashed 2026-10-19
+- [ ] (#95) `_docs/plan.md` said SQLite uses "a single writer connection". The pool is not capped at one: a write on the outer store while a transaction is open would then deadlock instead of waiting. Default used: document the SQLite write lock (one writer at a time) plus the 10 s busy timeout, no pool cap (plan.md Storage updated). Alternative: cap the pool at one connection and forbid outer-store use inside `InTx`.
