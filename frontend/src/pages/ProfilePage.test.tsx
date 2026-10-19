@@ -1,10 +1,7 @@
-import { render, screen, within } from "@testing-library/react"
+import { screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import App from "@/App"
-import { cacheClear } from "@/lib/fetchCache"
-import { MemoryRouter, nextTask } from "@/test-utils"
-import { renderWithMock } from "@/test-mock"
+import { expect, it, vi } from "vitest"
+import { failNext, holdNext, renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
 
 const PW = "password1"
@@ -18,86 +15,12 @@ async function withRepos(repos: { name: string; private?: boolean }[]) {
   return mock
 }
 
-// Starting point for the ProfilePage suite (#56): extend here.
-let routes: Record<string, () => { status: number; body?: unknown }>
-
-beforeEach(() => {
-  cacheClear()
-  routes = {}
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      const h = routes[`${init?.method ?? "GET"} ${url}`]
-      if (!h) throw new Error(`unexpected fetch ${init?.method ?? "GET"} ${url}`)
-      if (url.startsWith("/api/repos")) await nextTask() // keep the loading state observable
-      const r = h()
-      return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
-    }),
-  )
-})
-afterEach(() => vi.unstubAllGlobals())
-
-// Kept on fetch: owner "a b" is not a valid mock username.
-it("encodes the owner in the pagination links", async () => {
-  routes["GET /api/auth/me"] = () => ({ status: 401, body: { error: "authentication required" } })
-  routes["GET /api/repos?owner=a%20b&page=2"] = () => ({
-    status: 200,
-    body: { repos: [{ id: 1, owner: "a b", name: "x", description: "", default_branch: "main", empty: true, created_at: "2026-01-02T15:04:05Z" }], page: 2, per_page: 50, has_more: true },
-  })
-  render(
-    <MemoryRouter initialEntries={["/a%20b?page=2"]}>
-      <App />
-    </MemoryRouter>,
-  )
-  const nav = await screen.findByRole("navigation", { name: "Pagination" })
-  expect(within(nav).getByRole("link", { name: "Next" })).toHaveAttribute("href", "/a%20b?page=3")
-  expect(within(nav).getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/a%20b")
-})
-
-// --- #56: states, owner-only action, badges ---
-const loggedOut = () => ({ status: 401, body: { error: "authentication required" } })
-const aliceRepos = (repos: unknown[]) => () => ({ status: 200, body: { repos, page: 1, per_page: 50, has_more: false } })
-const aRepo = (o: Record<string, unknown> = {}) => ({
-  id: 1, owner: "alice", name: "hello", description: "", default_branch: "main", empty: true, private: false,
-  created_at: "2026-01-02T15:04:05Z", ...o,
-})
-const renderProfile = () =>
-  render(
-    <MemoryRouter initialEntries={["/alice"]}>
-      <App />
-    </MemoryRouter>,
-  )
-
-// Kept on fetch: needs a request held pending.
-it("shows a loading state while the list is pending", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  routes["GET /api/repos?owner=alice&page=1"] = () => ({ status: 200, body: { repos: [], page: 1, per_page: 50, has_more: false } })
-  renderProfile()
-  expect(await screen.findByRole("status", { name: "Loading repositories" })).toBeInTheDocument()
-  expect(await screen.findByText("alice has no repositories you can see.")).toBeInTheDocument()
-})
-
 it("says so when the user has no visible repositories", async () => {
   const mock = new MockApiService()
   await mock.register("alice", PW)
   renderWithMock("/alice", mock)
   expect(await screen.findByText("alice has no repositories you can see.")).toBeInTheDocument()
   expect(screen.queryByRole("status", { name: "Loading repositories" })).not.toBeInTheDocument()
-})
-
-// Kept on fetch: mock has no 500.
-it("shows the error block and Retry re-requests the same page", async () => {
-  routes["GET /api/auth/me"] = loggedOut
-  let attempts = 0
-  routes["GET /api/repos?owner=alice&page=1"] = () =>
-    ++attempts === 1 ? { status: 500, body: { error: "boom" } } : aliceRepos([aRepo()])()
-  renderProfile()
-  const alert = await screen.findByRole("alert")
-  expect(alert).toHaveTextContent("boom")
-  await userEvent.click(within(alert).getByRole("button", { name: "Retry" }))
-  expect(await screen.findByRole("link", { name: "hello" })).toHaveAttribute("href", "/alice/hello")
-  expect(attempts).toBe(2)
-  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
 })
 
 it.each([
@@ -124,4 +47,38 @@ it("badges private repos as Private and public ones as Public", async () => {
   const row = (name: string) => list.getByRole("link", { name }).closest("li") as HTMLElement
   expect(within(row("open")).getByText("Public")).toBeInTheDocument()
   expect(within(row("hidden")).getByText("Private")).toBeInTheDocument()
+})
+
+// "a b" is not a valid username, so the instance is shaped to answer a page for it (the test is about link encoding, not the service).
+it("encodes the owner in the pagination links", async () => {
+  const mock = await withRepos([{ name: "x" }])
+  const page = await mock.listRepos({ owner: "alice" })
+  vi.spyOn(mock, "listRepos").mockResolvedValue({ ...page, page: 2, has_more: true })
+  renderWithMock("/a%20b?page=2", mock)
+  const nav = await screen.findByRole("navigation", { name: "Pagination" })
+  expect(within(nav).getByRole("link", { name: "Next" })).toHaveAttribute("href", "/a%20b?page=3")
+  expect(within(nav).getByRole("link", { name: "Previous" })).toHaveAttribute("href", "/a%20b")
+})
+
+it("shows a loading state while the list is pending", async () => {
+  const mock = await withRepos([])
+  const release = holdNext(mock, "listRepos")
+  renderWithMock("/alice", mock)
+  expect(await screen.findByRole("status", { name: "Loading repositories" })).toBeInTheDocument()
+  release()
+  expect(await screen.findByText("alice has no repositories you can see.")).toBeInTheDocument()
+})
+
+it("shows the error block and Retry re-requests the same page", async () => {
+  const mock = await withRepos([{ name: "hello" }])
+  failNext(mock, "listRepos", 500, "boom")
+  const list = vi.spyOn(mock, "listRepos")
+  renderWithMock("/alice", mock)
+  const alert = await screen.findByRole("alert")
+  expect(alert).toHaveTextContent("boom")
+  await userEvent.click(within(alert).getByRole("button", { name: "Retry" }))
+  expect(await screen.findByRole("link", { name: "hello" })).toHaveAttribute("href", "/alice/hello")
+  expect(list).toHaveBeenCalledTimes(2)
+  expect(list.mock.calls[1][0]).toMatchObject({ owner: "alice", page: 1 })
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
 })
