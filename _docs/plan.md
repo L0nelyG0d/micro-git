@@ -328,7 +328,7 @@ Styling follows `DESIGN.md` and `frontend/src/index.css` (colors, radius, densit
 | `/:owner/:repo/new/:ref` | editor for a new file (path field); linked from an "Add file" button on the repo page (owner only) |
 | `/:owner/:repo/commits/:ref` | history |
 | `/:owner/:repo/commit/:oid` | commit detail with diff |
-| `/:owner/:repo/settings` | repository settings (SettingsPage): visibility, rename, branches, delete |
+| `/:owner/:repo/settings` | repository settings (SettingsPage, owner only): description and default-branch form, rename, commit-history branch picker with View history and Compare branches links, branch list and create/delete, visibility, delete |
 | `/:owner/:repo/compare?base=&head=` | compare two branches (file diff of the two tips), readable by anyone |
 | `*` | not found page |
 
