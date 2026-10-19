@@ -17,6 +17,15 @@ it("swaps the session label for a short one below 360px and keeps the full phras
   )
   const status = screen.getByRole("status")
   expect(status).toHaveAttribute("title", expect.stringContaining("Session unavailable"))
-  expect(screen.getByText("Session unavailable")).toHaveClass("max-[359px]:hidden")
+  expect(screen.getByText("Session unavailable")).toHaveClass("hidden", "min-[360px]:inline")
   expect(screen.getByText("Offline")).toHaveClass("min-[360px]:hidden")
+})
+
+it("lets the right-hand group shrink and tightens its gap below 360px", () => {
+  render(
+    <MemoryRouter>
+      <Nav />
+    </MemoryRouter>,
+  )
+  expect(screen.getByRole("status").parentElement).toHaveClass("min-w-0", "[@media(width<360px)]:gap-1")
 })

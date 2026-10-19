@@ -32,15 +32,15 @@ export function Nav() {
           <GitBranch className="size-6" aria-hidden />
           micro git
         </Link>
-        <div className="flex items-center gap-2 text-sm">
+        <div className="flex min-w-0 items-center gap-2 text-sm [@media(width<360px)]:gap-1">
           {sessionError && (
             <span
               role="status"
               title="Session unavailable. Could not check your session. Public pages still work."
               className="flex items-center gap-1 text-xs text-destructive"
             >
-              <TriangleAlert className="size-4 shrink-0" aria-hidden />
-              <span className="max-[359px]:hidden">Session unavailable</span>
+              <TriangleAlert className="size-4" aria-hidden />
+              <span className="hidden min-[360px]:inline">Session unavailable</span>
               <span className="min-[360px]:hidden">Offline</span>
             </span>
           )}
@@ -51,10 +51,10 @@ export function Nav() {
               <Link
                 to={`/${encodeURIComponent(user.username)}`}
                 title={`${user.username}'s repositories`}
-                className="flex items-center gap-2 rounded-md px-1 py-1 hover:bg-accent"
+                className="flex min-w-0 items-center gap-2 rounded-md px-1 py-1 hover:bg-accent"
               >
                 <Avatar name={user.username} />
-                <span className="max-w-24 truncate">{user.username}</span>
+                <span className="min-w-0 max-w-24 truncate">{user.username}</span>
               </Link>
               <Button variant="outline" size="sm" className="shrink-0" onClick={onLogout} disabled={busy}>
                 Log out
