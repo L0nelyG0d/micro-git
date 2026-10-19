@@ -38,9 +38,13 @@ Users are `alice<n>` and `bob<n>` (random suffix per run, so reruns on a used da
 | 15 | Bob logs out | Signed out |
 | 16 | Alice logs in, Make public, logs out; bob opens `/alice/demo` | Bob sees the tree and README, and no Settings tab (read-only) |
 
-Console check: every `console.error` and page error is collected. The only entries allowed are `401` on `/api/auth/me` for anonymous visitors and the `404` that a private repo or a missing favicon returns (these are tracked in #73); anything else fails the run.
+Console check (step 17, "console clean"): every `console.error` and page error is collected and matched on status AND URL path. Only these are expected: `401` on `/api/auth/me` (anonymous visitor), `404` on `/favicon.ico`, and `404` on `/api/repos/<alice>/demo...` (the private repo read by the anonymous or second user). Anything else (another URL, another status, any other `console.error`, any `pageerror`) makes step 17 FAIL.
 
-## Run recorded 2026-10-19 (branch issue-107, on top of origin/main 3f25652)
+Layout step (L): for each page it also waits for a marker text inside `<main>` (Repositories, Files, hello, first commit, Compare branches, File path, Visibility, the username). A page that did not load or render (for example with the backend down) fails the step, as does any horizontal overflow.
+
+Result: the function returns `{ verdict: 'PASS' | 'FAIL', passed, failed, failedSteps, ... }`; the verdict is FAIL if any step fails, including 17.
+
+## Run recorded 2026-10-19 (branch issue-107)
 
 Result table (step, pass/fail, issue number):
 
@@ -63,7 +67,8 @@ Result table (step, pass/fail, issue number):
 | 14 other user cannot see private repo | pass | pass | pass | - |
 | 15 second user logout | pass | pass | pass | - |
 | 16 make public, read-only for other user | pass | pass | pass | - |
-| Console errors besides expected 401/404 | none | none | none | - |
+| 17 console clean (exact allow-list) | pass | pass | pass | #125 |
+| Verdict | PASS (18 steps) | PASS (17) | PASS (17) | - |
 
 No failure remained, so no `user-test-bug` issue was created. Differences between the stacks: none in behaviour. Two properties of the mock are by design, not bugs: its data lives in memory (a full page load wipes it, README "Mock"), so the mock run navigates client-side only (`history.pushState`); and it has no network, so there is no 401/404 console noise (`ignored401_404: 0`).
 
@@ -74,5 +79,7 @@ Observations (not failures, no issue opened):
 - At 320 px the logo wraps to two lines ("micro / git") and a long username is ellipsised in the header; nothing overflows.
 - The history table links the commit hash, not the message.
 - The favicon 404 and the anonymous `/auth/me` 401 still appear as red console lines (already #73).
+
+Negative checks for #125 (scratch copy of the script, not committed): an injected `console.error('unexpected')` before step 17 gives `verdict: FAIL`, `17 console clean: unexpected console entries: unexpected (page /)`, all other 16 steps pass. With the sqlite backend killed, the run is FAIL and the run is `FAIL` (0 passed, 18 failed), the layout step L fails with `page did not render: repo@320/light: "Files" not rendered; blob@320/light: "hello" not rendered; ...` and step 17 names the `502` entries (`/api/auth/me`, `/api/repos`, `/api/auth/register`). The postgres run used an isolated database `mg_e107b` (created and dropped for the run).
 
 Screenshots of this run: `/private/tmp/claude-501/-Users-akniyetislambekkyzy-Desktop-Assignnment2-webfront/d68891ea-aa89-44d0-9645-30cebc06486a/scratchpad/shots/{sqlite,postgres,mock}/` (`01-home-anon` ... `19-bob-public`, and `L-<page>-<width>-<light|dark>`).

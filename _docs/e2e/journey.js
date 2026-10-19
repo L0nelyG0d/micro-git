@@ -6,6 +6,8 @@
 //   SHOTS  folder for screenshots; keep it OUTSIDE git (the folder must exist)
 //   (STACK='mock' navigates client-side only: the mock store is in memory)
 //   LAYOUT true: also run the 320/768/1280 x light/dark pass after step 9
+//   Result: { verdict: 'PASS' | 'FAIL', passed, failed, failedSteps, ... }; FAIL if any step fails,
+//   including step 17 'console clean' (any console error/pageerror outside the allow-list).
 async (page) => {
   const BASE = 'http://127.0.0.1:5199', STACK = 'sqlite', SHOTS = '/tmp/mg-e2e-shots', LAYOUT = true;
   const B = BASE, SD = `${SHOTS}/${STACK}/`, MOCK = STACK === 'mock';
@@ -18,9 +20,20 @@ async (page) => {
   };
   await page.context().clearCookies();
   const tag = String(Date.now() % 100000), A = 'alice' + tag, C = 'bob' + tag, P = 'e2e-pass-12345';
-  const R = [], errs = new Set(), overflow = [];
-  page.on('console', m => { if (m.type() === 'error') errs.add(page.url().replace(B, '') + ' ' + m.text().slice(0, 120)); });
-  page.on('pageerror', e => errs.add('PAGEERROR ' + e.message));
+  const R = [], overflow = [], notRendered = [];
+  // Console policy: only these exact entries are expected, matched on status AND URL path.
+  //   401 on /api/auth/me (anonymous visitor), 404 on /favicon.ico,
+  //   404 on /api/repos/<alice>/demo... (private repo read by anonymous or the second user).
+  // Everything else (any other console.error, any pageerror) is unexpected and fails the run.
+  const unexpected = [], expected = [];
+  const allowed = (status, path) => (status === 401 && path === '/api/auth/me') || (status === 404 && (path === '/favicon.ico' || path.startsWith(`/api/repos/${A}/demo`)));
+  page.on('console', m => {
+    if (m.type() !== 'error') return;
+    const t = m.text(), st = /status of (\d+)/.exec(t), url = m.location().url || '';
+    let path = ''; try { path = new URL(url).pathname; } catch {}
+    (st && allowed(Number(st[1]), path) ? expected : unexpected).push(`${st ? st[1] + ' ' + path : t.slice(0, 140)} (page ${page.url().replace(B, '')})`);
+  });
+  page.on('pageerror', e => unexpected.push('PAGEERROR ' + e.message.slice(0, 140)));
   await page.setViewportSize({ width: 1280, height: 800 });
   await page.emulateMedia({ colorScheme: 'light' });
   page.setDefaultTimeout(8000);
@@ -46,18 +59,21 @@ async (page) => {
   await step('8 compare shows diff', async () => { await nav(`${B}/${A}/demo/compare?base=main&head=feature`); await page.getByText('docs/notes.txt').first().waitFor(); await shot('11-compare'); });
   await step('9 merge feature into main', async () => { await nav(`${B}/${A}/demo`); await page.getByRole('button', { name: 'Merge', exact: true }).click(); await shot('12-merge-dialog'); await page.getByRole('alertdialog').getByRole('button', { name: 'Merge', exact: true }).click(); await page.waitForTimeout(1500); await nav(`${B}/${A}/demo/tree/main`); await page.getByRole('link', { name: 'docs' }).first().waitFor(); await shot('13-after-merge'); });
   if (LAYOUT) await step('L layout 320/768/1280 x light/dark', async () => {
-    const urls = { home: '/', repo: `/${A}/demo`, blob: `/${A}/demo/blob/main/README.md`, history: `/${A}/demo/commits/main`, compare: `/${A}/demo/compare?base=main&head=feature`, editor: `/${A}/demo/new/main`, settings: `/${A}/demo/settings`, profile: `/${A}` };
+    // each page: [path, text that must be rendered]. A page that did not load or render fails the step.
+    const urls = { home: ['/', 'Repositories'], repo: [`/${A}/demo`, 'Files'], blob: [`/${A}/demo/blob/main/README.md`, 'hello'], history: [`/${A}/demo/commits/main`, 'first commit'], compare: [`/${A}/demo/compare?base=main&head=feature`, 'Compare branches'], editor: [`/${A}/demo/new/main`, 'File path'], settings: [`/${A}/demo/settings`, 'Visibility'], profile: [`/${A}`, A] };
     for (const scheme of ['light', 'dark']) for (const w of [320, 768, 1280]) {
       await page.emulateMedia({ colorScheme: scheme }); await page.setViewportSize({ width: w, height: 800 });
-      for (const [k, u] of Object.entries(urls)) {
-        await nav(B + u); await settle(); await page.waitForTimeout(400);
+      for (const [k, [u, marker]] of Object.entries(urls)) {
+        if (notRendered.length >= 3) break;
+        await nav(B + u); await settle();
+        try { await page.locator('main').getByText(marker).first().waitFor({ timeout: 3000 }); } catch { notRendered.push(`${k}@${w}/${scheme}: "${marker}" not rendered`); }
         const o = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
         if (o > 0) overflow.push(`${k}@${w}/${scheme}: +${o}px`);
         await shot(`L-${k}-${w}-${scheme}`);
       }
     }
     await page.emulateMedia({ colorScheme: 'light' }); await page.setViewportSize({ width: 1280, height: 800 });
-    must(!overflow.length, 'horizontal overflow: ' + overflow.join('; ')); });
+    must(!notRendered.length, 'page did not render: ' + notRendered.join('; ')); must(!overflow.length, 'horizontal overflow: ' + overflow.join('; ')); });
   await step('10 toggle private', async () => { await nav(`${B}/${A}/demo/settings`); await page.getByRole('button', { name: 'Change visibility' }).click(); await shot('14-visibility-dialog'); await page.getByRole('button', { name: 'Make private' }).click(); await page.getByText('currently private').waitFor(); await shot('15-settings-private'); });
   await step('11 logout', async () => { await logout(); await shot('16-logged-out'); });
   await step('12 anonymous sees private repo as not found', async () => { await nav(`${B}/${A}/demo`); await page.getByText(/not found/i).first().waitFor(); await shot('17-anon-private'); });
@@ -65,5 +81,7 @@ async (page) => {
   await step('14 other user cannot see private repo', async () => { await nav(`${B}/${A}/demo`); await page.getByText(/not found/i).first().waitFor(); await shot('18-bob-private'); await nav(B + '/'); await settle(); await page.waitForTimeout(700); must(!(await page.locator(`main a[href="/${A}/demo"]`).count()), 'private repo listed to other user'); });
   await step('15 second user logout', async () => { await logout(); });
   await step('16 owner makes public again, second user sees it read-only', async () => { await login(A); await nav(`${B}/${A}/demo/settings`); await page.getByRole('button', { name: 'Change visibility' }).click(); await page.getByRole('button', { name: 'Make public' }).click(); await page.getByText('currently public').waitFor(); await logout(); await login(C); await nav(`${B}/${A}/demo`); await page.getByRole('link', { name: 'README.md' }).first().waitFor(); must(!(await page.getByRole('link', { name: 'Settings' }).count()), 'Settings tab visible to non-owner'); await shot('19-bob-public'); await logout(); });
-  return { A, C, R, overflow, consoleErrors: [...errs].filter(e => !/status of 40[14]/.test(e)), ignored401_404: [...errs].filter(e => /status of 40[14]/.test(e)).length };
+  await step('17 console clean', async () => { must(!unexpected.length, 'unexpected console entries: ' + unexpected.join(' | ')); return `${expected.length} expected 401/404 entries`; });
+  const failed = R.filter(r => r[1] === 'FAIL');
+  return { verdict: failed.length ? 'FAIL' : 'PASS', passed: R.length - failed.length, failed: failed.length, failedSteps: failed, A, C, expectedConsole: expected.length, unexpectedConsole: unexpected, overflow, notRendered };
 }
