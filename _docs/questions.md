@@ -74,3 +74,6 @@ Asked 2026-10-19 (PM). No YAML parser or JSON-schema validator is approved. Defa
 
 ## #119 nav overflow at 320px (stashed 2026-10-19)
 - [ ] (#119) How should "Session unavailable" look below 360px, and does the username stay visible at 320px? Default used: username stays visible (already truncates); below 360px the label shows "Offline" next to the warning icon (the full phrase stays in the `title` and at 360px and up); no hamburger menu. Reversible: one span pair in `Nav.tsx`. Alternatives: wrap the label, or a banner under the nav.
+
+## Issue #120 focus rings, stashed 2026-10-19
+- [ ] (#120) Focus ring fix: nav/page controls use `ring-ring/50` (about 2:1 contrast), so the ring is too faint to see. Default used: change to the full-opacity existing `--ring` token (about 4.9:1 light, 4.4:1 dark), and full `--destructive` for destructive buttons. No new look. Want a different option (for example a wider ring at 50%)?

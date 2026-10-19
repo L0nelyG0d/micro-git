@@ -140,4 +140,10 @@
   body {
     @apply bg-background text-foreground font-sans antialiased;
   }
+  /* Issue #120: every link (logo, avatar, plain text links) gets the same
+     keyboard-only ring as buttons: 3px --ring at full opacity. box-shadow, so
+     no layout shift; :focus-visible, so no ring on mouse click. */
+  a:focus-visible {
+    @apply outline-none ring-[3px] ring-ring;
+  }
 }
