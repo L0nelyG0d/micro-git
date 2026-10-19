@@ -1,4 +1,4 @@
-// Kept on fetch (whole file): tests the hook over the http transport (abort signals, held answers, cache revalidation timing), which a mock service cannot hold or fail on demand.
+// Kept on fetch (whole file): request abort and cache revalidation of the useFetch hook over the http transport (AC categories: cache revalidation, abort signal, network failure), asserted on the fetch calls and signals themselves.
 import { act, renderHook, waitFor } from "@testing-library/react"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { request as api } from "@/services/http"

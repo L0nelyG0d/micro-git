@@ -1,33 +1,17 @@
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
+import { beforeEach, describe, expect, it, vi } from "vitest"
 import { VisibilityDialog } from "@/components/VisibilityDialog"
-import { cacheClear } from "@/lib/fetchCache"
-import { installMock } from "@/test-mock"
+import { failNext, holdNext, installMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
 
-type Res = { status: number; body?: unknown }
-let respond: () => Res | Promise<Res>
-let requests: { url: string; method?: string; body: unknown }[]
 const onChanged = vi.fn()
 const onUnauthorized = vi.fn()
 
 beforeEach(() => {
-  cacheClear()
-  requests = []
   onChanged.mockClear()
   onUnauthorized.mockClear()
-  respond = () => ({ status: 200, body: {} })
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      requests.push({ url, method: init?.method, body: init?.body ? JSON.parse(init.body as string) : undefined })
-      const r = await respond()
-      return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
-    }),
-  )
 })
-afterEach(() => vi.unstubAllGlobals())
 
 function renderDialog(isPrivate: boolean) {
   render(
@@ -69,33 +53,6 @@ describe("VisibilityDialog", () => {
     expect(onUnauthorized).not.toHaveBeenCalled()
   })
 
-  // Kept on fetch: needs the request held in flight.
-  it("shows 'Saving…' on a disabled button while the request is pending", async () => {
-    let finish!: (r: Res) => void
-    respond = () => new Promise<Res>((resolve) => (finish = resolve))
-    renderDialog(false)
-    await open()
-    await userEvent.click(await screen.findByRole("button", { name: "Make private" }))
-    const saving = await screen.findByRole("button", { name: "Saving…" })
-    expect(saving).toBeDisabled()
-    expect(saving).toHaveAttribute("aria-busy", "true")
-    finish({ status: 200, body: {} })
-    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
-  })
-
-  // Kept on fetch: mock has no 500.
-  it("shows a server error inline, stays open and re-enables the button", async () => {
-    respond = () => ({ status: 500, body: { error: "disk on fire" } })
-    renderDialog(false)
-    await open()
-    await userEvent.click(await screen.findByRole("button", { name: "Make private" }))
-    expect(await screen.findByRole("alert")).toHaveTextContent("disk on fire")
-    expect(screen.getByRole("alertdialog")).toBeInTheDocument()
-    expect(screen.getByRole("button", { name: "Make private" })).toBeEnabled()
-    expect(onChanged).not.toHaveBeenCalled()
-    expect(onUnauthorized).not.toHaveBeenCalled()
-  })
-
   it("calls onUnauthorized once on 401 and also shows the error", async () => {
     const mock = await ownedRepo(true)
     renderDialog(true)
@@ -105,6 +62,33 @@ describe("VisibilityDialog", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("authentication required")
     expect(onUnauthorized).toHaveBeenCalledTimes(1)
     expect(onChanged).not.toHaveBeenCalled()
+  })
+
+  it("shows 'Saving…' on a disabled button while the request is pending", async () => {
+    const mock = await ownedRepo(false)
+    const release = holdNext(mock, "updateRepo")
+    renderDialog(false)
+    await open()
+    await userEvent.click(await screen.findByRole("button", { name: "Make private" }))
+    const saving = await screen.findByRole("button", { name: "Saving…" })
+    expect(saving).toBeDisabled()
+    expect(saving).toHaveAttribute("aria-busy", "true")
+    release()
+    await vi.waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
+  })
+
+  it("shows a server error inline, stays open and re-enables the button", async () => {
+    const mock = await ownedRepo(false)
+    failNext(mock, "updateRepo", 500, "disk on fire")
+    renderDialog(false)
+    await open()
+    await userEvent.click(await screen.findByRole("button", { name: "Make private" }))
+    expect(await screen.findByRole("alert")).toHaveTextContent("disk on fire")
+    expect(screen.getByRole("alertdialog")).toBeInTheDocument()
+    expect(screen.getByRole("button", { name: "Make private" })).toBeEnabled()
+    expect(onChanged).not.toHaveBeenCalled()
+    expect(onUnauthorized).not.toHaveBeenCalled()
+    expect((await mock.getRepo("alice", "hello")).private).toBe(false)
   })
 
   it("Cancel closes the dialog and leaves the repository as it was", async () => {
