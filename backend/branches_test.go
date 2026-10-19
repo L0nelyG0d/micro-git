@@ -1,10 +1,16 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/L0nelyG0d/micro-git/backend/gitobj"
 )
 
 func branchesURL(owner string, r Repo) string {
@@ -164,5 +170,109 @@ func TestBranchWriteAuth(t *testing.T) {
 	}
 	if len(listBranchesT(t, s, owner, repo)) != 2 {
 		t.Error("non-owner writes changed branches")
+	}
+}
+
+// TestStoreBranchOps drives the branch methods of the Store directly, on
+// whichever store TEST_STORE selects.
+func TestStoreBranchOps(t *testing.T) {
+	s := testServer(t)
+	st := s.Store
+	ctx := t.Context()
+	name := uniqueName(t)
+	uid, err := st.CreateUser(ctx, name, "hash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cleanupUser(t, s, name)
+	repo, err := st.CreateRepo(ctx, uid, "r", "", false, time.Now())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.DeleteRepo(context.Background(), repo.ID) })
+	var oids []string
+	for _, x := range []string{"a", "b"} {
+		oid, err := st.Objects(ctx, repo.ID).PutObject(gitobj.TypeBlob, []byte(x))
+		if err != nil {
+			t.Fatal(err)
+		}
+		oids = append(oids, oid)
+	}
+	a, b := oids[0], oids[1]
+
+	if refs, err := st.ListRefs(ctx, repo.ID); err != nil || refs == nil || len(refs) != 0 {
+		t.Errorf("ListRefs empty = %#v, %v; want [] and nil error", refs, err)
+	}
+	if err := st.DeleteRef(ctx, repo.ID, "main"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("DeleteRef missing: %v, want ErrNotFound", err)
+	}
+	if err := st.DeleteNonDefaultRef(ctx, repo.ID, "main"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("DeleteNonDefaultRef missing: %v, want ErrNotFound", err)
+	}
+	// Only gormStore checks the oid format up front (#91); the other stores
+	// leave it to their foreign key.
+	badOIDs := []string{}
+	if _, ok := st.(*gormStore); ok {
+		badOIDs = []string{"", "abc", strings.Repeat("a", 50), strings.Repeat("A", 40), strings.Repeat("g", 40)}
+	}
+	for _, bad := range badOIDs {
+		if err := st.CreateRef(ctx, repo.ID, "bad", bad); !errors.Is(err, ErrInvalidOID) {
+			t.Errorf("CreateRef(%q): %v, want ErrInvalidOID", bad, err)
+		}
+	}
+	// Bytewise order: "Z" < "a" < "b" < U+00E9 < U+4E2D. A locale-aware
+	// collation would put "é" next to "e" and "Z" after "a".
+	names := []string{"é", "b", "中", "a", "Z", "main"}
+	for _, n := range names {
+		if err := st.CreateRef(ctx, repo.ID, n, a); err != nil {
+			t.Fatalf("CreateRef(%q): %v", n, err)
+		}
+	}
+	if err := st.CreateRef(ctx, repo.ID, "a", b); !errors.Is(err, ErrConflict) {
+		t.Errorf("CreateRef duplicate: %v, want ErrConflict", err)
+	}
+	refs, err := st.ListRefs(ctx, repo.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, r := range refs {
+		got = append(got, r.Name)
+		if r.OID != a {
+			t.Errorf("ref %q oid = %s, want %s (duplicate create must not overwrite)", r.Name, r.OID, a)
+		}
+	}
+	want := []string{"Z", "a", "b", "main", "é", "中"}
+	if !slices.Equal(got, want) {
+		t.Errorf("ListRefs order = %q, want %q", got, want)
+	}
+
+	// The default branch is protected; the check is part of the delete.
+	mainName := "main"
+	if _, err := st.UpdateRepo(ctx, repo.ID, RepoPatch{DefaultBranch: &mainName}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteNonDefaultRef(ctx, repo.ID, "main"); !errors.Is(err, errDefaultBranch) {
+		t.Errorf("delete default: %v, want errDefaultBranch", err)
+	}
+	if got, err := st.GetRef(ctx, repo.ID, "main"); err != nil || got != a {
+		t.Errorf("default branch after refused delete = %q, %v", got, err)
+	}
+	// Move the default away; the old default is now deletable and the new
+	// one is protected.
+	if _, err := st.UpdateRepo(ctx, repo.ID, RepoPatch{DefaultBranch: &[]string{"b"}[0]}); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.DeleteNonDefaultRef(ctx, repo.ID, "b"); !errors.Is(err, errDefaultBranch) {
+		t.Errorf("delete new default: %v, want errDefaultBranch", err)
+	}
+	if err := st.DeleteNonDefaultRef(ctx, repo.ID, "main"); err != nil {
+		t.Errorf("delete old default: %v", err)
+	}
+	if err := st.DeleteRef(ctx, repo.ID, "Z"); err != nil {
+		t.Errorf("DeleteRef: %v", err)
+	}
+	if err := st.DeleteRef(ctx, repo.ID, "Z"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("DeleteRef twice: %v, want ErrNotFound", err)
 	}
 }
