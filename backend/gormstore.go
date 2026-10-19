@@ -270,6 +270,8 @@ func (g *gormStore) WalkFirstParents(ctx context.Context, repoID int64, tip stri
 	args = append(args, repoID, tip)
 	args = append(args, parentArgs...)
 	args = append(args, repoID, limit, repoID)
+	// CAST(? AS bigint): Postgres types a bare parameter here as int4, which
+	// cannot hold a limit of 2^31 or more.
 	query := `
 WITH RECURSIVE walk(oid, parent, depth) AS (
   SELECT o.oid, ` + parent + `, 1
@@ -279,7 +281,7 @@ WITH RECURSIVE walk(oid, parent, depth) AS (
   SELECT o.oid, ` + parent + `, w.depth + 1
     FROM walk w
     JOIN objects o ON o.repo_id = ? AND o.oid = w.parent AND o.type = 'commit'
-   WHERE w.depth < ?
+   WHERE w.depth < CAST(? AS bigint)
 )
 SELECT w.oid, o.data, COALESCE(w.parent, '') AS parent
   FROM walk w JOIN objects o ON o.repo_id = ? AND o.oid = w.oid ORDER BY w.depth`

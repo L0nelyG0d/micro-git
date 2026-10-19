@@ -816,6 +816,14 @@ func walkFirstParentsSuite(t *testing.T, store Store, repoID int64) {
 			t.Fatalf("limit 1: %v %d", err, len(rows))
 		}
 	})
+	t.Run("huge limit", func(t *testing.T) {
+		for _, l := range []int{1<<31 - 1, 1 << 31, 1 << 40} {
+			rows, err := walk(tip, l)
+			if err != nil || len(rows) != 500 {
+				t.Errorf("limit %d: err %v, %d rows", l, err, len(rows))
+			}
+		}
+	})
 	t.Run("limit below 1 is empty, not an error", func(t *testing.T) {
 		for _, l := range []int{0, -3} {
 			if rows, err := walk(tip, l); err != nil || rows == nil || len(rows) != 0 {
@@ -877,7 +885,9 @@ func walkFirstParentsSuite(t *testing.T, store Store, repoID int64) {
 			t.Fatalf("err %v rows %+v", err, rows)
 		}
 	})
-	t.Run("depth cap", func(t *testing.T) {
+	// The store has no cap of its own (maxHistoryCommits is enforced in
+	// history.go); this checks that limit 10000 stops a 10005-chain at 10000.
+	t.Run("limit of 10000 on a longer chain", func(t *testing.T) {
 		if testing.Short() {
 			t.Skip("10005 commits")
 		}
