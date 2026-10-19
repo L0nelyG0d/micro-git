@@ -1,75 +1,14 @@
-import { MemoryRouter } from "@/test-utils"
-import { render, screen, waitFor, within } from "@testing-library/react"
+import { holdGet, holdNext, renderWithMock } from "@/test-mock"
+import { MockApiService } from "@/services/MockApiService"
+import { fireEvent, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { useLocation } from "react-router-dom"
-import { afterEach, beforeEach, expect, it, vi } from "vitest"
-import App from "@/App"
-import { cacheClear } from "@/lib/fetchCache"
+import { beforeEach, expect, it, vi } from "vitest"
 
-type Res = { status: number; body?: unknown } | Error
-let routes: Record<string, (body: unknown) => Res | Promise<Res>>
-let calls: string[]
-
-const json = (status: number, body?: unknown): Res => ({ status, body })
-const OID = "a".repeat(40)
-const OID2 = "b".repeat(40)
-const NEW = "c".repeat(40)
-const repo = (o: Record<string, unknown> = {}) => ({
-  id: 1, owner: "alice", name: "hello", description: "", default_branch: "main",
-  empty: false, created_at: "2026-01-02T15:04:05Z", ...o,
-})
-const blob = (commit = OID, content = "hello\n") => ({
-  ref: "main", commit, path: "a.txt", name: "a.txt", oid: OID, size: content.length, content,
-})
-const branches = {
-  branches: [
-    { name: "dev", oid: OID2, is_default: false },
-    { name: "main", oid: OID, is_default: true },
-  ],
-}
-
-function setup(user: string | null = "alice", r = repo()) {
-  routes["GET /api/auth/me"] = () =>
-    user ? json(200, { id: 1, username: user }) : json(401, { error: "authentication required" })
-  routes["GET /api/repos/alice/hello"] = () => json(200, r)
-  routes["GET /api/repos/alice/hello/branches"] = () => json(200, branches)
-}
-
-beforeEach(() => {
-  sessionStorage.clear()
-  cacheClear()
-  calls = []
-  routes = {}
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async (url: string, init?: RequestInit) => {
-      const key = `${init?.method ?? "GET"} ${url}`
-      calls.push(key)
-      const h = routes[key]
-      if (!h) throw new Error(`unexpected fetch ${key}`)
-      const r = await h(init?.body ? JSON.parse(init.body as string) : undefined)
-      if (r instanceof Error) throw r
-      return { status: r.status, ok: r.status < 300, json: async () => r.body } as Response
-    }),
-  )
-})
-afterEach(() => vi.unstubAllGlobals())
+beforeEach(() => sessionStorage.clear()) // editor drafts live in sessionStorage
 
 function Loc() {
   return <div data-testid="loc">{useLocation().pathname}</div>
-}
-let router: { navigate: (to: number) => Promise<void> } | undefined
-function renderAt(path: string, history: string[] = []) {
-  return render(
-    <MemoryRouter
-      initialEntries={[...history, path]}
-      initialIndex={history.length}
-      routerRef={(r) => (router = r)}
-    >
-      <App />
-      <Loc />
-    </MemoryRouter>,
-  )
 }
 const commitBtn = () => screen.getByRole("button", { name: "Commit" })
 const type = async (label: string, text: string) => {
@@ -78,15 +17,63 @@ const type = async (label: string, text: string) => {
   if (text) await userEvent.type(el, text)
 }
 
-it("edit: prefills, validates the message, commits and redirects", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  let body: unknown
-  routes["POST /api/repos/alice/hello/commits"] = (b) => {
-    body = b
-    return json(201, { oid: NEW, tree: OID, parent: OID, branch: "main" })
+const unload = () => {
+  const ev = new Event("beforeunload", { cancelable: true })
+  window.dispatchEvent(ev)
+  return ev
+}
+
+const TREE = "/alice/hello/tree/main"
+const EDIT = "/alice/hello/edit/main/a.txt"
+
+
+// ---- Screens on top of MockApiService (#102) ----
+
+
+/** alice/hello: main has a.txt = "hello\n"; dev has a.txt = "other\n". `as` is who is logged in. */
+async function editorMock(as: "alice" | "bob" | null, opts: { empty?: boolean } = {}) {
+  const mock = new MockApiService()
+  await mock.register("alice", "password1")
+  await mock.register("bob", "password1")
+  await mock.login("alice", "password1")
+  await mock.createRepo({ name: "hello" })
+  if (!opts.empty) {
+    await mock.createCommit("alice", "hello", {
+      branch: "main", expected_tip: "", message: "first", changes: [{ path: "a.txt", content: "hello\n" }],
+    })
+    await mock.createBranch("alice", "hello", { name: "dev", from: "main" })
+    await commitOn(mock, "dev", "other\n")
   }
-  renderAt("/alice/hello/edit/main/a.txt")
+  await mock.logout()
+  if (as) await mock.login(as, "password1")
+  return mock
+}
+const tipOf = async (mock: MockApiService, branch: string) =>
+  (await mock.listBranches("alice", "hello")).branches.find((b) => b.name === branch)!.oid
+/** A commit by alice on `branch` (e.g. another tab); restores the current session afterwards. */
+async function commitOn(mock: MockApiService, branch: string, content: string) {
+  const me = await mock.me().catch(() => null)
+  if (me?.username !== "alice") await mock.login("alice", "password1")
+  await mock.createCommit("alice", "hello", {
+    branch, expected_tip: await tipOf(mock, branch), message: `set ${content.trim()}`, changes: [{ path: "a.txt", content }],
+  })
+  if (me?.username !== "alice") {
+    await mock.logout()
+    if (me) await mock.login(me.username, "password1")
+  }
+}
+const contentAt = async (mock: MockApiService, ref: string, path = "a.txt") =>
+  (await mock.getBlob("alice", "hello", ref, path)).content
+const lastCommit = async (mock: MockApiService, ref: string) =>
+  (await mock.listCommits("alice", "hello", { ref })).commits[0]
+
+let navRouter: { navigate: (to: number) => Promise<void> } | undefined
+const open = (path: string, mock: MockApiService, history: string[] = []) =>
+  renderWithMock(path, mock, <Loc />, { history, routerRef: (r) => (navRouter = r) })
+
+it("mock: edit prefills, validates the message, commits and redirects", async () => {
+  const mock = await editorMock("alice")
+  open(EDIT, mock)
   const area = await screen.findByLabelText("File content")
   expect(area).toHaveValue("hello\n")
   await waitFor(() => expect(commitBtn()).toBeDisabled())
@@ -96,60 +83,41 @@ it("edit: prefills, validates the message, commits and redirects", async () => {
   expect(await screen.findByText("Enter a commit message.")).toBeInTheDocument()
   await userEvent.type(screen.getByLabelText("Commit message"), " Update a ")
   await userEvent.click(commitBtn())
-  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(`/alice/hello/commit/${NEW}`))
-  expect(body).toEqual({
-    branch: "main", expected_tip: OID, message: "Update a", changes: [{ path: "a.txt", content: "bye" }],
-  })
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/commit/"))
+  expect(await contentAt(mock, "main")).toBe("bye")
+  expect((await lastCommit(mock, "main")).message).toBe("Update a")
 })
 
-it("new file on an empty repo uses the default branch and an empty expected_tip", async () => {
-  setup("alice", repo({ empty: true }))
-  let body: unknown
-  routes["POST /api/repos/alice/hello/commits"] = (b) => {
-    body = b
-    return json(201, { oid: NEW, tree: OID, parent: null, branch: "main" })
-  }
-  renderAt("/alice/hello/new/main")
+it("mock: new file on an empty repo commits to the default branch", async () => {
+  const mock = await editorMock("alice", { empty: true })
+  open("/alice/hello/new/main", mock)
   await screen.findByLabelText("File path")
   await type("File path", "docs/README.md")
   await type("File content", "")
   await type("Commit message", "First")
   await userEvent.click(commitBtn())
-  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(`/commit/${NEW}`))
-  expect(body).toEqual({
-    branch: "main", expected_tip: "", message: "First", changes: [{ path: "docs/README.md", content: "" }],
-  })
-  expect(calls.some((c) => c.includes("/tree/"))).toBe(false)
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
+  expect(await contentAt(mock, "main", "docs/README.md")).toBe("")
+  expect((await lastCommit(mock, "main")).message).toBe("First")
 })
 
-it("new file on a non-empty repo takes the tip from the tree", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/tree/main"] = () => json(200, { ref: "main", commit: OID, path: "", entries: [] })
-  let body: { expected_tip?: string } = {}
-  routes["POST /api/repos/alice/hello/commits"] = (b) => {
-    body = b as typeof body
-    return json(201, { oid: NEW, tree: OID, parent: OID, branch: "main" })
-  }
-  renderAt("/alice/hello/new/main")
+it("mock: new file on a non-empty repo is added on top of the current tip", async () => {
+  const mock = await editorMock("alice")
+  open("/alice/hello/new/main", mock)
   await screen.findByLabelText("File path")
   await type("File path", "x.txt")
   await type("Commit message", "Add x")
   await waitFor(() => expect(commitBtn()).toBeEnabled())
   await userEvent.click(commitBtn())
-  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(`/commit/${NEW}`))
-  expect(body.expected_tip).toBe(OID)
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
+  expect(await contentAt(mock, "main", "x.txt")).toBe("")
+  expect(await contentAt(mock, "main")).toBe("hello\n")
+  expect((await mock.listCommits("alice", "hello", { ref: "main" })).commits).toHaveLength(2)
 })
 
-it("changing the branch reloads that branch's tip", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob(OID))
-  routes["GET /api/repos/alice/hello/blob/dev/a.txt"] = () => json(200, blob(OID2, "other\n"))
-  let body: { branch?: string; expected_tip?: string; changes?: unknown } = {}
-  routes["POST /api/repos/alice/hello/commits"] = (b) => {
-    body = b as typeof body
-    return json(201, { oid: NEW, tree: OID, parent: OID2, branch: "dev" })
-  }
-  renderAt("/alice/hello/edit/main/a.txt")
+it("mock: changing the branch reloads that branch's tip and commits there", async () => {
+  const mock = await editorMock("alice")
+  open(EDIT, mock)
   await screen.findByLabelText("File content")
   await type("File content", "mine")
   await userEvent.click(await screen.findByRole("combobox", { name: "Branch" }))
@@ -158,169 +126,110 @@ it("changing the branch reloads that branch's tip", async () => {
   await waitFor(() => expect(commitBtn()).toBeEnabled())
   expect(screen.getByLabelText("File content")).toHaveValue("mine")
   await userEvent.click(commitBtn())
-  await waitFor(() => expect(body.branch).toBe("dev"))
-  expect(body.expected_tip).toBe(OID2)
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
+  expect(await contentAt(mock, "dev")).toBe("mine")
+  expect(await contentAt(mock, "main")).toBe("hello\n")
 })
 
-it("delete asks for confirmation and sends a delete change", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  let body: { changes?: unknown } = {}
-  routes["POST /api/repos/alice/hello/commits"] = (b) => {
-    body = b as typeof body
-    return json(201, { oid: NEW, tree: OID, parent: OID, branch: "main" })
-  }
-  renderAt("/alice/hello/edit/main/a.txt")
+it("mock: delete asks for confirmation and removes the file", async () => {
+  const mock = await editorMock("alice")
+  open(EDIT, mock)
   await screen.findByLabelText("File content")
   await type("Commit message", "Remove a")
   await userEvent.click(screen.getByRole("button", { name: "Delete file" }))
-  expect(calls.some((c) => c.startsWith("POST"))).toBe(false)
   const dialog = await screen.findByRole("alertdialog")
   expect(dialog).toHaveTextContent("Delete a.txt?")
+  expect((await mock.listCommits("alice", "hello", { ref: "main" })).commits).toHaveLength(1) // nothing sent yet
   await userEvent.click(within(dialog).getByRole("button", { name: "Delete file" }))
-  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(`/commit/${NEW}`))
-  expect(body.changes).toEqual([{ path: "a.txt", delete: true }])
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
+  await expect(contentAt(mock, "main")).rejects.toMatchObject({ status: 404 })
 })
 
-it("409 shows the conflict, Reload fetches the new tip, text is kept and resubmit works", async () => {
-  setup()
-  let tip = OID
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob(tip, tip === OID ? "v1" : "v2"))
-  const tips: string[] = []
-  routes["POST /api/repos/alice/hello/commits"] = (b) => {
-    tips.push((b as { expected_tip: string }).expected_tip)
-    return tips.length === 1
-      ? json(409, { error: "branch tip has moved", current_tip: OID2 })
-      : json(201, { oid: NEW, tree: OID, parent: OID2, branch: "main" })
-  }
-  renderAt("/alice/hello/edit/main/a.txt")
+it("mock: 409 shows the conflict, Reload fetches the new tip, text is kept and resubmit works", async () => {
+  const mock = await editorMock("alice")
+  open(EDIT, mock)
   await screen.findByLabelText("File content")
   await type("File content", "my text")
   await type("Commit message", "Change")
+  await commitOn(mock, "main", "theirs\n") // another tab moves main first
   await userEvent.click(commitBtn())
   expect(await screen.findByText(/branch tip has moved/i)).toBeInTheDocument()
-  tip = OID2
   await userEvent.click(screen.getByRole("button", { name: "Reload" }))
   await waitFor(() => expect(screen.queryByText(/branch tip has moved/i)).not.toBeInTheDocument())
   expect(screen.getByLabelText("File content")).toHaveValue("my text")
   await waitFor(() => expect(commitBtn()).toBeEnabled())
   await userEvent.click(commitBtn())
-  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(`/commit/${NEW}`))
-  expect(tips).toEqual([OID, OID2])
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
+  expect(await contentAt(mock, "main")).toBe("my text")
+  expect((await mock.listCommits("alice", "hello", { ref: "main" })).commits).toHaveLength(3)
 })
 
-it.each([
-  "no changes",
-  "invalid path: a//b",
-  "file too large: a.txt",
-])("400 %s is shown inline and the form keeps its values", async (msg) => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  routes["POST /api/repos/alice/hello/commits"] = () => json(400, { error: msg })
-  renderAt("/alice/hello/edit/main/a.txt")
-  await screen.findByLabelText("File content")
+it("mock: an invalid path is shown inline and the form keeps its values", async () => {
+  const mock = await editorMock("alice")
+  open("/alice/hello/new/main", mock)
+  await screen.findByLabelText("File path")
+  await type("File path", "a//b")
   await type("File content", "keep me")
   await type("Commit message", "Msg")
   await waitFor(() => expect(commitBtn()).toBeEnabled())
   await userEvent.click(commitBtn())
-  expect(await screen.findByText(msg)).toBeInTheDocument()
+  expect(await screen.findByText(/invalid path/)).toBeInTheDocument()
   expect(screen.getByLabelText("File content")).toHaveValue("keep me")
   expect(screen.getByLabelText("Commit message")).toHaveValue("Msg")
   expect(commitBtn()).toBeEnabled()
 })
 
-it("401 on submit redirects to /login", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  routes["POST /api/repos/alice/hello/commits"] = () => json(401, { error: "authentication required" })
-  renderAt("/alice/hello/edit/main/a.txt")
+it("mock: an unchanged file is rejected inline and the form keeps its values", async () => {
+  const mock = await editorMock("alice")
+  open(EDIT, mock)
+  await screen.findByLabelText("File content")
+  await type("File content", "hello\n")
+  await type("Commit message", "Msg")
+  await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await userEvent.click(commitBtn())
+  expect(await screen.findByText("no changes")).toBeInTheDocument()
+  expect(screen.getByLabelText("Commit message")).toHaveValue("Msg")
+  expect(commitBtn()).toBeEnabled()
+})
+
+it("mock: 401 on submit redirects to /login", async () => {
+  const mock = await editorMock("alice")
+  open(EDIT, mock)
   await screen.findByLabelText("File content")
   await type("Commit message", "Msg")
   await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await mock.logout() // the session ends behind the page's back
   await userEvent.click(commitBtn())
   await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/login"))
 })
 
-it("403 on submit shows an error", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  routes["POST /api/repos/alice/hello/commits"] = () => json(403, { error: "forbidden" })
-  renderAt("/alice/hello/edit/main/a.txt")
-  await screen.findByLabelText("File content")
-  await type("Commit message", "Msg")
-  await waitFor(() => expect(commitBtn()).toBeEnabled())
-  await userEvent.click(commitBtn())
-  expect(await screen.findByText("forbidden")).toBeInTheDocument()
-})
-
-it("disables Commit while submitting (no double submit)", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  let release: (r: Res) => void = () => {}
-  let posts = 0
-  routes["POST /api/repos/alice/hello/commits"] = () => {
-    posts++
-    return new Promise<Res>((r) => (release = r))
-  }
-  renderAt("/alice/hello/edit/main/a.txt")
-  await screen.findByLabelText("File content")
-  await type("Commit message", "Msg")
-  await waitFor(() => expect(commitBtn()).toBeEnabled())
-  await userEvent.click(commitBtn())
-  await waitFor(() => expect(commitBtn()).toBeDisabled())
-  expect(posts).toBe(1)
-  release(json(201, { oid: NEW, tree: OID, parent: OID, branch: "main" }))
-  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
-})
-
-it("blob 404 shows a not-found state", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(404, { error: "path not found" })
-  renderAt("/alice/hello/edit/main/a.txt")
+it("mock: blob 404 shows a not-found state", async () => {
+  open("/alice/hello/edit/main/nope.txt", await editorMock("alice"))
   expect(await screen.findByText("File not found")).toBeInTheDocument()
   expect(screen.queryByLabelText("File content")).not.toBeInTheDocument()
 })
 
 it.each([
-  ["logged out", null, "/alice/hello/edit/main/a.txt"],
+  ["logged out", null, EDIT],
   ["non-owner", "bob", "/alice/hello/new/main"],
-  ["commit oid ref", "alice", `/alice/hello/edit/${OID}/a.txt`],
-])("%s sees no form", async (_n, user, path) => {
-  setup(user)
-  renderAt(path)
+  ["commit oid ref", "alice", "OID"],
+] as const)("mock: %s sees no form", async (_n, user, path) => {
+  const mock = await editorMock(user)
+  open(path === "OID" ? `/alice/hello/edit/${await tipOf(mock, "main")}/a.txt` : path, mock)
   expect(await screen.findByTestId("forbidden")).toBeInTheDocument()
   expect(screen.queryByLabelText("File content")).not.toBeInTheDocument()
   expect(screen.queryByRole("button", { name: "Commit" })).not.toBeInTheDocument()
 })
 
-it("shows a loading state first", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  renderAt("/alice/hello/edit/main/a.txt")
-  expect(screen.getByRole("status", { name: "Loading editor" })).toBeInTheDocument()
-  await screen.findByLabelText("File content")
-})
-
-const unload = () => {
-  const ev = new Event("beforeunload", { cancelable: true })
-  window.dispatchEvent(ev)
-  return ev
-}
-
-it("dirty editor: beforeunload is prevented", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  renderAt("/alice/hello/edit/main/a.txt")
+it("mock: dirty editor: beforeunload is prevented", async () => {
+  open(EDIT, await editorMock("alice"))
   await screen.findByLabelText("File content")
   await type("File content", "changed")
   expect(unload().defaultPrevented).toBe(true)
 })
 
-it("clean editor: no beforeunload prompt and Cancel leaves silently", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  routes["GET /api/repos/alice/hello/blob/main/a.txt?x"] = () => json(200, blob())
-  renderAt("/alice/hello/edit/main/a.txt")
+it("mock: clean editor: no beforeunload prompt and Cancel leaves silently", async () => {
+  open(EDIT, await editorMock("alice"))
   await screen.findByLabelText("File content")
   expect(unload().defaultPrevented).toBe(false)
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
@@ -328,10 +237,8 @@ it("clean editor: no beforeunload prompt and Cancel leaves silently", async () =
   expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
 })
 
-it("dirty editor: Cancel and breadcrumb links ask first; Keep editing stays, Discard leaves", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  renderAt("/alice/hello/edit/main/a.txt")
+it("mock: dirty editor: Cancel and breadcrumb links ask first; Keep editing stays, Discard leaves", async () => {
+  open(EDIT, await editorMock("alice"))
   await screen.findByLabelText("File content")
   await type("File content", "changed")
   await userEvent.click(screen.getByRole("button", { name: "Cancel" }))
@@ -346,45 +253,38 @@ it("dirty editor: Cancel and breadcrumb links ask first; Keep editing stays, Dis
   expect(sessionStorage.length).toBe(0)
 })
 
-it("successful commit: no prompt and no beforeunload", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  routes["POST /api/repos/alice/hello/commits"] = () =>
-    json(201, { oid: NEW, tree: OID, parent: OID, branch: "main" })
-  renderAt("/alice/hello/edit/main/a.txt")
+it("mock: successful commit: no prompt and no beforeunload", async () => {
+  open(EDIT, await editorMock("alice"))
   await screen.findByLabelText("File content")
   await type("File content", "changed")
   await type("Commit message", "Msg")
   await waitFor(() => expect(commitBtn()).toBeEnabled())
   await userEvent.click(commitBtn())
-  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(`/commit/${NEW}`))
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
   expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
   expect(unload().defaultPrevented).toBe(false)
   expect(sessionStorage.length).toBe(0)
 })
 
-it("401 keeps the draft and restores it when the editor reopens", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  routes["POST /api/repos/alice/hello/commits"] = () => json(401, { error: "authentication required" })
-  const first = renderAt("/alice/hello/edit/main/a.txt")
+it("mock: 401 keeps the draft and restores it when the editor reopens", async () => {
+  const mock = await editorMock("alice")
+  const first = open(EDIT, mock)
   await screen.findByLabelText("File content")
   await type("File content", "my draft")
   await type("Commit message", "Msg")
   await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await mock.logout()
   await userEvent.click(commitBtn())
   await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/login"))
   first.unmount()
-  setup()
-  renderAt("/alice/hello/edit/main/a.txt")
+  await mock.login("alice", "password1")
+  open(EDIT, mock)
   expect(await screen.findByLabelText("File content")).toHaveValue("my draft")
   expect(screen.getByLabelText("Commit message")).toHaveValue("Msg")
 })
 
-it("closing the leave dialog returns focus to the activated control, else the textarea", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  renderAt("/alice/hello/edit/main/a.txt")
+it("mock: closing the leave dialog returns focus to the activated control, else the textarea", async () => {
+  open(EDIT, await editorMock("alice"))
   await screen.findByLabelText("File content")
   await type("File content", "changed")
   const cancel = screen.getByRole("button", { name: "Cancel" })
@@ -402,41 +302,32 @@ it("closing the leave dialog returns focus to the activated control, else the te
   await waitFor(() => expect(link).toHaveFocus())
 })
 
-const TREE = "/alice/hello/tree/main"
-const EDIT = "/alice/hello/edit/main/a.txt"
-
-it("dirty editor: browser Back (history pop) asks first; Keep editing stays, Discard goes back", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  renderAt(EDIT, [TREE])
+it("mock: dirty editor: browser Back (history pop) asks first; Keep editing stays, Discard goes back", async () => {
+  open(EDIT, await editorMock("alice"), [TREE])
   await screen.findByLabelText("File content")
   await type("File content", "changed")
-  void router!.navigate(-1)
+  void navRouter!.navigate(-1)
   const dlg = await screen.findByRole("alertdialog")
   expect(screen.getByTestId("loc")).toHaveTextContent(EDIT)
   await userEvent.click(within(dlg).getByRole("button", { name: "Keep editing" }))
   await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument())
   expect(screen.getByTestId("loc")).toHaveTextContent(EDIT)
   expect(screen.getByLabelText("File content")).toHaveValue("changed")
-  void router!.navigate(-1)
+  void navRouter!.navigate(-1)
   await userEvent.click(within(await screen.findByRole("alertdialog")).getByRole("button", { name: "Discard changes" }))
   await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(/^\/alice\/hello\/tree\/main$/))
 })
 
-it("clean editor: browser Back leaves without a prompt", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  renderAt(EDIT, [TREE])
+it("mock: clean editor: browser Back leaves without a prompt", async () => {
+  open(EDIT, await editorMock("alice"), [TREE])
   await screen.findByLabelText("File content")
-  void router!.navigate(-1)
+  void navRouter!.navigate(-1)
   await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(/^\/alice\/hello\/tree\/main$/))
   expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
 })
 
-it("dirty editor: an in-app link asks first, Back after typing then reverting is silent", async () => {
-  setup()
-  routes["GET /api/repos/alice/hello/blob/main/a.txt"] = () => json(200, blob())
-  renderAt(EDIT, [TREE])
+it("mock: dirty editor: an in-app link asks first, Back after typing then reverting is silent", async () => {
+  open(EDIT, await editorMock("alice"), [TREE])
   await screen.findByLabelText("File content")
   await type("File content", "changed")
   await userEvent.click(screen.getByRole("link", { name: "hello" }))
@@ -444,7 +335,65 @@ it("dirty editor: an in-app link asks first, Back after typing then reverting is
   await waitFor(() => expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument())
   await type("File content", "hello\n")
   expect(unload().defaultPrevented).toBe(false)
-  void router!.navigate(-1)
+  void navRouter!.navigate(-1)
   await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent(/^\/alice\/hello\/tree\/main$/))
   expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument()
+})
+
+it("mock: 400 file too large is shown inline and the form keeps its values", async () => {
+  const mock = await editorMock("alice")
+  open(EDIT, mock)
+  await screen.findByLabelText("File content")
+  const big = "x".repeat((1 << 20) + 1)
+  fireEvent.change(screen.getByLabelText("File content"), { target: { value: big } })
+  await type("Commit message", "Msg")
+  await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await userEvent.click(commitBtn())
+  expect(await screen.findByText("file too large: a.txt")).toBeInTheDocument()
+  expect(screen.getByLabelText("File content")).toHaveValue(big)
+  expect(screen.getByLabelText("Commit message")).toHaveValue("Msg")
+  expect(commitBtn()).toBeEnabled()
+  expect(await contentAt(mock, "main")).toBe("hello\n")
+})
+
+it("mock: 403 on submit shows an error (the session switched to another user behind the page)", async () => {
+  const mock = await editorMock("alice")
+  open(EDIT, mock)
+  await screen.findByLabelText("File content")
+  await type("Commit message", "Msg")
+  await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await mock.logout()
+  await mock.login("bob", "password1")
+  await userEvent.click(commitBtn())
+  expect(await screen.findByText("forbidden")).toBeInTheDocument()
+  expect(await contentAt(mock, "main")).toBe("hello\n")
+})
+
+it("mock: disables Commit while submitting (no double submit)", async () => {
+  const mock = await editorMock("alice")
+  const release = holdNext(mock, "createCommit")
+  const commits = vi.spyOn(mock, "createCommit")
+  open(EDIT, mock)
+  await screen.findByLabelText("File content")
+  await type("File content", "bye")
+  await type("Commit message", "Msg")
+  await waitFor(() => expect(commitBtn()).toBeEnabled())
+  await userEvent.click(commitBtn())
+  await waitFor(() => expect(commitBtn()).toBeDisabled())
+  expect(commits).toHaveBeenCalledTimes(1)
+  release()
+  await waitFor(() => expect(screen.getByTestId("loc")).toHaveTextContent("/commit/"))
+  expect(commits).toHaveBeenCalledTimes(1)
+})
+
+it("mock: shows a loading state first", async () => {
+  const mock = await editorMock("alice")
+  const release = holdGet(mock, "/blob/main/a.txt")
+  open(EDIT, mock)
+  await waitFor(() => expect(screen.getByRole("status", { name: "Loading editor" })).toBeInTheDocument())
+  await new Promise((r) => setTimeout(r, 20)) // past the session check: the file request is the one held
+  expect(screen.getByRole("status", { name: "Loading editor" })).toBeInTheDocument()
+  expect(screen.queryByLabelText("File content")).not.toBeInTheDocument()
+  release()
+  await screen.findByLabelText("File content")
 })

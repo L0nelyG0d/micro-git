@@ -1,3 +1,4 @@
+// Kept on fetch (whole file): request shape, status mapping, Retry-After and network failure of the HTTP transport itself.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 import { ApiError, apiService } from "@/services"
 import { HttpApiService } from "@/services/HttpApiService"
@@ -105,6 +106,12 @@ describe("HttpApiService", () => {
     const err = await svc.login("al", "pw").catch((e) => e)
     expect(err).toBeInstanceOf(ApiError)
     expect(err).toMatchObject({ status: 429, message: "slow down", retryAfter: 7 })
+  })
+
+  it("keeps current_tip of a 409 tip-moved answer on the ApiError", async () => {
+    respond(409, { error: "branch tip has moved", current_tip: "a".repeat(40) })
+    const err = await svc.login("al", "pw").catch((e) => e)
+    expect(err).toMatchObject({ status: 409, message: "branch tip has moved", currentTip: "a".repeat(40) })
   })
 
   it("falls back to a generic message when the error body is not usable", async () => {

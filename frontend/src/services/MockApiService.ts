@@ -81,6 +81,9 @@ export class MockApiService implements ApiService {
   private nextUserId = 1
   private nextRepoId = 1
 
+  /** Test hook run just before the merge's compare-and-swap, like beforeMergeSwap in backend/merge.go, so a test can move the base tip. Unset in the app. */
+  beforeMergeSwap?: () => void | Promise<void>
+
   // ---- helpers ----
 
   private currentUser(): MockUser | undefined {
@@ -372,7 +375,7 @@ export class MockApiService implements ApiService {
       if (e instanceof GitError) return fail(400, e.message)
       throw e
     }
-    if (expected !== tip) fail(409, "branch tip has moved")
+    if (expected !== tip) throw new ApiError(409, "branch tip has moved", undefined, tip)
 
     const sig = { name: user.username, email: `${user.username}@micro-git.local`, unix: Math.floor(Date.now() / 1000) }
     const oid = await putObject(
@@ -458,6 +461,10 @@ export class MockApiService implements ApiService {
     if (base === head) fail(400, "cannot merge a branch into itself")
     if (reaches(r.objects, baseTip, headTip)) fail(400, "already up to date")
     if (!reaches(r.objects, headTip, baseTip)) fail(409, "not a fast-forward")
+    await this.beforeMergeSwap?.()
+    // Compare-and-swap on the base tip, as UpdateRef(baseTip, headTip) in backend/merge.go.
+    const current = r.refs.get(base) ?? ""
+    if (current !== baseTip) throw new ApiError(409, "branch tip has moved", undefined, current)
     r.refs.set(base, headTip)
     invalidateAfterWrite(this.repoPath(r))
     return { branch: base, oid: headTip, previous_oid: baseTip }

@@ -243,6 +243,9 @@ describe("commits", () => {
     const stale = { branch: "main", expected_tip: first, message: "late", changes: [{ path: "b", content: "2" }] }
     expect(await status(svc.createCommit("ann", "r", stale))).toBe(409)
     expect(await status(svc.createCommit("ann", "r", { ...stale, expected_tip: "" }))).toBe(409)
+    // The 409 carries the branch's current tip (openapi TipMoved, backend writeTipMoved).
+    const err = await svc.createCommit("ann", "r", stale).catch((e) => e)
+    expect(err).toMatchObject({ status: 409, message: "branch tip has moved", currentTip: second })
     expect((await svc.listBranches("ann", "r")).branches[0].oid).toBe(second)
     expect(await status(svc.createCommit("ann", "r", { ...stale, expected_tip: "zz" }))).toBe(400)
   })
@@ -340,6 +343,21 @@ describe("merge", () => {
     const err = svc.mergeBranches("ann", "r", { base: "main", head: "dev" })
     expect(await status(err)).toBe(409)
     expect(await message(svc.mergeBranches("ann", "r", { base: "main", head: "dev" }))).toBe("not a fast-forward")
+  })
+
+  it("answers 409 branch tip has moved when the base moves before the swap, and changes nothing", async () => {
+    const c1 = await twoBranches()
+    const c2 = (await svc.createCommit("ann", "r", { branch: "dev", expected_tip: c1, message: "m", changes: [{ path: "a", content: "b" }] })).oid
+    svc.beforeMergeSwap = async () => {
+      await svc.createCommit("ann", "r", { branch: "main", expected_tip: c1, message: "race", changes: [{ path: "c", content: "d" }] })
+    }
+    const raced = await svc.mergeBranches("ann", "r", { base: "main", head: "dev" }).catch((e) => e)
+    const moved = (await svc.listBranches("ann", "r")).branches.find((b) => b.name === "main")!.oid
+    expect(raced).toMatchObject({ status: 409, message: "branch tip has moved", currentTip: moved })
+    expect(moved).not.toBe(c1)
+    svc.beforeMergeSwap = async () => {}
+    expect(await message(svc.mergeBranches("ann", "r", { base: "main", head: "dev" }))).toBe("not a fast-forward")
+    expect((await svc.listBranches("ann", "r")).branches.find((b) => b.name === "dev")!.oid).toBe(c2)
   })
 
   it("rejects bad input", async () => {
