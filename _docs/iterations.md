@@ -4,7 +4,7 @@
 
 The real frontend (`VITE_USE_MOCK` unset, `HttpApiService`) talks to the real backend on SQLite through the Vite `/api` proxy (the proxy strips `/api`; the browser sees one origin, so the `session` cookie needs no CORS).
 
-Run it (two ways, same result):
+Run it (two ways, same result). If 5173 is taken add `VITE_PORT=<other>` to the make command (`make frontend VITE_PORT=5174`, `make dev-sqlite VITE_PORT=5174`); if 8080 is taken add `PORT=<other>` to both:
 
 - One command: `make dev-sqlite`. Backend on `:8080` (`PORT=` to change) with `DB_DRIVER=sqlite` and `data/mg.db`; Vite on `http://localhost:5173`. A random `JWT_SECRET` goes into the git-ignored `.env` if missing. No Postgres. Ctrl-C stops both. `make clean-data` wipes the SQLite files.
 - Two terminals: `make run-sqlite` and `make frontend` (use the same `PORT=` for both if 8080 is taken).

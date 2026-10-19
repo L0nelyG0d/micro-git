@@ -13,18 +13,20 @@ JAR="$TMP/jar"
 pass=0; fail=0
 bpid=; fpid=
 
+cleaning=
 cleanup() {
-  for p in $fpid $bpid; do
-    [ -n "$p" ] && { pkill -TERM -P "$p" 2>/dev/null; kill -TERM "$p" 2>/dev/null; }
-  done
-  sleep 0.5
+  # Idempotent and uninterruptible: signals are ignored while cleaning, so a
+  # second Ctrl-C cannot skip the rm. No sleeps: children get TERM then KILL.
+  [ -n "$cleaning" ] && return
+  cleaning=1
+  trap '' INT TERM HUP
   for p in $fpid $bpid; do
     [ -n "$p" ] && { pkill -KILL -P "$p" 2>/dev/null; kill -KILL "$p" 2>/dev/null; }
   done
   rm -rf "$TMP"
 }
 trap cleanup EXIT
-trap 'exit 130' INT TERM
+trap 'cleanup; exit 130' INT TERM HUP
 
 freeport() { python3 -c 'import socket;s=socket.socket();s.bind(("127.0.0.1",0));print(s.getsockname()[1])'; }
 ok()  { pass=$((pass + 1)); echo "  ok   $1"; }
@@ -45,9 +47,9 @@ echo "smoke: backend :$BP (sqlite in temp dir), vite :$VP"
 
 (cd "$ROOT/backend" && go build -o "$TMP/mg-backend" .) || { echo "smoke: backend build failed"; exit 2; }
 DB_DRIVER=sqlite SQLITE_PATH="$TMP/mg.db" JWT_SECRET="$SECRET" PORT="$BP" \
-  "$TMP/mg-backend" >"$TMP/backend.log" 2>&1 & bpid=$!
+  "$TMP/mg-backend" >"$TMP/backend.log" 2>&1 & bpid=$!; disown $bpid
 (cd "$ROOT/frontend" && unset VITE_USE_MOCK && export API_PROXY_TARGET="http://127.0.0.1:$BP" \
-  && exec npx --no-install vite --host 127.0.0.1 --port "$VP" --strictPort) >"$TMP/vite.log" 2>&1 & fpid=$!
+  && exec npx --no-install vite --host 127.0.0.1 --port "$VP" --strictPort) >"$TMP/vite.log" 2>&1 & fpid=$!; disown $fpid
 
 for _ in $(seq 1 120); do
   [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/health")" = 200 ] && break
@@ -124,9 +126,9 @@ call GET /auth/me; check "me after login" smoke "$(echo "$body" | jq -r .usernam
 call POST /auth/login '{"username":"smoke","password":"wrong-password"}'; check "wrong password is 401" 401 "$code"
 
 echo "Persistence (restart backend on the same SQLite file)"
-kill -TERM "$bpid" 2>/dev/null; wait "$bpid" 2>/dev/null
+kill -TERM "$bpid" 2>/dev/null; for _ in $(seq 1 40); do kill -0 "$bpid" 2>/dev/null || break; sleep 0.25; done
 DB_DRIVER=sqlite SQLITE_PATH="$TMP/mg.db" JWT_SECRET="$SECRET" PORT="$BP" \
-  "$TMP/mg-backend" >>"$TMP/backend.log" 2>&1 & bpid=$!
+  "$TMP/mg-backend" >>"$TMP/backend.log" 2>&1 & bpid=$!; disown $bpid
 for _ in $(seq 1 60); do
   [ "$(curl -s -o /dev/null -w '%{http_code}' "$BASE/api/health")" = 200 ] && break; sleep 0.25
 done
