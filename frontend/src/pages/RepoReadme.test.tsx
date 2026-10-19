@@ -162,9 +162,10 @@ it("follows the ref: a branch route shows that branch's README", async () => {
 })
 
 it("does not request the README when the tree lists none", async () => {
-  setup(false)
-  renderAt("/alice/hello")
+  const mock = await withFiles({ "src/a.txt": "a" })
+  const blob = vi.spyOn(mock, "getBlob")
+  renderWithMock("/alice/hello", mock)
   expect(await screen.findByRole("table", { name: "Files" })).toBeInTheDocument()
   expect(screen.queryByTestId("readme")).not.toBeInTheDocument()
-  expect(calls.some((c) => c.includes("/blob/"))).toBe(false)
+  expect(blob).not.toHaveBeenCalled()
 })

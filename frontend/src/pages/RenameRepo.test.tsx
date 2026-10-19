@@ -101,18 +101,27 @@ it("rename: a taken name shows the duplicate message inline and stays", async ()
   expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
 })
 
-it("rename: 400 shows the name rule; invalid names are rejected before any request", async () => {
-  setup()
-  routes["PATCH /api/repos/alice/hello"] = () => json(400, { error: "invalid repository name" })
-  renderAt("/alice/hello/settings")
+it("rename: an invalid name is rejected before any request", async () => {
+  const mock = await seeded()
+  const update = vi.spyOn(mock, "updateRepo")
+  renderWithMock("/alice/hello/settings", mock, <Loc />)
   const dlg = await openDialog()
   const input = within(dlg).getByLabelText("Repository name")
   await userEvent.clear(input)
   await userEvent.type(input, "a b")
   await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
   expect(await within(dlg).findByRole("alert")).toHaveTextContent("letters, digits")
-  expect(calls.some((c) => c.startsWith("PATCH"))).toBe(false)
+  expect(update).not.toHaveBeenCalled()
+  expect(screen.getByTestId("loc")).toHaveTextContent("/alice/hello/settings")
+})
 
+// Kept on fetch: a valid name never gets a 400 from the mock, so only a stub can return the server's rule message.
+it("rename: a 400 from the server shows the name rule", async () => {
+  setup()
+  routes["PATCH /api/repos/alice/hello"] = () => json(400, { error: "invalid repository name" })
+  renderAt("/alice/hello/settings")
+  const dlg = await openDialog()
+  const input = within(dlg).getByLabelText("Repository name")
   await userEvent.clear(input)
   await userEvent.type(input, "ok")
   await userEvent.click(within(dlg).getByRole("button", { name: "Rename repository" }))
