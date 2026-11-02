@@ -4,13 +4,13 @@ import { join, resolve } from "node:path"
 import { describe, expect, it } from "vitest"
 
 // Every API path the frontend builds must exist in the OpenAPI contract
-// (openapi.yaml at the repo root). Paths are found as string/template literals
+// (_docs/openapi.yaml). Paths are found as string/template literals
 // that start with /repos, /auth or /health, or with the local `base` /
 // `apiBase` variables (the repository path) followed by a sub-path.
 
 // Vitest runs from frontend/.
 const srcDir = resolve(process.cwd(), "src") + "/"
-const specFile = resolve(process.cwd(), "../openapi.yaml")
+const specFile = resolve(process.cwd(), "../_docs/openapi.yaml")
 
 /** Values of the template variable `${kind}` in lib/git.ts `readPath`. */
 const KIND_VALUES = ["tree", "blob"]

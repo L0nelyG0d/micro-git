@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-// The OpenAPI contract (../openapi.yaml) must list exactly the routes that
+// The OpenAPI contract (../_docs/openapi.yaml) must list exactly the routes that
 // handler.go registers. Both files are scanned line by line with the standard
 // library only; no database is needed.
 
@@ -153,7 +153,7 @@ func TestOpenAPIMatchesRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec, err := os.ReadFile("../openapi.yaml")
+	spec, err := os.ReadFile("../_docs/openapi.yaml")
 	if err != nil {
 		t.Fatal(err)
 	}
