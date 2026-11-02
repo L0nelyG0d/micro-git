@@ -20,3 +20,4 @@ data/
 *.db
 *.db-wal
 *.db-shm
+2026-10-19-*-local-command-caveat*.txt
