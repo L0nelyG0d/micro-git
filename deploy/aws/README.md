@@ -57,3 +57,26 @@ Not used on purpose: App Runner (not free), RDS (`db.t3.micro` is free only for 
 - **CI (`.github/workflows/deploy.yml`, job `deploy-aws`) does not pass `JwtSecret`**, so the stack create fails until the job adds `--parameter-overrides JwtSecret=...` from a secret. The job also deploys with no image pushed, so the app container stays down until the first `docker run` on the instance (see the template header).
 - **Swap**: `t3.micro` has 1 GB RAM; user data adds a 1 GB swap file.
 - **`cfn-lint` was not run**: it is not installed. The template was checked with a YAML parse and by hand (intrinsic tags, Ref and GetAtt targets).
+
+## What was actually deployed
+
+- Stack `mg` in `ap-southeast-2`, created by hand with `aws cloudformation deploy` (not by CI). Public address: http://ec2-13-211-236-62.ap-southeast-2.compute.amazonaws.com
+- The `deploy-aws` job in `.github/workflows/deploy.yml` is unused: it runs only when the variable `AWS_ROLE_ARN` exists, and it does not.
+- Known limitation: that job does not pass the `JwtSecret` parameter, so it would fail at stack create/update if enabled as is. It also defaults `AWS_REGION` to `us-east-1`, not `ap-southeast-2`, unless the variable is set.
+
+## Delete the stack / avoid charges
+
+    aws cloudformation delete-stack --stack-name mg --region <region>
+    aws cloudformation wait stack-delete-complete --stack-name mg --region <region>
+
+Use the region the stack lives in (`ap-southeast-2` for the hand-made deployment). The ECR repository does not need to be emptied first: `deploy/aws/main.yaml` sets `EmptyOnDelete: true` on `AppRepository`, so CloudFormation deletes the images with it. Deleting the stack removes the instance, its root volume, the security group, the IAM role and the repository. The Postgres data lives in a Docker volume on the instance and is lost with it; take a backup first if you need it. Check the CloudFormation console that the stack reached `DELETE_COMPLETE`, and check EC2 and ECR for leftovers.
+
+What can cost money once the free tier is over (free tier ended, or you are past the limits):
+
+- EC2 hours beyond 750 per month, or any hours after the first 12 months on the legacy free tier.
+- The public IPv4 address, charged per hour (free allowance is the same 750 h/month on the legacy plan only).
+- EBS storage over 30 GB (the template defaults to 20 GB gp3).
+- ECR storage over the free quota (the lifecycle policy keeps the last 5 images).
+- Data transfer out of AWS.
+
+Newer AWS accounts may be on a credit-based plan instead of the legacy free tier; check Billing. Stopping the instance stops EC2 hours but not EBS, and the public IP changes on restart (see Gotchas). This section is from reading the template; I did not run the delete.
