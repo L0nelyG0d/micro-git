@@ -111,6 +111,18 @@ export function holdGet(mock: MockApiService, match: PathMatch) {
   return release
 }
 
+/** Like holdGet, but the answer is read now and delivered at release(): a response that was already out of date when it arrives. */
+export function holdStaleGet(mock: MockApiService, match: PathMatch) {
+  let release!: () => void
+  const gate = new Promise<void>((r) => (release = r))
+  interceptGet(mock, match, async (real) => {
+    const snapshot = await real()
+    await gate
+    return snapshot
+  })
+  return release
+}
+
 /** The first GET whose path matches fails with an ApiError (a 5xx with a JSON body); later calls answer normally. */
 export function failGet(mock: MockApiService, match: PathMatch, status = 500, message = "internal error") {
   interceptGet(mock, match, async () => {

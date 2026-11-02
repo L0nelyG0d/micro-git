@@ -1,4 +1,4 @@
-import { failGet, holdGet, holdNext, installMock, networkErrorGet, networkErrorNext, renderApp, renderWithMock } from "@/test-mock"
+import { failGet, holdGet, holdStaleGet, holdNext, installMock, networkErrorGet, networkErrorNext, renderApp, renderWithMock } from "@/test-mock"
 import { MockApiService } from "@/services/MockApiService"
 import { ApiError } from "@/services/http"
 import { screen, waitFor, within } from "@testing-library/react"
@@ -314,5 +314,21 @@ it("does not show a stale list on a revisit after creating a repo", async () => 
   first.unmount()
   renderApp("/")
   expect(await screen.findByRole("link", { name: "alice/fresh" })).toBeInTheDocument()
+  expect(screen.getAllByRole("link", { name: /^alice\// })).toHaveLength(2)
+})
+
+it("keeps a repo created while an earlier list request is still in flight", async () => {
+  const mock = installMock(await homeMock(true, [{ name: "hello" }]))
+  const first = renderApp("/")
+  await screen.findByRole("link", { name: "alice/hello" })
+  first.unmount() // the cache is filled, so the next visit revalidates in the background
+  const release = holdStaleGet(mock, "/repos?page=1")
+  renderApp("/")
+  await openForm()
+  await userEvent.type(screen.getByLabelText("Name"), "fresh")
+  await userEvent.click(screen.getByRole("button", { name: "Create repository" }))
+  await screen.findAllByText(/alice\/fresh created/i)
+  release() // the answer to the request sent before the create arrives now
+  await waitFor(() => expect(screen.getByRole("link", { name: "alice/fresh" })).toBeInTheDocument())
   expect(screen.getAllByRole("link", { name: /^alice\// })).toHaveLength(2)
 })

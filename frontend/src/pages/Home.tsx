@@ -65,6 +65,9 @@ export function Home() {
                 list: { ...data, repos: all.slice(0, data.per_page), has_more: data.has_more || all.length > data.per_page },
               })
             }
+            // A load that started before the create may still be in flight and would
+            // replace the list without the new repo; reload() aborts it and fetches again.
+            if (page === 1) reload()
             setFormOpen(false)
             toast.success(`Repository ${repo.owner}/${repo.name} created.`)
           }}
