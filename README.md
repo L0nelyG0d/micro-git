@@ -64,6 +64,30 @@ frontend proxy follows). `make help` lists all targets (`setup`, `check-env`,
 `clean-data`, `build`, `lint`, `cli`, `clean`). The manual steps below do the
 same by hand.
 
+### Run with Docker Compose
+
+`docker-compose.yml` starts the app (Go server plus the built frontend, one
+container) and a Postgres 16 database. Only Docker is needed. The schema
+(`backend/db/schema.sql`) is applied automatically the first time the empty
+database volume starts.
+
+```sh
+cp .env.example .env      # .env is git-ignored; never commit it
+# edit .env: set POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB and
+# JWT_SECRET (at least 32 bytes, e.g. `openssl rand -hex 32`)
+docker compose up --build # then open http://localhost:8080
+```
+
+- `APP_PORT` in `.env` changes the host port (default `8080`; the container
+  always listens on `8080`).
+- The password goes into the `DATABASE_URL` that compose builds, so it must be
+  URL-safe: letters and digits (or `-._~`), no `@ : / ? # %` or spaces.
+- Data lives in the named volume `pgdata`. `docker compose down` stops and
+  removes the containers but keeps the data; the next `docker compose up` shows
+  the same users and repositories. `docker compose down -v` also deletes the
+  volume, which erases all data (the schema is re-applied on the next start).
+- The compose file refuses to start if a required variable is missing.
+
 ## Prerequisites
 
 - Go (the version in `backend/go.mod`)
