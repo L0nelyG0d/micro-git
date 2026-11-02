@@ -1,0 +1,142 @@
+[
+  {
+    "feature": "auth",
+    "spec": "e2e/tests/auth.spec.ts",
+    "title": "register creates an account and signs in at once"
+  },
+  {
+    "feature": "auth",
+    "spec": "e2e/tests/auth.spec.ts",
+    "title": "log in again with the same credentials after logging out"
+  },
+  {
+    "feature": "auth",
+    "spec": "e2e/tests/auth.spec.ts",
+    "title": "log out shows the guest links again"
+  },
+  {
+    "feature": "auth",
+    "spec": "e2e/tests/auth.spec.ts",
+    "title": "a wrong password is refused with an alert"
+  },
+  {
+    "feature": "branches",
+    "spec": "e2e/tests/branches.spec.ts",
+    "title": "create a branch from the repository page"
+  },
+  {
+    "feature": "branches",
+    "spec": "e2e/tests/branches.spec.ts",
+    "title": "delete a branch from settings"
+  },
+  {
+    "feature": "file-tree-browse",
+    "spec": "e2e/tests/browse.spec.ts",
+    "title": "the repository page lists files and folders of the branch"
+  },
+  {
+    "feature": "file-tree-browse",
+    "spec": "e2e/tests/browse.spec.ts",
+    "title": "open a folder, then a file, and read its content"
+  },
+  {
+    "feature": "commit-web-editor",
+    "spec": "e2e/tests/commit.spec.ts",
+    "title": "commit a new file through the web editor"
+  },
+  {
+    "feature": "commit-web-editor",
+    "spec": "e2e/tests/commit.spec.ts",
+    "title": "edit an existing file and commit the change"
+  },
+  {
+    "feature": "commit-web-editor",
+    "spec": "e2e/tests/commit.spec.ts",
+    "title": "delete a file through the editor"
+  },
+  {
+    "feature": "commit-web-editor",
+    "spec": "e2e/tests/commit.spec.ts",
+    "title": "the editor refuses a commit message over 500 characters"
+  },
+  {
+    "feature": "compare",
+    "spec": "e2e/tests/compare.spec.ts",
+    "title": "compare shows a file added on the feature branch"
+  },
+  {
+    "feature": "health",
+    "spec": "e2e/tests/health.spec.ts",
+    "title": "GET /health answers 200 OK"
+  },
+  {
+    "feature": "health",
+    "spec": "e2e/tests/health.spec.ts",
+    "title": "HEAD /health answers 200 with no body"
+  },
+  {
+    "feature": "commit-history",
+    "spec": "e2e/tests/history.spec.ts",
+    "title": "commit history lists commits newest first"
+  },
+  {
+    "feature": "commit-history",
+    "spec": "e2e/tests/history.spec.ts",
+    "title": "a commit page shows the changed file"
+  },
+  {
+    "feature": "merge",
+    "spec": "e2e/tests/merge.spec.ts",
+    "title": "a fast-forward merge brings the feature branch into main"
+  },
+  {
+    "feature": "merge",
+    "spec": "e2e/tests/merge.spec.ts",
+    "title": "the merge button stays disabled when both branches are the same"
+  },
+  {
+    "feature": "readme-render",
+    "spec": "e2e/tests/readme.spec.ts",
+    "title": "the root README.md is rendered on the repository page"
+  },
+  {
+    "feature": "rename",
+    "spec": "e2e/tests/rename.spec.ts",
+    "title": "rename a repository from settings and open it under the new name"
+  },
+  {
+    "feature": "rename",
+    "spec": "e2e/tests/rename.spec.ts",
+    "title": "the old name is not found after a rename"
+  },
+  {
+    "feature": "repo-create-list-delete",
+    "spec": "e2e/tests/repos.spec.ts",
+    "title": "create a repository from the home page"
+  },
+  {
+    "feature": "repo-create-list-delete",
+    "spec": "e2e/tests/repos.spec.ts",
+    "title": "the list shows own public and private repositories with badges"
+  },
+  {
+    "feature": "repo-create-list-delete",
+    "spec": "e2e/tests/repos.spec.ts",
+    "title": "delete a repository from settings"
+  },
+  {
+    "feature": "settings-visibility",
+    "spec": "e2e/tests/settings.spec.ts",
+    "title": "change a public repository to private from settings"
+  },
+  {
+    "feature": "settings-visibility",
+    "spec": "e2e/tests/settings.spec.ts",
+    "title": "a private repository is hidden from an anonymous visitor"
+  },
+  {
+    "feature": "settings-visibility",
+    "spec": "e2e/tests/settings.spec.ts",
+    "title": "a public repository is readable by an anonymous visitor without Settings"
+  }
+]

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"net"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -61,6 +62,10 @@ type limitEntry struct {
 type limiter struct {
 	now        func() time.Time
 	maxEntries int
+	// registerMax is the register attempts allowed per IP and window.
+	// Defaults to registerMaxPerIP; REGISTER_MAX_PER_IP overrides it for
+	// test stacks only (the production default is unchanged).
+	registerMax int
 
 	mu      sync.Mutex
 	entries map[string]*limitEntry
@@ -68,10 +73,14 @@ type limiter struct {
 }
 
 func newLimiter(now func() time.Time) *limiter {
-	return &limiter{
-		now: now, maxEntries: limiterMaxEntries,
+	l := &limiter{
+		now: now, maxEntries: limiterMaxEntries, registerMax: registerMaxPerIP,
 		entries: map[string]*limitEntry{}, order: list.New(),
 	}
+	if n, err := strconv.Atoi(os.Getenv("REGISTER_MAX_PER_IP")); err == nil && n > 0 {
+		l.registerMax = n
+	}
+	return l
 }
 
 func (l *limiter) size() int {
@@ -240,7 +249,7 @@ func (l *limiter) registerAttempt(ip string) time.Duration {
 	defer l.mu.Unlock()
 	now := l.now()
 	e := l.get(regKey(ip), now)
-	if e != nil && e.count >= registerMaxPerIP {
+	if e != nil && e.count >= l.registerMax {
 		return e.expires.Sub(now)
 	}
 	e = l.touch(regKey(ip), now)

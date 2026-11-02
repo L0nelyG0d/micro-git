@@ -364,3 +364,14 @@ Decision (user, 2026-10-19): the backend gets three interchangeable stores behin
 - Tests: one shared API suite selected by `TEST_STORE=memory|sqlite|postgres`. Default is the fast local Postgres on :54329 (`TEST_DATABASE_URL`); sqlite uses `t.TempDir()` files; `make test-all` runs all three through `scripts/test-matrix.sh` (own database `mg_matrix_<pid>`, dropped at the end; every skip must be listed in `backend/known_skips.txt`) and CI runs sqlite and memory in the `backend-store` job beside the Postgres `backend` job.
 - Make targets: `run-sqlite`, `dev-sqlite`, `smoke-sqlite`, `run-memory`, `run-pg`, `test-all`, `clean-data` (see the README quick start).
 - Frontend side of the same assignment: all network access through one `ApiService`; `MockApiService` selected by `VITE_USE_MOCK=true`; `openapi.yaml` is the contract both sides are tested against.
+
+### SQLite to PostgreSQL migration (one-shot)
+
+Command: `backend/cmd/migrate-sqlite-to-pg`. It copies every row of a SQLite file written by the backend (`DB_DRIVER=sqlite`) into a Postgres database, so a local dev database can move to Postgres.
+
+- Run: `cd backend && SQLITE_PATH=./data/mg.db DATABASE_URL=postgres://... go run ./cmd/migrate-sqlite-to-pg [--force]`. Both values come from the environment and are never printed.
+- The target must already have `backend/db/schema.sql` applied (`make schema`); the command refuses otherwise.
+- Order: users, repos, objects, refs (foreign-key order). Ids are kept, then the identity sequences of users and repos are moved past the largest id.
+- One transaction: a failure or a row-count mismatch between SQLite and Postgres rolls everything back. Counts per table are printed on both sides.
+- The target must be empty. `--force` truncates the four tables (restarting identities) and then copies. Without `--force` a non-empty target is refused.
+- The tool is standalone (`database/sql` for SQLite, pgx for Postgres) because the backend's `package main` cannot be imported. Its SQLite column list follows the GORM models in `models.go`; the test fixture uses a copy of the SQLite DDL that GORM creates, so a change to the models needs the fixture updated by hand. The tests create their own database on `TEST_DATABASE_URL` (skipped when unset) and drop it afterwards.

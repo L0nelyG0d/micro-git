@@ -83,3 +83,36 @@ Observations (not failures, no issue opened):
 Negative checks for #125 (scratch copy of the script, not committed): an injected `console.error('unexpected')` before step 17 gives `verdict: FAIL`, `17 console clean: unexpected console entries: unexpected (page /)`, all other 16 steps pass. With the sqlite backend killed, the run is `FAIL` (0 passed, 18 failed), the layout step L fails with `page did not render: repo@320/light: "Files" not rendered; blob@320/light: "hello" not rendered; ...` and step 17 names the `502` entries (`/api/auth/me`, `/api/repos`, `/api/auth/register`). A `404` on `/api/repos/<alice>/demo2` (injected fetch before step 17) also fails step 17, because only `demo` and `demo/...` are allowed. The postgres run used an isolated database `mg_e107b` (created and dropped for the run).
 
 Screenshots of this run: `/private/tmp/claude-501/-Users-akniyetislambekkyzy-Desktop-Assignnment2-webfront/d68891ea-aa89-44d0-9645-30cebc06486a/scratchpad/shots/{sqlite,postgres,mock}/` (`01-home-anon` ... `19-bob-public`, and `L-<page>-<width>-<light|dark>`).
+
+## Playwright suite layout
+
+The repeatable browser suite lives in `e2e/` (`@playwright/test`, TypeScript, Chromium only). The journey above stays as the manual check; the suite covers one spec file per feature.
+
+```
+e2e/
+  package.json          scripts: test:e2e, test:e2e:list, typecheck
+  playwright.config.ts  baseURL from E2E_BASE_URL (default http://localhost:8080); no webServer, the app is started by the caller
+  tsconfig.json         strict typecheck of config, support and tests
+  support/helpers.ts    uniqueName, signUp, logIn, logOut, createRepo, commitNewFile, createBranch
+  tests/*.spec.ts       one file per feature (auth, repos, branches, commit, browse, history, readme, compare, merge, rename, settings, health)
+  features.json         [{feature, spec, title}] for every test, for issue creation (label e2e-test)
+```
+
+Commands (run from `e2e/`):
+
+- `npm install` and `npx playwright install chromium` once.
+- `npm run test:e2e` runs the suite; `npm run test:e2e:list` lists it without a browser; `npm run typecheck` runs `tsc --noEmit`.
+- Start the stack first (for example `make dev-sqlite PORT=<free> VITE_PORT=<free>`), then `E2E_BASE_URL=http://localhost:<vite port> npm run test:e2e`.
+
+Rules the specs follow:
+
+- Each test signs up its own user (`uniqueName` gives a lower-case timestamp plus random suffix that fits the username rule `a-z0-9-`, 3 to 32 chars) and creates its own repository, so tests do not depend on each other or on order.
+- Selectors are roles and labels first (`getByRole`, `getByLabel`), text only where the UI has no role.
+- The browser specs call `/api/...` through the page. On the Docker image (or the backend serving a built frontend) the default `http://localhost:8080` serves the SPA, `/api` and `/health`. On the dev stack use the Vite port: `/api` is proxied there, but `/health` is not, so `health.spec.ts` only passes against the backend origin.
+- `features.json` is generated from `npx playwright test --list --reporter=json`; regenerate it when a test is added or renamed.
+
+Gotchas:
+
+- The backend limits `POST /auth/register` to 10 attempts per client IP per 15 minutes (`backend/ratelimit.go`). The suite registers one user per test (about 28 in one run), so a full run against a local backend hits `429` after the tenth sign-up and the rest fail until the window passes. Options: run against a backend started with a higher limit, or share users across tests (this gives up the per-test independence). Not decided here; the user owns that choice.
+- `retries` is 1 only when `CI` is set; `workers` defaults to Playwright's choice, set `E2E_WORKERS` to limit parallel users.
+- Reports go to `e2e/playwright-report/` and failures keep traces (`test-results/`); both are git-ignored.

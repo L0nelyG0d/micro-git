@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 )
@@ -40,9 +41,16 @@ func main() {
 	srv.JWTSecret = []byte(cfg.JWTSecret)
 	srv.CookieSecure = cfg.CookieSecure
 
+	staticDir := os.Getenv("STATIC_DIR") // built frontend; empty = API only
+	if staticDir != "" {
+		if !isRegularFile(filepath.Join(staticDir, "index.html")) {
+			log.Fatalf("STATIC_DIR %q has no index.html", staticDir)
+		}
+	}
+
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           srv.Handler(),
+		Handler:           spaHandler(srv.Handler(), staticDir),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,

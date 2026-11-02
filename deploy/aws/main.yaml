@@ -1,0 +1,219 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  mg on one small EC2 instance (Docker: Postgres, the app image, Caddy as the
+  HTTP/HTTPS entry point) with a private ECR repository for the app image.
+  Free-tier oriented: no load balancer, no NAT gateway, no RDS, no App Runner,
+  no Elastic IP. Uses the account's DEFAULT VPC (no VPC parameters needed).
+
+  Deploy steps
+  1. Create the stack, then build and push the image (root Dockerfile) to the
+     ECR repository (EcrRepositoryUri in Outputs):
+       aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
+       docker build -t <ecr-uri>:latest . && docker push <ecr-uri>:latest
+     The first boot starts Postgres and Caddy; the app container fails to start
+     until the image exists. After the push, on the instance (SSM Session Manager):
+       sudo docker run -d --name mg-app --restart unless-stopped --network mg \
+         --env-file /opt/mg/app.env <ecr-uri>:<tag>
+     Later image updates: push a new tag, then re-create mg-app the same way.
+  2. Apply the schema once (the app does not migrate Postgres itself):
+       scp -i key.pem backend/db/schema.sql ec2-user@<PublicDnsName>:/tmp/
+       ssh ... 'sudo docker exec -i mg-db psql -U mg -d mg < /tmp/schema.sql'
+     or use SSM Session Manager (no open SSH port needed).
+  3. Open http://<PublicDnsName>. For HTTPS set DomainName to a name whose A record
+     points at the instance IP (see Outputs). Note: a stop/start changes the public
+     IP and DNS name because no Elastic IP is used.
+
+  Cookie note: with no DomainName the app runs over plain HTTP and COOKIE_SECURE is
+  false; with DomainName it is true (browsers drop Secure cookies over HTTP).
+
+Parameters:
+  InstanceType:
+    Type: String
+    Default: t3.micro
+    AllowedValues: [t2.micro, t3.micro]
+    Description: Free-tier eligible under the classic 750 h/month allowance (check your account plan in Billing).
+  LatestAmiId:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
+    Description: Amazon Linux 2023 AMI resolved from SSM (docker and the AWS CLI are preinstalled or installable via dnf).
+  AdminCidr:
+    Type: String
+    Default: 127.0.0.1/32
+    AllowedPattern: '^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/\d{1,2}$'
+    Description: CIDR allowed to reach SSH (port 22). The default 127.0.0.1/32 effectively closes SSH; set your own IP/32. SSM Session Manager needs no open port.
+  KeyName:
+    Type: String
+    Default: ""
+    Description: Optional EC2 key pair name for SSH. Leave empty to use SSM Session Manager only.
+  DomainName:
+    Type: String
+    Default: ""
+    Description: Optional public hostname (for example app.example.com). Caddy then obtains a Let's Encrypt certificate. Leave empty for plain HTTP on port 80.
+  ImageTag:
+    Type: String
+    Default: latest
+    Description: Tag of the app image in the ECR repository.
+  VolumeSizeGb:
+    Type: Number
+    Default: 20
+    MinValue: 8
+    MaxValue: 30
+    Description: Root EBS gp3 volume size. 30 GB is the free-tier limit.
+  JwtSecret:
+    Type: String
+    NoEcho: true
+    MinLength: 32
+    Description: HMAC key for session tokens (32+ bytes). Stored in instance user data; see Outputs/README tradeoff.
+
+Conditions:
+  HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
+  HasDomain: !Not [!Equals [!Ref DomainName, ""]]
+
+Resources:
+  AppRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Sub "${AWS::StackName}-app"
+      ImageTagMutability: MUTABLE
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      EmptyOnDelete: true
+      LifecyclePolicy:
+        LifecyclePolicyText: |
+          {"rules":[{"rulePriority":1,"description":"Keep the last 5 images to stay under the free ECR storage limit","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},"action":{"type":"expire"}}]}
+
+  InstanceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref InstanceRole]
+
+  AppSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: mg - HTTP/HTTPS public, SSH from AdminCidr only
+      # No VpcId: the group is created in the account's default VPC.
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: !Ref AdminCidr
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-sg"
+
+  AppInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      ImageId: !Ref LatestAmiId
+      InstanceType: !Ref InstanceType
+      KeyName: !If [HasKeyName, !Ref KeyName, !Ref AWS::NoValue]
+      IamInstanceProfile: !Ref InstanceProfile
+      SecurityGroupIds: [!GetAtt AppSecurityGroup.GroupId]
+      Monitoring: false
+      MetadataOptions:
+        HttpTokens: required
+        HttpEndpoint: enabled
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: !Ref VolumeSizeGb
+            VolumeType: gp3
+            DeleteOnTermination: true
+            Encrypted: true
+      Tags:
+        - Key: Name
+          Value: !Sub "${AWS::StackName}-app"
+      UserData:
+        Fn::Base64: !Sub
+          - |
+            #!/bin/bash
+            # No "set -x": it would copy secrets into the cloud-init log.
+            set -euo pipefail
+            dnf install -y docker
+            systemctl enable --now docker
+            if [ ! -f /swapfile ]; then
+              fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+              echo '/swapfile none swap sw 0 0' >> /etc/fstab
+            fi
+
+            mkdir -p /opt/mg/pgdata /opt/mg/caddy-data
+            umask 077
+            PGPASS=$(openssl rand -hex 24)
+            printf 'POSTGRES_USER=mg\nPOSTGRES_DB=mg\nPOSTGRES_PASSWORD=%s\n' "$PGPASS" > /opt/mg/db.env
+            {
+              printf 'DATABASE_URL=postgres://mg:%s@mg-db:5432/mg?sslmode=disable\n' "$PGPASS"
+              printf 'STORE=db\nDB_DRIVER=postgres\nPORT=8080\nCOOKIE_SECURE=%s\n' "${CookieSecure}"
+              cat <<'ENVEOF'
+            JWT_SECRET=${JwtSecret}
+            ENVEOF
+            } > /opt/mg/app.env
+            chmod 600 /opt/mg/db.env /opt/mg/app.env
+
+            cat > /opt/mg/Caddyfile <<'CADDYEOF'
+            ${SiteAddress} {
+              encode gzip
+              reverse_proxy mg-app:8080
+            }
+            CADDYEOF
+
+            IMAGE_REGISTRY=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
+            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$IMAGE_REGISTRY"
+
+            docker network create mg 2>/dev/null || true
+            docker rm -f mg-db mg-app mg-proxy 2>/dev/null || true
+            docker run -d --name mg-db --restart unless-stopped --network mg \
+              --env-file /opt/mg/db.env -v /opt/mg/pgdata:/var/lib/postgresql/data \
+              postgres:16-alpine
+            # The app container starts only when the image exists in ECR (push it first).
+            docker run -d --name mg-app --restart unless-stopped --network mg \
+              --env-file /opt/mg/app.env "$IMAGE_REGISTRY/${AppRepository}:${ImageTag}" || \
+              echo "mg-app not started: push the image, then: docker run ... (see template header)"
+            docker run -d --name mg-proxy --restart unless-stopped --network mg \
+              -p 80:80 -p 443:443 \
+              -v /opt/mg/Caddyfile:/etc/caddy/Caddyfile:ro -v /opt/mg/caddy-data:/data \
+              caddy:2
+          - SiteAddress: !If [HasDomain, !Ref DomainName, ":80"]
+            CookieSecure: !If [HasDomain, "true", "false"]
+            JwtSecret: !Ref JwtSecret
+
+Outputs:
+  EcrRepositoryUri:
+    Description: Push the app image here (docker push <uri>:<tag>)
+    Value: !Sub "${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${AppRepository}"
+  PublicDnsName:
+    Description: Public DNS name of the instance (changes after stop/start, no Elastic IP)
+    Value: !GetAtt AppInstance.PublicDnsName
+  PublicIp:
+    Description: Public IPv4 address (point DomainName's A record here)
+    Value: !GetAtt AppInstance.PublicIp
+  SiteUrl:
+    Description: URL to open the app
+    Value: !If
+      - HasDomain
+      - !Sub "https://${DomainName}"
+      - !Sub "http://${AppInstance.PublicDnsName}"
+  InstanceId:
+    Description: Use with SSM Session Manager (aws ssm start-session --target <id>)
+    Value: !Ref AppInstance

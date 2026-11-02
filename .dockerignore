@@ -1,0 +1,32 @@
+# Dependencies and build output are rebuilt inside the image.
+**/node_modules
+frontend/dist
+**/dist
+
+# VCS and local state
+.git
+data/
+**/*.db
+**/*.db-wal
+**/*.db-shm
+
+# Secrets: never bake them into an image
+.env
+.env.*
+!.env.example
+
+# Docs, tests and tooling that the image does not need
+_docs
+_docs.zip
+e2e
+graphify-out
+scratch_bin
+.claude
+.playwright-mcp
+.github
+deploy
+bin
+scripts
+coverage
+**/*.log
+.DS_Store

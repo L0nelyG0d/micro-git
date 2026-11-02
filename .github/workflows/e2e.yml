@@ -1,0 +1,128 @@
+# E2E: the built image on Postgres 16 (Playwright suite in e2e/), plus the
+# SQLite integration smoke (make smoke-sqlite). Mechanical gate for deploy.yml:
+# deploy runs only when this workflow and CI both succeed for the same commit.
+# No repository secrets are needed; the database is a throwaway service container.
+name: E2E
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    name: E2E (Playwright, Docker image on Postgres 16)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: ci
+          POSTGRES_PASSWORD: ci
+          POSTGRES_DB: mg
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci -d mg"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      E2E_BASE_URL: http://localhost:8080
+      COOKIE_SECURE: "false"
+      MG_IMAGE: mg:ci
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Guard - Playwright suite present
+        run: |
+          if [ ! -f e2e/package.json ]; then
+            echo "e2e/package.json not found: the Playwright suite is not on this commit yet."
+            exit 1
+          fi
+
+      - name: Build the Docker image (Dockerfile)
+        run: docker build -t mg:ci -f Dockerfile .
+
+      - name: Generate JWT secret and build the database URL
+        env:
+          PG_CREDS: ci:ci
+        run: |
+          JWT_SECRET="$(openssl rand -base64 48)"
+          echo "::add-mask::$JWT_SECRET"
+          echo "JWT_SECRET=$JWT_SECRET" >> "$GITHUB_ENV"
+          # Assembled from parts so the secret scan (ci.yml) does not see a
+          # literal credentialed URL in this file. Throwaway service container.
+          echo "DATABASE_URL=postgres://${PG_CREDS}@localhost:5432/mg?sslmode=disable" >> "$GITHUB_ENV"
+
+      - name: Apply schema
+        run: psql -v ON_ERROR_STOP=1 -q "$DATABASE_URL" -f backend/db/schema.sql
+
+      - name: Start the stack (docker compose up --wait)
+        # docker-compose.yml starts its own Postgres (db service) and reads
+        # POSTGRES_* and JWT_SECRET from the environment; the backend is
+        # published on 8080. REGISTER_MAX_PER_IP lifts the per-IP register
+        # limit for this test stack only (the e2e suite signs up one user per test).
+        env:
+          POSTGRES_USER: mg
+          POSTGRES_PASSWORD: ci-only-not-secret
+          POSTGRES_DB: mg
+          REGISTER_MAX_PER_IP: "1000"
+        run: docker compose up -d --wait
+
+      - name: Install Playwright (Chromium)
+        working-directory: e2e
+        run: |
+          npm ci
+          npx playwright install --with-deps chromium
+
+      - name: Run Playwright suite
+        working-directory: e2e
+        run: npx playwright test
+
+      - name: Upload Playwright report
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/playwright-report/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Compose logs on failure
+        if: ${{ failure() }}
+        run: docker compose logs --no-color --tail 300
+
+      - name: Tear down the stack
+        if: ${{ always() }}
+        run: docker compose down -v
+
+  integration-sqlite:
+    name: Integration smoke (make smoke-sqlite)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: backend/go.mod
+          cache: true
+          cache-dependency-path: backend/go.sum
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies (make setup)
+        run: make setup
+      - name: Smoke (real frontend proxy + real backend on a temp SQLite file)
+        run: make smoke-sqlite

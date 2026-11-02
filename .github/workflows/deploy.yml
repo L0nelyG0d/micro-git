@@ -1,0 +1,197 @@
+# Deploy: runs after CI and E2E both succeed for the same commit on main.
+# Each target is skipped unless its credential is set (secret or variable), so
+# the workflow is a no-op until a maintainer configures a host. Values are never
+# printed: the gate job only writes true/false flags to its outputs.
+name: Deploy
+
+on:
+  workflow_run:
+    workflows: ["CI", "E2E"]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-main
+  cancel-in-progress: false
+
+jobs:
+  gate:
+    name: Gate (CI and E2E green for this commit; targets configured)
+    # Fires for each finished CI/E2E run. Only the last one to finish sees both
+    # runs green, so exactly one deploy starts per commit.
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
+      render: ${{ steps.targets.outputs.render }}
+      railway: ${{ steps.targets.outputs.railway }}
+      aws: ${{ steps.targets.outputs.aws }}
+      gcp: ${{ steps.targets.outputs.gcp }}
+      vercel: ${{ steps.targets.outputs.vercel }}
+    steps:
+      - name: Both CI and E2E succeeded for this commit
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          ready=true
+          for wf in ci.yml e2e.yml; do
+            c="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --commit "$SHA" \
+                 --event push --limit 5 --json conclusion,status \
+                 --jq 'map(select(.status == "completed")) | .[0].conclusion // "none"')"
+            echo "$wf: $c"
+            [ "$c" = "success" ] || ready=false
+          done
+          echo "ready=$ready" >> "$GITHUB_OUTPUT"
+
+      - name: Which targets are configured (flags only)
+        id: targets
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          GCP_WORKLOAD_IDENTITY: ${{ vars.GCP_WORKLOAD_IDENTITY }}
+        run: |
+          flag() { if [ -n "$1" ]; then echo true; else echo false; fi; }
+          {
+            echo "render=$(flag "$RENDER_DEPLOY_HOOK")"
+            echo "railway=$(flag "$RAILWAY_TOKEN")"
+            echo "aws=$(flag "$AWS_ROLE_ARN")"
+            echo "gcp=$(flag "$GCP_WORKLOAD_IDENTITY")"
+            echo "vercel=$(flag "$VERCEL_TOKEN")"
+          } >> "$GITHUB_OUTPUT"
+
+  deploy-render:
+    name: Deploy to Render (deploy hook)
+    needs: gate
+    if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.render == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - name: Trigger the Render deploy hook
+        env:
+          RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+        run: |
+          # The hook URL is a secret; curl is silent on success, only the status is shown.
+          curl -fsS -X POST "$RENDER_DEPLOY_HOOK" -o /dev/null -w 'render: deploy hook HTTP %{http_code}\n'
+
+  deploy-railway:
+    name: Deploy to Railway (railway up)
+    needs: gate
+    if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.railway == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - name: railway up (project token from RAILWAY_TOKEN)
+        env:
+          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+        run: npx --yes @railway/cli@5 up --ci
+
+  deploy-aws:
+    name: Deploy to AWS (CloudFormation, OIDC)
+    needs: gate
+    if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.aws == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      AWS_STACK_NAME: ${{ vars.AWS_STACK_NAME || 'mg' }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: mg-deploy-${{ github.run_id }}
+      - name: CloudFormation deploy (deploy/aws/main.yaml)
+        run: |
+          aws cloudformation deploy \
+            --template-file deploy/aws/main.yaml \
+            --stack-name "$AWS_STACK_NAME" \
+            --capabilities CAPABILITY_IAM \
+            --no-fail-on-empty-changeset
+
+  deploy-gcp:
+    name: Deploy to GCP (Terraform, Workload Identity)
+    needs: gate
+    if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.gcp == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_wrapper: false
+      - name: terraform apply (deploy/gcp)
+        working-directory: deploy/gcp
+        run: |
+          terraform init -input=false
+          terraform apply -input=false -auto-approve
+
+  deploy-vercel-frontend:
+    # Frontend only. The Go backend and its database cannot run on Vercel static
+    # hosting, so /api must be proxied by a Vercel rewrite to the backend deployed
+    # elsewhere (Render, Railway or AWS). Requires VERCEL_ORG_ID and VERCEL_PROJECT_ID vars.
+    name: Deploy frontend to Vercel
+    needs: gate
+    if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.vercel == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
+      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - name: Vercel pull, build, deploy (VERCEL_TOKEN from env, production)
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          npx --yes vercel@65 pull --yes --environment=production
+          npx --yes vercel@65 build --prod
+          npx --yes vercel@65 deploy --prebuilt --prod
