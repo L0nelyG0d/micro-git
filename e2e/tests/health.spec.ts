@@ -4,7 +4,7 @@ import { expect, test } from "@playwright/test"
 // proxy only forwards /api, so /health is answered by the Go server itself.
 
 test("GET /health answers 200 OK", async ({ request }) => {
-  const res = await request.head("/health")
+  const res = await request.get("/health")
   expect(res.status()).toBe(200)
   expect((await res.text()).trim()).toBe("OK")
 })
