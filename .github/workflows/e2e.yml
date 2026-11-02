@@ -104,6 +104,11 @@ jobs:
 
       - name: Tear down the stack
         if: ${{ always() }}
+        env:
+          # Compose validates the same variables on teardown; values are not used.
+          POSTGRES_USER: mg
+          POSTGRES_PASSWORD: ci-only-not-secret
+          POSTGRES_DB: mg
         run: docker compose down -v
 
   integration-sqlite:
