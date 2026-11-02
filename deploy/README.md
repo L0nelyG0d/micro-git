@@ -29,11 +29,11 @@ Never put these values in the repository or in an issue.
 
 ## Which jobs run today
 
-Render is the only target set up for CD (the Render deploy hook). It is the only job intended to run on each green `main` commit. I did not check the repository's secret and variable settings, so confirm in Settings > Secrets and variables > Actions. Per the repository's own docs (`deploy/aws/README.md`, `deploy/render/LIVE.md`):
+Render is the only target set up for CD (the Render deploy hook). It is the only job intended to run on each green `main` commit. The repository's secret and variable settings are not readable from the repo, so confirm in Settings > Secrets and variables > Actions. Per the repository's own docs (`deploy/aws/README.md`, `deploy/render/LIVE.md`):
 
 - Render: live at https://micro-git.onrender.com, deployed through `RENDER_DEPLOY_HOOK`.
 - AWS: deployed by hand (stack `mg`, region `ap-southeast-2`, http://ec2-13-211-236-62.ap-southeast-2.compute.amazonaws.com). `AWS_ROLE_ARN` is not set, so `deploy-aws` is skipped.
-- GCP, Railway, Vercel: `GCP_WORKLOAD_IDENTITY`, `RAILWAY_TOKEN` and `VERCEL_TOKEN` are unset (per the task QA notes), so those jobs are skipped.
+- GCP, Railway, Vercel: `GCP_WORKLOAD_IDENTITY`, `RAILWAY_TOKEN` and `VERCEL_TOKEN` are unset (not configured when this was written), so those jobs are skipped.
 
 ## Which commit is live
 
@@ -43,7 +43,7 @@ Render is the only target set up for CD (the Render deploy hook). It is the only
 ## What happens on failure
 
 - If the hook call fails (bad URL, non-2xx), `curl -fsS` exits non-zero and the `deploy-render` job and Deploy run fail.
-- If the Render build fails after the hook was accepted, per Render documentation the previous successful deploy keeps serving. I did not test this.
+- If the Render build fails after the hook was accepted, per Render documentation the previous successful deploy keeps serving. This has not been tested here.
 - If CI or E2E is red for the commit, the gate sets `ready=false` and no deploy job runs.
 
 ## Render autoDeploy
