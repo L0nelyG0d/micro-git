@@ -135,7 +135,7 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
-      - run: npx --yes @redocly/cli@2.64.1 lint openapi.yaml
+      - run: npx --yes @redocly/cli@2.64.1 lint _docs/openapi.yaml
 
   secret-scan:
     name: Secret scan

@@ -14,7 +14,7 @@ import { MockApiService } from "@/services/MockApiService"
 // misread spec): block mappings, `$ref: '#/components/schemas/X'`, flow lists
 // `required: [a, b]`, and `allOf:` lists of `- $ref` / inline `- type:` items.
 
-const specFile = resolve(process.cwd(), "../openapi.yaml")
+const specFile = resolve(process.cwd(), "../_docs/openapi.yaml")
 
 const indentOf = (line: string) => line.length - line.trimStart().length
 const blank = (line: string) => line.trim() === "" || line.trimStart().startsWith("#")
