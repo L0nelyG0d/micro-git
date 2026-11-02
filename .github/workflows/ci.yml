@@ -135,7 +135,7 @@ jobs:
       - uses: actions/setup-node@a0853c24544627f65ddf259abe73b1d18a591444 # v5.0.0
         with:
           node-version: 22
-      - run: npx --yes @redocly/cli@2.64.1 lint openapi.yaml
+      - run: npx --yes @redocly/cli@2.64.1 lint _docs/openapi.yaml
 
   secret-scan:
     name: Secret scan
@@ -148,7 +148,7 @@ jobs:
           # Allow-list (each with a reason):
           #  - this workflow file: holds the pattern and the throwaway CI service URL
           #  - lines containing USER:PASSWORD@HOST: documented placeholders in the README
-          hits="$(git grep -nIE 'postgres(ql)?://[^:/@ ]+:[^@ ]+@|npg_[A-Za-z0-9]+' -- . ':(exclude).github/workflows/ci.yml' | grep -F -v -e 'USER:PASSWORD@HOST' -e '${' -e '%s@' || true)"
+          hits="$(git grep -nIE 'postgres(ql)?://[^:/@ ]+:[^@ ]+@|npg_[A-Za-z0-9]+' -- . ':(exclude).github/workflows/ci.yml' | grep -v 'USER:PASSWORD@HOST' || true)"
           if [ -n "$hits" ]; then
             echo "Possible secret in tracked files (values hidden; showing file:line only):"
             echo "$hits" | cut -d: -f1,2
