@@ -441,3 +441,10 @@ first). Binary files and files over 1 MiB are skipped; `.git`, `.mg` and
 The password is read from `MG_PASSWORD` or prompted without echo. The session
 is stored in `~/Library/Application Support/mg/config.json` (macOS) or
 `~/.config/mg/config.json` (Linux), readable by you only.
+
+## Deployment
+
+- [Deployment and CD overview](deploy/README.md)
+- [Render](deploy/render/README.md), live: https://micro-git.onrender.com
+- [AWS](deploy/aws/README.md), live: http://ec2-13-211-236-62.ap-southeast-2.compute.amazonaws.com
+- [GCP](deploy/gcp/README.md)
