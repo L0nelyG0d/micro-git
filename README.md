@@ -512,3 +512,10 @@ migration committed
 
 Afterwards start the app on Postgres (`make dev`, see "Quick start") with the
 same `DATABASE_URL`. The SQLite file is only read, never modified.
+
+## Deployment
+
+- [Deployment and CD overview](deploy/README.md)
+- [Render](deploy/render/README.md), live: https://micro-git.onrender.com
+- [AWS](deploy/aws/README.md), live: http://ec2-13-211-236-62.ap-southeast-2.compute.amazonaws.com
+- [GCP](deploy/gcp/README.md)
