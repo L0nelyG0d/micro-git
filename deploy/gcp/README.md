@@ -1,5 +1,14 @@
 # GCP deploy (Terraform)
 
+**Status: alternative, never applied.** GCP/Terraform is the alternative to AWS. The deployed path is AWS (stack `mg`, `ap-southeast-2`, by hand; see `deploy/aws/README.md`), and Render serves the live site. Nothing in this folder has ever been applied to a real GCP project, so treat it as untested.
+
+**Replace before first use:**
+
+- `backend "gcs"` bucket `CHANGE-ME-mg-tfstate` in `main.tf`: create a private bucket by hand and put its name there.
+- `project_id`: required variable with no default (`-var project_id=<project>` or `TF_VAR_project_id`).
+
+**Which path runs what:** the default path is the e2-micro VM running Postgres 16, the app and Caddy under Docker Compose. The optional Cloud Run service (`enable_cloud_run = true`) uses `STORE=memory` with no database, so its data is lost on restart; it is a demo only.
+
 Used by `.github/workflows/deploy.yml`, job `deploy-gcp`. The job runs only when the repository variable `GCP_WORKLOAD_IDENTITY` is set and CI and E2E are green for the commit on `main`.
 
 Terraform root: `deploy/gcp/` (written separately; the workflow runs `terraform init` and `terraform apply` there).
@@ -82,4 +91,4 @@ Cloud Run cannot run Postgres, and it cannot reach the VM's database without a p
 - **The image serves the SPA and the API** (root `Dockerfile`, `STATIC_DIR=/app/public`, `/api` prefix stripped by `backend/static.go`). Caddy only forwards everything to `app:8080`.
 - **Swap**: the e2-micro has 1 GB RAM; the startup script adds a 1 GB swap file.
 - **CI (`.github/workflows/deploy.yml`, job `deploy-gcp`)** runs `terraform apply -auto-approve` on every green push to `main` and does not pass `project_id`. It fails until `TF_VAR_project_id` is set in that job (or a default is added). The `backend "gcs"` bucket must exist first.
-- **Terraform not verified here**: `terraform` was not on PATH when these files were written, so `fmt` and `validate` have not been run. Run `terraform fmt -check -recursive` and `terraform validate` before the first apply.
+- **Terraform validation**: `terraform` is not installed on the machine where this was documented, so `terraform fmt -check` and `terraform validate` have **not been run**; the files are unvalidated, not known-good or known-bad. Run `terraform fmt -check -recursive` and, after `terraform init`, `terraform validate` before the first apply.

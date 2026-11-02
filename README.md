@@ -64,6 +64,30 @@ frontend proxy follows). `make help` lists all targets (`setup`, `check-env`,
 `clean-data`, `build`, `lint`, `cli`, `clean`). The manual steps below do the
 same by hand.
 
+### Run with Docker Compose
+
+`docker-compose.yml` starts the app (Go server plus the built frontend, one
+container) and a Postgres 16 database. Only Docker is needed. The schema
+(`backend/db/schema.sql`) is applied automatically the first time the empty
+database volume starts.
+
+```sh
+cp .env.example .env      # .env is git-ignored; never commit it
+# edit .env: set POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB and
+# JWT_SECRET (at least 32 bytes, e.g. `openssl rand -hex 32`)
+docker compose up --build # then open http://localhost:8080
+```
+
+- `APP_PORT` in `.env` changes the host port (default `8080`; the container
+  always listens on `8080`).
+- The password goes into the `DATABASE_URL` that compose builds, so it must be
+  URL-safe: letters and digits (or `-._~`), no `@ : / ? # %` or spaces.
+- Data lives in the named volume `pgdata`. `docker compose down` stops and
+  removes the containers but keeps the data; the next `docker compose up` shows
+  the same users and repositories. `docker compose down -v` also deletes the
+  volume, which erases all data (the schema is re-applied on the next start).
+- The compose file refuses to start if a required variable is missing.
+
 ## Prerequisites
 
 - Go (the version in `backend/go.mod`)
@@ -441,6 +465,53 @@ first). Binary files and files over 1 MiB are skipped; `.git`, `.mg` and
 The password is read from `MG_PASSWORD` or prompted without echo. The session
 is stored in `~/Library/Application Support/mg/config.json` (macOS) or
 `~/.config/mg/config.json` (Linux), readable by you only.
+
+## Migrating SQLite data to Postgres
+
+`backend/cmd/migrate-sqlite-to-pg` is a one-shot command that copies every row
+of a SQLite database written by the app (`DB_DRIVER=sqlite`, by default
+`data/mg.db`) into a Postgres database: users, repositories, git objects and
+refs. Use it when you started on SQLite and want to keep your data on Postgres.
+
+1. Create the target database and apply the schema (the command refuses a
+   database without the tables): `make schema` with `DATABASE_URL` in `.env`,
+   or `psql "$DATABASE_URL" -f backend/db/schema.sql`. The Docker Compose stack
+   already does this on its first start.
+2. Stop the app, then run it from the repository root:
+
+```sh
+cd backend
+SQLITE_PATH=../data/mg.db DATABASE_URL='postgres://USER:PASSWORD@HOST:5432/DB?sslmode=disable' \
+  go run ./cmd/migrate-sqlite-to-pg
+```
+
+Both settings are read from the environment (there are no other flags), and
+the connection string is never printed. `SQLITE_PATH` is the SQLite file;
+`DATABASE_URL` is the Postgres URL (use `sslmode=require` for a hosted
+database such as Neon).
+
+- The target must be empty. If any of the four tables already has rows the
+  command stops and changes nothing, for example `target database is not empty
+  (users=1, repos=1, objects=5, refs=1); rerun with --force to replace its data`.
+- `--force` truncates the four tables (identities restart) and then copies, so
+  it erases whatever the target held. Use it to redo a migration.
+- Everything runs in one transaction in foreign-key order (users, repos,
+  objects, refs). Ids are kept and the id sequences are moved past the largest
+  one, so new rows do not collide. A failure leaves the target untouched.
+- After copying, the row counts of both sides are printed and compared; a
+  mismatch rolls the whole copy back. A good run ends with `migration committed`:
+
+```text
+row counts (source sqlite -> target postgres), copied in 9ms:
+  users           1 ->        1  ok
+  repos           1 ->        1  ok
+  objects         5 ->        5  ok
+  refs            1 ->        1  ok
+migration committed
+```
+
+Afterwards start the app on Postgres (`make dev`, see "Quick start") with the
+same `DATABASE_URL`. The SQLite file is only read, never modified.
 
 ## Deployment
 

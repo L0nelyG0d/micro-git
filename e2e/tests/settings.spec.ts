@@ -34,5 +34,10 @@ test("a public repository is readable by an anonymous visitor without Settings",
 
   await page.goto(`/${user}/${repo}`)
   await expect(page.getByRole("heading", { name: "Page not found", exact: true })).toHaveCount(0)
+  // The repository really renders for the logged-out visitor (not just "no 404 heading").
+  const title = page.getByRole("heading", { level: 1 })
+  await expect(title.getByRole("link", { name: user, exact: true })).toBeVisible()
+  await expect(title.getByRole("link", { name: repo, exact: true })).toBeVisible()
+  await expect(page.getByText(/This repository is empty/)).toBeVisible()
   await expect(page.getByRole("navigation", { name: "Repository" }).getByRole("link", { name: "Settings" })).toHaveCount(0)
 })

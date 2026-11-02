@@ -12,4 +12,5 @@ test("GET /health answers 200 OK", async ({ request }) => {
 test("HEAD /health answers 200 with no body", async ({ request }) => {
   const res = await request.head("/health")
   expect(res.status()).toBe(200)
+  expect((await res.body()).length).toBe(0)
 })
