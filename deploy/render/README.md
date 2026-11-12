@@ -27,7 +27,7 @@ Render builds the Dockerfile; it does not run `docker-compose.yml`. A Compose-on
 2. In GitHub: Settings > Secrets and variables > Actions > New repository secret, name `RENDER_DEPLOY_HOOK`, paste the URL.
 3. After CI and E2E pass on `main`, `.github/workflows/deploy.yml` POSTs to it. See `deploy/README.md`.
 
-`autoDeploy: false` (the CI/E2E-gated deploy hook is the only trigger) also deploys on every push by itself, possibly before CI is green; see `deploy/README.md` for turning it off.
+If the live service is not managed by this Blueprint, `autoDeploy` may still be on in the dashboard and deploys on every push, possibly before CI is green; see `deploy/README.md` for turning it off.
 
 ## Free-tier limits
 
