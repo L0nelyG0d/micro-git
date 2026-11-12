@@ -8,7 +8,12 @@ STACK="$1"; REGION="$2"; IMAGE="$3"; SCHEMA="$4"
 REGISTRY="${IMAGE%%/*}"
 
 # Wait for first-boot user data (Docker, Postgres, Caddy). Fails if cloud-init errored.
-cloud-init status --wait >/dev/null || { echo "cloud-init failed on first boot" >&2; cloud-init status --long >&2 || true; exit 1; }
+# Exit 0 = done, 2 = done with recoverable errors (accepted); anything else fails.
+rc=0
+cloud-init status --wait >/dev/null || rc=$?
+if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then
+  echo "cloud-init failed on first boot (exit $rc)" >&2; cloud-init status --long >&2 || true; exit 1
+fi
 for c in mg-db mg-proxy; do
   docker inspect "$c" >/dev/null 2>&1 || { echo "container $c does not exist (first boot incomplete)" >&2; exit 1; }
 done

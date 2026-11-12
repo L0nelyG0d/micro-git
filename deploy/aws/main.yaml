@@ -86,6 +86,9 @@ Resources:
             Principal:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
+      # Created once by hand (see README bootstrap). Caps what this role can ever do, so
+      # the CloudFormation service role cannot use it to escalate privileges.
+      PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/mg-instance-boundary"
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
@@ -127,6 +130,9 @@ Resources:
 
   AppInstance:
     Type: AWS::EC2::Instance
+    # Postgres data lives on this instance's root volume: never delete or replace it implicitly.
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
     Properties:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
