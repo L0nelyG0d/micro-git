@@ -34,7 +34,10 @@ type Config struct {
 	JWTSecret  string
 	// CookieSecure adds the Secure attribute to the session cookie (COOKIE_SECURE=true).
 	CookieSecure bool
-	Pool         PoolConfig
+	// ApplySchema (APPLY_SCHEMA=true) applies the embedded db/schema.sql to the
+	// Postgres database at startup. The script is idempotent.
+	ApplySchema bool
+	Pool        PoolConfig
 	// Warnings are startup notices about risky defaults. They never contain
 	// secret values; main logs them.
 	Warnings []string
@@ -156,5 +159,6 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		DatabaseURL:  dbURL,
 		JWTSecret:    secret,
 		CookieSecure: getenv("COOKIE_SECURE") == "true",
+		ApplySchema:  getenv("APPLY_SCHEMA") == "true",
 	}, nil
 }

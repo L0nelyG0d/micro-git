@@ -103,6 +103,13 @@ func openStore(ctx context.Context, cfg Config) (Store, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if cfg.ApplySchema {
+		if err := ApplySchema(ctx, pool); err != nil {
+			pool.Close()
+			return nil, nil, err
+		}
+		log.Printf("schema: applied db/schema.sql")
+	}
 	return newPgxStore(pool), pool.Close, nil
 }
 

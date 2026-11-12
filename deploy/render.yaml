@@ -4,7 +4,7 @@
 # the free web service sleeps when idle and the free Postgres expires after 30 days.
 services:
   - type: web
-    name: mg
+    name: micro-git
     runtime: docker
     plan: free
     dockerContext: .

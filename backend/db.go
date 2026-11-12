@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"net"
@@ -75,4 +76,22 @@ func isUniqueViolation(err error) bool {
 func isForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+//go:embed db/schema.sql
+var schemaSQL string
+
+// ApplySchema runs the embedded db/schema.sql. The script is idempotent
+// (IF NOT EXISTS everywhere), so applying it to a ready database is a no-op.
+// It is a multi-statement script, so it uses the simple query protocol.
+func ApplySchema(ctx context.Context, pool *pgxpool.Pool) error {
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("apply schema: %s", dbErrorClass(err))
+	}
+	defer conn.Release()
+	if _, err := conn.Conn().PgConn().Exec(ctx, schemaSQL).ReadAll(); err != nil {
+		return fmt.Errorf("apply schema: %s", dbErrorClass(err))
+	}
+	return nil
 }
