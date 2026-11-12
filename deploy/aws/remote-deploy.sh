@@ -7,12 +7,11 @@ set -euo pipefail
 STACK="$1"; REGION="$2"; IMAGE="$3"; SCHEMA="$4"
 REGISTRY="${IMAGE%%/*}"
 
-# Wait for first-boot user data (Docker, Postgres, Caddy) to finish, up to 10 min.
-for _ in $(seq 1 120); do
-  [ -f /opt/mg/.ready ] && break
-  sleep 5
+# Wait for first-boot user data (Docker, Postgres, Caddy). Fails if cloud-init errored.
+cloud-init status --wait >/dev/null || { echo "cloud-init failed on first boot" >&2; cloud-init status --long >&2 || true; exit 1; }
+for c in mg-db mg-proxy; do
+  docker inspect "$c" >/dev/null 2>&1 || { echo "container $c does not exist (first boot incomplete)" >&2; exit 1; }
 done
-[ -f /opt/mg/.ready ] || { echo "first boot did not finish (/opt/mg/.ready missing)" >&2; exit 1; }
 
 aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "$REGISTRY" >/dev/null
 docker pull "$IMAGE"

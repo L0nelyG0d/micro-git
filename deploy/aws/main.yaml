@@ -10,7 +10,7 @@ Description: >
 # 1. The workflow stores the JWT secret in SSM Parameter Store as the SecureString
 #    /<stack-name>/jwt-secret (outside this stack: CloudFormation cannot create
 #    SecureStrings), then creates/updates this stack.
-# 2. First boot (user data) installs Docker, generates the database password, and
+# 2. First boot (user data, runs once; later UserData changes only stop/start the instance) installs Docker, generates the database password, and
 #    starts Postgres and Caddy. It does NOT start the app and holds no app secret.
 # 3. The workflow builds and pushes the root Dockerfile to the ECR repository, then runs
 #    deploy/aws/remote-deploy.sh on the instance through SSM Run Command. That script
@@ -32,9 +32,13 @@ Parameters:
     AllowedValues: [t2.micro, t3.micro]
     Description: Free-tier eligible under the classic 750 h/month allowance (check your account plan in Billing).
   LatestAmiId:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
-    Description: Amazon Linux 2023 AMI resolved from SSM (docker and the AWS CLI are preinstalled or installable via dnf).
+    Type: AWS::EC2::Image::Id
+    Description: >
+      AMI id of the instance (Amazon Linux 2023). Deliberately NOT an SSM-resolved
+      parameter: those are re-resolved on every update, so a new AMI release would
+      REPLACE the instance and wipe Postgres. CI resolves the latest AMI only for a new
+      stack and reuses the running instance's AMI afterwards. Changing the AMI is a
+      deliberate manual action (back up first).
   AdminCidr:
     Type: String
     Default: 127.0.0.1/32
@@ -180,8 +184,6 @@ Resources:
               -p 80:80 -p 443:443 \
               -v /opt/mg/Caddyfile:/etc/caddy/Caddyfile:ro -v /opt/mg/caddy-data:/data \
               caddy:2
-            # Marker for remote-deploy.sh: first boot finished.
-            touch /opt/mg/.ready
           - SiteAddress: !If [HasDomain, !Ref DomainName, ":80"]
             CookieSecure: !If [HasDomain, "true", "false"]
 
