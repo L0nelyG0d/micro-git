@@ -38,7 +38,7 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
 
 1. Pick the region (match `AWS_REGION`) and the stack name. Use a NEW stack name if you already have a hand-made stack (see Gotchas).
 2. IAM > Identity providers > Add provider: OpenID Connect, URL `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`. (Skip if it already exists.)
-3. Create the permissions boundary policy `mg-instance-boundary` (once; the template attaches it to the instance role so the CloudFormation service role cannot use that role to escalate privileges). Save as `mg-instance-boundary.json` (replace `<account-id>`; `parameter/mg/*` follows the stack name `mg`, change it with the stack name):
+3. Create the permissions boundary policy `mg-instance-boundary` (once; the template attaches it to the instance role so the CloudFormation service role cannot use that role to escalate privileges). Save as `mg-instance-boundary.json` (replace `<account-id>`; `parameter/mg/jwt-secret` follows the stack name `mg`, change it with the stack name):
 
 ```json
 {
@@ -55,12 +55,13 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
                 "ssm:PutConfigurePackageResult", "ssmmessages:*", "ec2messages:*"],
      "Resource": "*"},
     {"Effect": "Allow", "Action": "ssm:GetParameter",
-     "Resource": "arn:aws:ssm:*:<account-id>:parameter/mg/*"}
+     "Resource": "arn:aws:ssm:*:<account-id>:parameter/mg/jwt-secret",
+     "Condition": {"Null": {"ec2:SourceInstanceARN": "false"}}}
   ]
 }
 ```
 
-   Create it:
+   The `Null` condition limits the secret read to credentials used from an EC2 instance. Create it:
 
         aws iam create-policy --policy-name mg-instance-boundary --policy-document file://mg-instance-boundary.json
 
@@ -78,21 +79,35 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
 }
 ```
 
-   Permissions policy (what the template creates: EC2 instance and security group, ECR repository, IAM role and instance profile). IAM rights are limited to `mg-*` roles that carry the `mg-instance-boundary` permissions boundary and only the two AWS managed policies the template attaches; the role cannot create unbounded roles, change or remove the boundary, or create policy versions:
+   Permissions policy (what the template creates: EC2 instance and security group, ECR repository, IAM role and instance profile). IAM rights are limited to `mg-*` roles that carry the `mg-instance-boundary` permissions boundary: create, inline policy, delete, tag, and attach/detach (attach/detach also only of the two AWS managed policies the template uses) all require the boundary condition. The role cannot create unbounded roles, change or remove the boundary, or create policy versions. EC2 changes are limited to `t2.micro`/`t3.micro` instances and, for existing resources, to those tagged with this stack's `aws:cloudformation:stack-name`:
 
 ```json
 {
   "Version": "2012-10-17",
   "Statement": [
+    {"Effect": "Allow", "Action": "ec2:Describe*", "Resource": "*"},
+    {"Effect": "Allow", "Action": "ec2:RunInstances",
+     "Resource": "arn:aws:ec2:*:<account-id>:instance/*",
+     "Condition": {"StringEquals": {"ec2:InstanceType": ["t2.micro", "t3.micro"]}}},
+    {"Effect": "Allow", "Action": "ec2:RunInstances",
+     "Resource": ["arn:aws:ec2:*::image/*", "arn:aws:ec2:*:<account-id>:subnet/*",
+                  "arn:aws:ec2:*:<account-id>:security-group/*", "arn:aws:ec2:*:<account-id>:volume/*",
+                  "arn:aws:ec2:*:<account-id>:network-interface/*", "arn:aws:ec2:*:<account-id>:key-pair/*"]},
+    {"Effect": "Allow", "Action": ["ec2:CreateSecurityGroup"], "Resource": "*"},
+    {"Effect": "Allow", "Action": "ec2:CreateTags", "Resource": "*",
+     "Condition": {"StringEquals": {"ec2:CreateAction": ["RunInstances", "CreateSecurityGroup"]}}},
     {"Effect": "Allow",
-     "Action": ["ec2:RunInstances", "ec2:TerminateInstances", "ec2:StartInstances", "ec2:StopInstances",
+     "Action": ["ec2:StopInstances", "ec2:StartInstances", "ec2:TerminateInstances",
                 "ec2:ModifyInstanceAttribute", "ec2:ModifyInstanceMetadataOptions",
-                "ec2:AssociateIamInstanceProfile", "ec2:DescribeIamInstanceProfileAssociations", "ec2:CreateTags", "ec2:DeleteTags",
-                "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
-                "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress",
+                "ec2:AssociateIamInstanceProfile", "ec2:CreateTags", "ec2:DeleteTags"],
+     "Resource": "arn:aws:ec2:*:<account-id>:instance/*",
+     "Condition": {"StringEquals": {"aws:ResourceTag/aws:cloudformation:stack-name": "mg"}}},
+    {"Effect": "Allow",
+     "Action": ["ec2:DeleteSecurityGroup", "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress",
                 "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress",
-                "ec2:Describe*"],
-     "Resource": "*"},
+                "ec2:CreateTags", "ec2:DeleteTags"],
+     "Resource": "arn:aws:ec2:*:<account-id>:security-group/*",
+     "Condition": {"StringEquals": {"aws:ResourceTag/aws:cloudformation:stack-name": "mg"}}},
     {"Effect": "Allow",
      "Action": ["ecr:CreateRepository", "ecr:DeleteRepository", "ecr:DescribeRepositories",
                 "ecr:PutLifecyclePolicy", "ecr:GetLifecyclePolicy", "ecr:DeleteLifecyclePolicy",
@@ -100,18 +115,20 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
                 "ecr:ListTagsForResource", "ecr:TagResource", "ecr:ListImages", "ecr:BatchDeleteImage"],
      "Resource": "arn:aws:ecr:*:<account-id>:repository/mg-*"},
     {"Effect": "Allow",
-     "Action": ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:PutRolePermissionsBoundary"],
+     "Action": ["iam:CreateRole", "iam:PutRolePolicy", "iam:PutRolePermissionsBoundary",
+                "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:TagRole", "iam:UntagRole"],
      "Resource": "arn:aws:iam::<account-id>:role/mg-*",
      "Condition": {"StringEquals": {"iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/mg-instance-boundary"}}},
     {"Effect": "Allow",
      "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
      "Resource": "arn:aws:iam::<account-id>:role/mg-*",
-     "Condition": {"ArnEquals": {"iam:PolicyARN": [
-       "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
-       "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"]}}},
+     "Condition": {
+       "StringEquals": {"iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/mg-instance-boundary"},
+       "ArnEquals": {"iam:PolicyARN": [
+         "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+         "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"]}}},
     {"Effect": "Allow",
-     "Action": ["iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole", "iam:DeleteRolePolicy",
-                "iam:GetRolePolicy", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies",
+     "Action": ["iam:GetRole", "iam:GetRolePolicy", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies",
                 "iam:ListInstanceProfilesForRole"],
      "Resource": "arn:aws:iam::<account-id>:role/mg-*"},
     {"Effect": "Allow",
@@ -178,7 +195,9 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
      "Condition": {"StringEquals": {"ssm:resourceTag/aws:cloudformation:stack-name": "mg"}}},
     {"Effect": "Allow",
      "Action": ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:DescribeInstanceInformation"],
-     "Resource": "*"}
+     "Resource": "*"},
+    {"Effect": "Deny", "Action": "cloudformation:CreateChangeSet", "Resource": "*",
+     "Condition": {"Null": {"cloudformation:ImportResourceTypes": "false"}}}
   ]
 }
 ```
@@ -239,7 +258,7 @@ Not used on purpose: App Runner (not free), RDS (`db.t3.micro` is free only for 
     aws cloudformation delete-stack --stack-name mg --region <region>
     aws cloudformation wait stack-delete-complete --stack-name mg --region <region>
 
-Use the region the stack lives in (`ap-southeast-2` for the hand-made deployment). The ECR repository does not need to be emptied first: `deploy/aws/main.yaml` sets `EmptyOnDelete: true` on `AppRepository`, so CloudFormation deletes the images with it. `AppInstance` has `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`, so deleting the stack (or a replacement) leaves the instance and its root volume behind for manual backup and cleanup. Because the instance keeps using the security group and role, the stack delete will end in `DELETE_FAILED` for those until you back up what you need and terminate the instance by hand, then delete the stack again. Deleting the stack otherwise removes the security group, the IAM role and the repository. Postgres data is a bind mount (`/opt/mg/pgdata`) on the instance's root EBS volume. There are no backups, and the data is lost when you terminate the instance; take a backup first if you need it. Check the CloudFormation console that the stack reached `DELETE_COMPLETE`, and check EC2 and ECR for leftovers.
+Use the region the stack lives in (`ap-southeast-2` for the hand-made deployment). The ECR repository does not need to be emptied first: `deploy/aws/main.yaml` sets `EmptyOnDelete: true` on `AppRepository`, so CloudFormation deletes the images with it. `AppInstance` has `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`, so deleting the stack leaves the instance and its root volume behind. **Back up Postgres BEFORE `delete-stack`**: deleting the stack removes the instance role and profile of the retained instance, so SSM goes offline, and SSH is closed by default (`AdminCidr`). Only the security group ends in `DELETE_FAILED` (the instance still uses it). To recover access afterwards, re-attach an instance profile or open SSH through the security group (`AdminCidr`), take the backup, then terminate the instance by hand and delete the leftover security group. Otherwise deleting the stack removes the IAM role and the repository. Postgres data is a bind mount (`/opt/mg/pgdata`) on the instance's root EBS volume. There are no backups, and the data is lost when you terminate the instance; take a backup first if you need it. Check the CloudFormation console that the stack reached `DELETE_COMPLETE`, and check EC2 and ECR for leftovers.
 
 What can cost money once the free tier is over (free tier ended, or you are past the limits):
 
@@ -261,3 +280,7 @@ Also deferred to #166:
 - `aws:SourceAccount` / `aws:SourceArn` condition on the CloudFormation service role trust policy.
 - Scoping the IAM roles by `Path`.
 - Restricting the OIDC trust further (GitHub environment or `job_workflow_ref` condition).
+- Remaining EC2 rights are account-wide where AWS does not support tag conditions (for example `ec2:CreateSecurityGroup`, `ec2:Describe*`, `ec2:RunInstances` on non-instance resources). The account must not host other, more privileged instances or roles that the service role could pass or affect.
+- The `CreateRole` trust policy of stack roles is unconstrained (the boundary caps permissions, not who can assume). The boundary limits the secret read to EC2 instance credentials (`ec2:SourceInstanceARN`) and to `parameter/mg/jwt-secret`.
+- An old unbounded `mg-InstanceRole-*` from the hand-made stack can still be passed to EC2 by the service role. Delete the hand-made stack, use a NEW stack name, and keep no other `mg-*` roles in the account.
+- Unverified on a real account, check on the first run: `kms:Decrypt` for the `aws/ssm` key under the boundary, the `iam:PassRole` context for `AddRoleToInstanceProfile`, and an orphaned instance after a failed first stack create (it is `Retain`ed and must be terminated by hand).
