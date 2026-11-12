@@ -200,22 +200,33 @@ jobs:
           AMI_ID: ${{ steps.ami.outputs.ami }}
           EXISTED: ${{ steps.ami.outputs.existed }}
         run: |
+          set -o pipefail
           out="$(mktemp)"
           trap 'rm -f "$out"' EXIT
+          rc=0
           aws cloudformation deploy \
             --template-file deploy/aws/main.yaml \
             --stack-name "$AWS_STACK_NAME" \
             --role-arn "$AWS_CFN_ROLE_ARN" \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides "LatestAmiId=$AMI_ID" \
-            --no-execute-changeset --no-fail-on-empty-changeset | tee "$out"
+            --no-execute-changeset --no-fail-on-empty-changeset 2>&1 | tee "$out" || rc=$?
           arn="$(grep -oE 'arn:aws[^ ]*:changeSet/[^ ]+' "$out" | head -n1 || true)"
-          if [ -z "$arn" ]; then
-            echo "no change set created (no changes); cleaning up FAILED change sets"
+          if [ "$rc" -eq 0 ] && [ -z "$arn" ] && grep -q 'No changes to deploy' "$out"; then
+            echo "no changes to deploy; cleaning up empty (FAILED) change sets"
             aws cloudformation list-change-sets --stack-name "$AWS_STACK_NAME" --output json \
               | jq -r '.Summaries[] | select(.Status=="FAILED") | .ChangeSetId' \
               | while read -r id; do aws cloudformation delete-change-set --change-set-name "$id" || true; done
             exit 0
+          fi
+          if [ "$rc" -ne 0 ] || [ -z "$arn" ]; then
+            echo "::error::Creating the change set failed (exit $rc). Status reasons of failed change sets follow (not deleted)."
+            aws cloudformation list-change-sets --stack-name "$AWS_STACK_NAME" --output json \
+              | jq -r '.Summaries[] | select(.Status=="FAILED") | .ChangeSetId' \
+              | while read -r id; do
+                  aws cloudformation describe-change-set --change-set-name "$id" --query '{status:Status,reason:StatusReason}' --output text || true
+                done
+            exit 1
           fi
           bad="$(aws cloudformation describe-change-set --change-set-name "$arn" \
             --query "length(Changes[?ResourceChange.LogicalResourceId=='AppInstance' && (ResourceChange.Action=='Remove' || ResourceChange.Replacement=='True' || ResourceChange.Replacement=='Conditional')])" --output text)"
