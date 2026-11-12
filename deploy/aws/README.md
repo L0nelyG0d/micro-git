@@ -15,7 +15,7 @@ Template: `deploy/aws/main.yaml`. Instance-side script: `deploy/aws/remote-deplo
 2. Assumes the role in `AWS_ROLE_ARN` through GitHub OIDC (no stored AWS keys). Fails early if `AWS_CFN_ROLE_ARN` is not set.
 3. Writes the secret to SSM Parameter Store as SecureString `/<stack>/jwt-secret`. It is not in the template, the stack parameters or EC2 user data (this fixes the earlier exposure through `ec2:DescribeInstanceAttribute`). This parameter lives outside the stack and is NOT deleted with it.
 4. Picks the AMI: for an existing stack it reuses the running instance's `ImageId` (read with `describe-instances`); only for a new stack it resolves the latest Amazon Linux 2023 AMI from the public SSM parameter. `LatestAmiId` is a plain `AWS::EC2::Image::Id` parameter, not an SSM-resolved one, because those are re-resolved on every update and a new AMI release would replace the instance and wipe Postgres.
-5. Guard: `aws cloudformation deploy --no-execute-changeset --role-arn <AWS_CFN_ROLE_ARN>`, then the job fails if the change set removes or replaces (`Replacement` True or Conditional) `AppInstance`. Only a safe change set is executed (a second `deploy` with the same inputs). The stack has no `ImageTag` parameter: image rollout is not a stack change.
+5. Guard: `aws cloudformation deploy --no-execute-changeset --role-arn <AWS_CFN_ROLE_ARN>`, then the job fails if the change set removes or replaces (`Replacement` True or Conditional) `AppInstance`. The guard inspects the change set ARN printed by `deploy`, and that exact change set is the one executed with `execute-change-set`, followed by `wait stack-create-complete` or `stack-update-complete`. The stack has no `ImageTag` parameter: image rollout is not a stack change.
 6. Logs in to ECR (`aws-actions/amazon-ecr-login@v2`), builds the root `Dockerfile`, pushes `<repo>:<sha7>` and `<repo>:latest`.
 7. Sends `deploy/aws/remote-deploy.sh` to the instance with SSM `AWS-RunShellScript`. On the instance it waits for `cloud-init status --wait` (fails on error) and checks that `mg-db` and `mg-proxy` exist, pulls the image, reads the JWT secret from SSM with the instance role, applies `backend/db/schema.sql` (idempotent, so the schema now follows every deploy instead of being applied by hand) and recreates the `mg-app` container. The job polls `get-command-invocation` for up to 15 minutes (`executionTimeout` 900 s) and fails unless the status is `Success`.
 8. Polls `<AppUrl>/health` for up to 5 minutes. With `DomainName` set, AppUrl is `https://<domain>`, so its DNS record must already point at the instance.
@@ -38,7 +38,34 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
 
 1. Pick the region (match `AWS_REGION`) and the stack name. Use a NEW stack name if you already have a hand-made stack (see Gotchas).
 2. IAM > Identity providers > Add provider: OpenID Connect, URL `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`. (Skip if it already exists.)
-3. Create the CloudFormation service role `cfn-deploy-mg`. Trust policy:
+3. Create the permissions boundary policy `mg-instance-boundary` (once; the template attaches it to the instance role so the CloudFormation service role cannot use that role to escalate privileges). Save as `mg-instance-boundary.json` (replace `<account-id>`; `parameter/mg/*` follows the stack name `mg`, change it with the stack name):
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {"Effect": "Allow",
+     "Action": ["ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability",
+                "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
+     "Resource": "*"},
+    {"Effect": "Allow",
+     "Action": ["ssm:UpdateInstanceInformation", "ssm:ListAssociations", "ssm:ListInstanceAssociations",
+                "ssm:UpdateInstanceAssociationStatus", "ssm:GetDocument", "ssm:DescribeDocument",
+                "ssm:GetManifest", "ssm:PutInventory", "ssm:PutComplianceItems",
+                "ssm:PutConfigurePackageResult", "ssmmessages:*", "ec2messages:*"],
+     "Resource": "*"},
+    {"Effect": "Allow", "Action": "ssm:GetParameter",
+     "Resource": "arn:aws:ssm:*:<account-id>:parameter/mg/*"}
+  ]
+}
+```
+
+   Create it:
+
+        aws iam create-policy --policy-name mg-instance-boundary --policy-document file://mg-instance-boundary.json
+
+   Never grant anyone (including `cfn-deploy-mg`) `iam:CreatePolicyVersion` or `iam:SetDefaultPolicyVersion` on it.
+4. Create the CloudFormation service role `cfn-deploy-mg`. Trust policy:
 
 ```json
 {
@@ -51,7 +78,7 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
 }
 ```
 
-   Permissions policy (what the template creates: EC2 instance and security group, ECR repository, IAM role and instance profile; no `*` on IAM):
+   Permissions policy (what the template creates: EC2 instance and security group, ECR repository, IAM role and instance profile). IAM rights are limited to `mg-*` roles that carry the `mg-instance-boundary` permissions boundary and only the two AWS managed policies the template attaches; the role cannot create unbounded roles, change or remove the boundary, or create policy versions:
 
 ```json
 {
@@ -59,7 +86,8 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
   "Statement": [
     {"Effect": "Allow",
      "Action": ["ec2:RunInstances", "ec2:TerminateInstances", "ec2:StartInstances", "ec2:StopInstances",
-                "ec2:ModifyInstanceAttribute", "ec2:CreateTags", "ec2:DeleteTags",
+                "ec2:ModifyInstanceAttribute", "ec2:ModifyInstanceMetadataOptions",
+                "ec2:AssociateIamInstanceProfile", "ec2:DescribeIamInstanceProfileAssociations", "ec2:CreateTags", "ec2:DeleteTags",
                 "ec2:CreateSecurityGroup", "ec2:DeleteSecurityGroup",
                 "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress",
                 "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress",
@@ -72,12 +100,24 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
                 "ecr:ListTagsForResource", "ecr:TagResource", "ecr:ListImages", "ecr:BatchDeleteImage"],
      "Resource": "arn:aws:ecr:*:<account-id>:repository/mg-*"},
     {"Effect": "Allow",
-     "Action": ["iam:CreateRole", "iam:DeleteRole", "iam:GetRole", "iam:TagRole",
-                "iam:AttachRolePolicy", "iam:DetachRolePolicy", "iam:PutRolePolicy",
-                "iam:DeleteRolePolicy", "iam:GetRolePolicy",
-                "iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
+     "Action": ["iam:CreateRole", "iam:PutRolePolicy", "iam:AttachRolePolicy", "iam:PutRolePermissionsBoundary"],
+     "Resource": "arn:aws:iam::<account-id>:role/mg-*",
+     "Condition": {"StringEquals": {"iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/mg-instance-boundary"}}},
+    {"Effect": "Allow",
+     "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
+     "Resource": "arn:aws:iam::<account-id>:role/mg-*",
+     "Condition": {"ArnEquals": {"iam:PolicyARN": [
+       "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
+       "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"]}}},
+    {"Effect": "Allow",
+     "Action": ["iam:DeleteRole", "iam:GetRole", "iam:TagRole", "iam:UntagRole", "iam:DeleteRolePolicy",
+                "iam:GetRolePolicy", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies",
+                "iam:ListInstanceProfilesForRole"],
+     "Resource": "arn:aws:iam::<account-id>:role/mg-*"},
+    {"Effect": "Allow",
+     "Action": ["iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
                 "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile"],
-     "Resource": ["arn:aws:iam::<account-id>:role/mg-*", "arn:aws:iam::<account-id>:instance-profile/mg-*"]},
+     "Resource": "arn:aws:iam::<account-id>:instance-profile/mg-*"},
     {"Effect": "Allow", "Action": "iam:PassRole",
      "Resource": "arn:aws:iam::<account-id>:role/mg-*",
      "Condition": {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}}}
@@ -85,7 +125,7 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
 }
 ```
 
-4. Create the GitHub deploy role `github-deploy-mg`. Trust policy (restricted to this repository and `main`):
+5. Create the GitHub deploy role `github-deploy-mg`. Trust policy (restricted to this repository and `main`):
 
 ```json
 {
@@ -143,10 +183,10 @@ Two roles keep privileges apart: a GitHub deploy role (small, assumed through OI
 }
 ```
 
-5. GitHub > repository Settings > Secrets and variables > Actions: add variables `AWS_ROLE_ARN` (`github-deploy-mg` ARN) and `AWS_CFN_ROLE_ARN` (`cfn-deploy-mg` ARN), secret `AWS_JWT_SECRET`, and optionally variables `AWS_REGION`, `AWS_STACK_NAME`. Generate a NEW `AWS_JWT_SECRET` with `openssl rand -hex 32`; do not reuse any value that was ever in the old template parameters, user data, chat or logs.
-6. Make sure the account has a default VPC in that region (the template relies on it) and has EC2 capacity/quotas for a `t3.micro`.
-7. Push to `main` (or re-run the Deploy workflow after CI and E2E pass). Watch the `deploy-aws` job; the first run takes several minutes (instance boot, image pull).
-8. If it fails, read the job log (the SSM step prints the instance command output) and fix; the job is safe to re-run.
+6. GitHub > repository Settings > Secrets and variables > Actions: add variables `AWS_ROLE_ARN` (`github-deploy-mg` ARN) and `AWS_CFN_ROLE_ARN` (`cfn-deploy-mg` ARN), secret `AWS_JWT_SECRET`, and optionally variables `AWS_REGION`, `AWS_STACK_NAME`. Generate a NEW `AWS_JWT_SECRET` with `openssl rand -hex 32`; do not reuse any value that was ever in the old template parameters, user data, chat or logs.
+7. Make sure the account has a default VPC in that region (the template relies on it) and has EC2 capacity/quotas for a `t3.micro`.
+8. Push to `main` (or re-run the Deploy workflow after CI and E2E pass). Watch the `deploy-aws` job; the first run takes several minutes (instance boot, image pull).
+9. If it fails, read the job log (the SSM step prints the instance command output) and fix; the job is safe to re-run.
 
 `DomainName` is not passed by CI, and `aws cloudformation deploy` keeps the previous value of parameters it is not given, so a domain set by a manual deploy is not dropped by later CI runs. The AMI is passed on every run (see step 4 above).
 
@@ -199,7 +239,7 @@ Not used on purpose: App Runner (not free), RDS (`db.t3.micro` is free only for 
     aws cloudformation delete-stack --stack-name mg --region <region>
     aws cloudformation wait stack-delete-complete --stack-name mg --region <region>
 
-Use the region the stack lives in (`ap-southeast-2` for the hand-made deployment). The ECR repository does not need to be emptied first: `deploy/aws/main.yaml` sets `EmptyOnDelete: true` on `AppRepository`, so CloudFormation deletes the images with it. Deleting the stack removes the instance, its root volume, the security group, the IAM role and the repository. Postgres data is a bind mount (`/opt/mg/pgdata`) on the instance's root EBS volume. There are no backups, and the data is lost when the instance is terminated or replaced (including stack deletion); take a backup first if you need it. Check the CloudFormation console that the stack reached `DELETE_COMPLETE`, and check EC2 and ECR for leftovers.
+Use the region the stack lives in (`ap-southeast-2` for the hand-made deployment). The ECR repository does not need to be emptied first: `deploy/aws/main.yaml` sets `EmptyOnDelete: true` on `AppRepository`, so CloudFormation deletes the images with it. `AppInstance` has `DeletionPolicy: Retain` and `UpdateReplacePolicy: Retain`, so deleting the stack (or a replacement) leaves the instance and its root volume behind for manual backup and cleanup. Because the instance keeps using the security group and role, the stack delete will end in `DELETE_FAILED` for those until you back up what you need and terminate the instance by hand, then delete the stack again. Deleting the stack otherwise removes the security group, the IAM role and the repository. Postgres data is a bind mount (`/opt/mg/pgdata`) on the instance's root EBS volume. There are no backups, and the data is lost when you terminate the instance; take a backup first if you need it. Check the CloudFormation console that the stack reached `DELETE_COMPLETE`, and check EC2 and ECR for leftovers.
 
 What can cost money once the free tier is over (free tier ended, or you are past the limits):
 
@@ -214,3 +254,10 @@ Newer AWS accounts may be on a credit-based plan instead of the legacy free tier
 ## Known gaps
 
 Deferred review findings (no backups, hardening, and other follow-ups) are tracked in issue #166. Not done in this branch: Postgres backups, a separate data volume, and anything that was never run against a real account.
+
+Also deferred to #166:
+
+- Stale DNS after a stop/start when `DomainName` is used (no Elastic IP).
+- `aws:SourceAccount` / `aws:SourceArn` condition on the CloudFormation service role trust policy.
+- Scoping the IAM roles by `Path`.
+- Restricting the OIDC trust further (GitHub environment or `job_workflow_ref` condition).
