@@ -90,7 +90,10 @@ const schemaLockID = 7203001
 // (IF NOT EXISTS everywhere), so applying it to a ready database is a no-op.
 // It is one multi-statement simple-protocol query, so it runs in a single
 // implicit transaction: the transaction-scoped advisory lock and lock_timeout
-// cover all of it. The whole apply is capped at 60 seconds.
+// cover all of it, so schema.sql must never contain BEGIN or COMMIT. The
+// advisory lock is taken first so waiting for another instance's apply is not
+// capped by lock_timeout (only the 60 second context cap applies); lock_timeout
+// then bounds waits for table locks.
 func ApplySchema(ctx context.Context, pool *pgxpool.Pool) error {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -99,7 +102,7 @@ func ApplySchema(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("apply schema: %s", dbErrorClass(err))
 	}
 	defer conn.Release()
-	script := fmt.Sprintf("SET LOCAL lock_timeout = '3s'; SELECT pg_advisory_xact_lock(%d);\n", schemaLockID) + schemaSQL
+	script := fmt.Sprintf("SELECT pg_advisory_xact_lock(%d); SET LOCAL lock_timeout = '3s';\n", schemaLockID) + schemaSQL
 	if _, err := conn.Conn().PgConn().Exec(ctx, script).ReadAll(); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {

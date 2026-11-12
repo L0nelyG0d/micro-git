@@ -1,4 +1,12 @@
 -- micro git schema. Plain SQL, idempotent: safe to apply repeatedly.
+--
+-- Rules for editing this file:
+--  * Never add BEGIN/COMMIT/ROLLBACK. The server runs it as one implicit
+--    transaction after taking a transaction-scoped advisory lock and a
+--    SET LOCAL lock_timeout; ending the transaction would release both.
+--  * Re-applying must not take conflicting locks on tables that already
+--    exist (the app is serving traffic), so ALTER TABLE and CREATE INDEX are
+--    guarded by catalog checks instead of IF NOT EXISTS.
 
 CREATE TABLE IF NOT EXISTS users (
     id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -7,7 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS users_username_lower_idx ON users (lower(username));
+DO $$ BEGIN IF to_regclass('users_username_lower_idx') IS NULL THEN CREATE UNIQUE INDEX users_username_lower_idx ON users (lower(username)); END IF; END $$;
 
 CREATE TABLE IF NOT EXISTS repos (
     id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -18,8 +26,8 @@ CREATE TABLE IF NOT EXISTS repos (
     created_at     timestamptz NOT NULL DEFAULT now()
 );
 
-CREATE UNIQUE INDEX IF NOT EXISTS repos_owner_name_lower_idx ON repos (owner_id, lower(name));
-CREATE INDEX IF NOT EXISTS repos_created_idx ON repos (created_at DESC, id DESC);
+DO $$ BEGIN IF to_regclass('repos_owner_name_lower_idx') IS NULL THEN CREATE UNIQUE INDEX repos_owner_name_lower_idx ON repos (owner_id, lower(name)); END IF; END $$;
+DO $$ BEGIN IF to_regclass('repos_created_idx') IS NULL THEN CREATE INDEX repos_created_idx ON repos (created_at DESC, id DESC); END IF; END $$;
 
 CREATE TABLE IF NOT EXISTS objects (
     repo_id bigint   NOT NULL REFERENCES repos (id) ON DELETE CASCADE,
@@ -46,4 +54,10 @@ BEGIN
 END $$;
 
 -- Private repositories: hidden from everyone but the owner (404 for others).
-ALTER TABLE repos ADD COLUMN IF NOT EXISTS private boolean NOT NULL DEFAULT false;
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_attribute
+                   WHERE attrelid = 'repos'::regclass AND attname = 'private' AND NOT attisdropped) THEN
+        ALTER TABLE repos ADD COLUMN private boolean NOT NULL DEFAULT false;
+    END IF;
+END $$;

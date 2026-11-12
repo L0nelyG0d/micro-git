@@ -50,7 +50,7 @@ func main() {
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           withBuildHeader(spaHandler(srv.Handler(), staticDir), buildID(os.Getenv)),
+		Handler:           newHTTPHandler(srv, staticDir, buildID(os.Getenv)),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -121,4 +121,10 @@ func checkStoreAvailable(cfg Config) error {
 		return fmt.Errorf("unknown DB_DRIVER %q", cfg.DBDriver)
 	}
 	return nil
+}
+
+// newHTTPHandler is the full handler: API, optional static frontend, and the
+// X-Build header on every response.
+func newHTTPHandler(srv *Server, staticDir, id string) http.Handler {
+	return withBuildHeader(spaHandler(srv.Handler(), staticDir), id)
 }

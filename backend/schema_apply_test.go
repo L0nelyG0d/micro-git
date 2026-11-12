@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestLoadConfigApplySchema(t *testing.T) {
@@ -32,7 +34,10 @@ func TestSchemaEmbedded(t *testing.T) {
 // ApplySchema must work on a fresh schema, be safe to run twice, and produce
 // the late additions (private column, refs_object_fk). It runs in a temporary
 // schema selected through search_path, so it never touches real tables.
-func TestApplySchemaIdempotent(t *testing.T) {
+// tempSchemaPool returns a pool whose search_path is a fresh, empty schema that
+// is dropped when the test ends.
+func tempSchemaPool(t *testing.T) (*pgxpool.Pool, string) {
+	t.Helper()
 	raw := os.Getenv("TEST_DATABASE_URL")
 	if raw == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
@@ -42,13 +47,14 @@ func TestApplySchemaIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal("NewPool failed (details hidden)")
 	}
-	defer admin.Close()
 	schema := fmt.Sprintf("schema_apply_%d", time.Now().UnixNano())
 	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatalf("create schema: %v", err)
 	}
-	defer admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
-
+	t.Cleanup(func() {
+		admin.Exec(ctx, "DROP SCHEMA "+schema+" CASCADE")
+		admin.Close()
+	})
 	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatal("bad TEST_DATABASE_URL (details hidden)")
@@ -60,7 +66,13 @@ func TestApplySchemaIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal("NewPool failed (details hidden)")
 	}
-	defer pool.Close()
+	t.Cleanup(pool.Close)
+	return pool, schema
+}
+
+func TestApplySchemaIdempotent(t *testing.T) {
+	ctx := context.Background()
+	pool, schema := tempSchemaPool(t)
 	for i := 0; i < 2; i++ {
 		if err := ApplySchema(ctx, pool); err != nil {
 			t.Fatalf("apply #%d: %v", i+1, err)
@@ -75,5 +87,53 @@ func TestApplySchemaIdempotent(t *testing.T) {
 	}
 	if err := pool.QueryRow(ctx, `SELECT count(*) FROM pg_constraint WHERE conname = 'refs_object_fk' AND conrelid = 'refs'::regclass`).Scan(&fk); err != nil || fk != 1 {
 		t.Fatalf("refs_object_fk = %d, err %v", fk, err)
+	}
+}
+
+// Two instances starting together both succeed (the advisory lock serialises them).
+func TestApplySchemaConcurrent(t *testing.T) {
+	pool, _ := tempSchemaPool(t)
+	ctx := context.Background()
+	errs := make(chan error, 2)
+	for i := 0; i < 2; i++ {
+		go func() { errs <- ApplySchema(ctx, pool) }()
+	}
+	for i := 0; i < 2; i++ {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent apply: %v", err)
+		}
+	}
+}
+
+// Re-applying on a live database must not wait behind ordinary traffic: an open
+// INSERT into users and an open SELECT on repos must not block it.
+func TestApplySchemaDoesNotBlockOnTraffic(t *testing.T) {
+	pool, _ := tempSchemaPool(t)
+	ctx := context.Background()
+	if err := ApplySchema(ctx, pool); err != nil {
+		t.Fatal(err)
+	}
+	ins, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ins.Rollback(ctx)
+	if _, err := ins.Exec(ctx, `INSERT INTO users (username, password_hash) VALUES ('u', 'h')`); err != nil {
+		t.Fatal(err)
+	}
+	sel, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer sel.Rollback(ctx)
+	if _, err := sel.Exec(ctx, `SELECT * FROM repos`); err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if err := ApplySchema(ctx, pool); err != nil {
+		t.Fatalf("apply with open transactions: %v", err)
+	}
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("apply took %v with open transactions", d)
 	}
 }
