@@ -48,7 +48,7 @@ Render is the only target set up for CD (the Render deploy hook). It is the only
 
 ## Render autoDeploy
 
-`deploy/render.yaml` sets `autoDeploy: true`, which makes Render deploy every push to the tracked branch by itself, possibly before CI and E2E are green. This bypasses the gate. To make the deploy hook the only trigger, set `autoDeploy: false` in `deploy/render.yaml` (and sync the Blueprint), or switch Auto-Deploy to "Off" in the service settings in the Render dashboard. This document does not change that file.
+`deploy/render.yaml` sets `autoDeploy: false`, so the CI/E2E-gated deploy hook is the only deploy trigger. If the live service is not managed by the Blueprint, switch Auto-Deploy to "Off" in the service settings in the Render dashboard, otherwise every push deploys by itself, possibly before CI and E2E are green.
 
 ## Known limitation
 

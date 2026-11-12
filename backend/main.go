@@ -50,7 +50,7 @@ func main() {
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           spaHandler(srv.Handler(), staticDir),
+		Handler:           newHTTPHandler(srv, staticDir, buildID(os.Getenv)),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
@@ -103,6 +103,13 @@ func openStore(ctx context.Context, cfg Config) (Store, func(), error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	if cfg.ApplySchema {
+		if err := ApplySchema(ctx, pool); err != nil {
+			pool.Close()
+			return nil, nil, err
+		}
+		log.Printf("schema: applied db/schema.sql")
+	}
 	return newPgxStore(pool), pool.Close, nil
 }
 
@@ -114,4 +121,10 @@ func checkStoreAvailable(cfg Config) error {
 		return fmt.Errorf("unknown DB_DRIVER %q", cfg.DBDriver)
 	}
 	return nil
+}
+
+// newHTTPHandler is the full handler: API, optional static frontend, and the
+// X-Build header on every response.
+func newHTTPHandler(srv *Server, staticDir, id string) http.Handler {
+	return withBuildHeader(spaHandler(srv.Handler(), staticDir), id)
 }
