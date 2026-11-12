@@ -25,5 +25,5 @@ data/
 # Session exports, local scratch binary, archives (may contain credentials)
 resolving the issues.txt
 20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.txt
-scratch_bin
-*.zip
+/scratch_bin
+/*.zip

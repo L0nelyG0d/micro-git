@@ -31,6 +31,6 @@ Render builds the Dockerfile; it does not run `docker-compose.yml`. A Compose-on
 
 Stated in `deploy/render.yaml`: the free web service sleeps when idle (the first request after a sleep is slow), and the free Postgres expires after 30 days. Check Render's current pricing page for other limits; I did not verify them.
 
-## Service name: mg vs micro-git
+## Service name
 
-The Blueprint names the web service `mg`. `deploy/render/LIVE.md` names the live service `micro-git` (URL https://micro-git.onrender.com). I cannot tell from the repository whether the live service was created from this Blueprint or by hand, so which name Render actually shows is unverified. Check the Render dashboard. The `RENDER_DEPLOY_HOOK` must belong to the live service. (A GET to `/health` on the live URL returned HTTP 200 when this was written.)
+The Blueprint service is named `micro-git`, matching the live service (https://micro-git.onrender.com). Do not create a new Blueprint against the live service; see `_docs/deploy-render.md` for how to adopt it safely, the `APPLY_SCHEMA` behavior and the post-deploy smoke job. The `RENDER_DEPLOY_HOOK` must belong to the live service.
