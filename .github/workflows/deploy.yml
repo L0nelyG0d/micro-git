@@ -113,9 +113,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     # No extra GitHub permissions: AWS access comes from the OIDC role (id-token).
-    # The role needs CloudFormation/EC2/IAM/ECR rights for the stack plus
-    # ssm:PutParameter, ssm:SendCommand, ssm:GetCommandInvocation and
-    # ssm:DescribeInstanceInformation (policy example in deploy/aws/README.md).
+    # The GitHub role only needs CloudFormation on the stack, iam:PassRole for the
+    # CloudFormation service role (AWS_CFN_ROLE_ARN, which holds the EC2/IAM/ECR rights),
+    # ECR push, and SSM put-parameter/send-command/get-command-invocation
+    # (policy examples in deploy/aws/README.md).
     permissions:
       contents: read
       id-token: write
@@ -127,7 +128,12 @@ jobs:
       - name: Require the AWS_JWT_SECRET secret (32+ characters)
         env:
           AWS_JWT_SECRET: ${{ secrets.AWS_JWT_SECRET }}
+          AWS_CFN_ROLE_ARN: ${{ vars.AWS_CFN_ROLE_ARN }}
         run: |
+          if [ -z "$AWS_CFN_ROLE_ARN" ]; then
+            echo "::error::Variable AWS_CFN_ROLE_ARN is not set. Create the CloudFormation service role (see deploy/aws/README.md) and set its ARN."
+            exit 1
+          fi
           # Only the length is checked; the value is never printed.
           if [ -z "$AWS_JWT_SECRET" ]; then
             echo "::error::Secret AWS_JWT_SECRET is not set. Add a random string of 32+ characters (for example: openssl rand -hex 32)."
@@ -156,12 +162,65 @@ jobs:
           aws ssm put-parameter --name "/${AWS_STACK_NAME}/jwt-secret" --type SecureString \
             --overwrite --value "file://$f" >/dev/null
           rm -f "$f"
-      - name: Create or update the stack (creates the ECR repository first time)
+      - name: Pick the AMI (reuse the running instance's AMI; resolve latest only for a new stack)
+        id: ami
+        run: |
+          # Never let a new AMI release replace the instance (that wipes Postgres).
+          iid="$(aws cloudformation describe-stack-resource --stack-name "$AWS_STACK_NAME" \
+            --logical-resource-id AppInstance --query StackResourceDetail.PhysicalResourceId \
+            --output text 2>/dev/null || true)"
+          ami=""
+          if [ -n "$iid" ] && [ "$iid" != "None" ]; then
+            ami="$(aws ec2 describe-instances --instance-ids "$iid" \
+              --query 'Reservations[0].Instances[0].ImageId' --output text)"
+            echo "existing stack: keeping AMI $ami"
+          else
+            ami="$(aws ssm get-parameter \
+              --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
+              --query Parameter.Value --output text)"
+            echo "new stack: using latest AMI $ami"
+          fi
+          echo "ami=$ami" >> "$GITHUB_OUTPUT"
+      - name: Create the change set and refuse to replace or delete the instance
+        env:
+          AWS_CFN_ROLE_ARN: ${{ vars.AWS_CFN_ROLE_ARN }}
+          AMI_ID: ${{ steps.ami.outputs.ami }}
         run: |
           aws cloudformation deploy \
             --template-file deploy/aws/main.yaml \
             --stack-name "$AWS_STACK_NAME" \
+            --role-arn "$AWS_CFN_ROLE_ARN" \
             --capabilities CAPABILITY_IAM \
+            --parameter-overrides "LatestAmiId=$AMI_ID" \
+            --no-execute-changeset --no-fail-on-empty-changeset
+          cs="$(aws cloudformation list-change-sets --stack-name "$AWS_STACK_NAME" \
+            --query 'sort_by(Summaries, &CreationTime)[-1].ChangeSetName' --output text)"
+          st="$(aws cloudformation describe-change-set --stack-name "$AWS_STACK_NAME" \
+            --change-set-name "$cs" --query Status --output text)"
+          if [ "$st" = "FAILED" ]; then
+            echo "change set has no changes; nothing to update"
+            aws cloudformation delete-change-set --stack-name "$AWS_STACK_NAME" --change-set-name "$cs" || true
+            exit 0
+          fi
+          bad="$(aws cloudformation describe-change-set --stack-name "$AWS_STACK_NAME" \
+            --change-set-name "$cs" --query "length(Changes[?ResourceChange.LogicalResourceId=='AppInstance' && (ResourceChange.Action=='Remove' || ResourceChange.Replacement=='True' || ResourceChange.Replacement=='Conditional')])" --output text)"
+          if [ "$bad" != "0" ]; then
+            echo "::error::Change set would replace or delete AppInstance (Postgres data lives on its root volume). Aborting; review it by hand."
+            aws cloudformation delete-change-set --stack-name "$AWS_STACK_NAME" --change-set-name "$cs" || true
+            exit 1
+          fi
+          echo "change set is safe (no AppInstance replacement)"
+      - name: Create or update the stack (creates the ECR repository first time)
+        env:
+          AWS_CFN_ROLE_ARN: ${{ vars.AWS_CFN_ROLE_ARN }}
+          AMI_ID: ${{ steps.ami.outputs.ami }}
+        run: |
+          aws cloudformation deploy \
+            --template-file deploy/aws/main.yaml \
+            --stack-name "$AWS_STACK_NAME" \
+            --role-arn "$AWS_CFN_ROLE_ARN" \
+            --capabilities CAPABILITY_IAM \
+            --parameter-overrides "LatestAmiId=$AMI_ID" \
             --no-fail-on-empty-changeset
       - name: Read stack outputs
         id: stack
@@ -205,15 +264,25 @@ jobs:
           script="$(base64 -w0 deploy/aws/remote-deploy.sh)"
           schema="$(base64 -w0 backend/db/schema.sql)"
           cmd="echo $script | base64 -d > /tmp/remote-deploy.sh; echo $schema | base64 -d > /tmp/schema.sql; bash /tmp/remote-deploy.sh '$AWS_STACK_NAME' '$AWS_REGION' '$REPO_URI:$tag' /tmp/schema.sql"
-          params="$(jq -n --arg c "$cmd" '{commands: [$c]}')"
+          params="$(jq -n --arg c "$cmd" '{commands: [$c], executionTimeout: ["900"]}')"
           cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
             --document-name AWS-RunShellScript --parameters "$params" \
             --timeout-seconds 900 --query Command.CommandId --output text)"
-          rc=0
-          aws ssm wait command-executed --command-id "$cid" --instance-id "$INSTANCE_ID" || rc=$?
+          status=""
+          for _ in $(seq 1 90); do
+            status="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)"
+            case "$status" in
+              Pending|InProgress|Delayed) sleep 10 ;;
+              *) break ;;
+            esac
+          done
           aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" \
-            --query '{status:Status,stdout:StandardOutputContent,stderr:StandardErrorContent}' --output text
-          exit "$rc"
+            --query '{status:Status,stdout:StandardOutputContent,stderr:StandardErrorContent}' --output text || true
+          if [ "$status" != "Success" ]; then
+            echo "::error::SSM command finished with status '$status'"
+            exit 1
+          fi
       - name: Health check (poll /health for up to 5 minutes)
         env:
           APP_URL: ${{ steps.stack.outputs.app_url }}
