@@ -9,7 +9,8 @@ services:
     plan: free
     dockerContext: .
     dockerfilePath: ./Dockerfile
-    autoDeploy: true
+    # Off on purpose: the CI/E2E-gated deploy hook is the only deploy trigger.
+    autoDeploy: false
     healthCheckPath: /health
     envVars:
       - key: STORE
