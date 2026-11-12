@@ -195,3 +195,36 @@ jobs:
           npx --yes vercel@65 pull --yes --environment=production
           npx --yes vercel@65 build --prod
           npx --yes vercel@65 deploy --prebuilt --prod
+
+  smoke:
+    # Post-deploy check of the live URL. APP_URL is a repository variable; it
+    # defaults to the live Render service. Only /health and / are requested, so
+    # no users or repos are created.
+    name: Smoke test (health and home page)
+    needs: [gate, deploy-render, deploy-railway, deploy-aws, deploy-gcp, deploy-vercel-frontend]
+    if: >-
+      always() && needs.gate.outputs.ready == 'true' &&
+      (needs.deploy-render.result == 'success' || needs.deploy-railway.result == 'success' ||
+       needs.deploy-aws.result == 'success' || needs.deploy-gcp.result == 'success' ||
+       needs.deploy-vercel-frontend.result == 'success') &&
+      needs.deploy-render.result != 'failure' && needs.deploy-railway.result != 'failure' &&
+      needs.deploy-aws.result != 'failure' && needs.deploy-gcp.result != 'failure' &&
+      needs.deploy-vercel-frontend.result != 'failure'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    env:
+      APP_URL: ${{ vars.APP_URL || 'https://micro-git.onrender.com' }}
+    steps:
+      - name: Wait for /health (up to about 6 minutes; a free Render service cold-starts)
+        run: |
+          base="${APP_URL%/}"
+          curl -fsS -o /dev/null --max-time 60 --retry 12 --retry-delay 25 --retry-all-errors \
+            -w "health: HTTP %{http_code} in %{time_total}s\n" "$base/health"
+      - name: Home page returns 200
+        run: |
+          base="${APP_URL%/}"
+          code="$(curl -sS -o /dev/null --max-time 60 --retry 3 --retry-delay 10 -w '%{http_code}' "$base/")"
+          echo "/: HTTP $code"
+          [ "$code" = "200" ]
