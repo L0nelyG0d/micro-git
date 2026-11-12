@@ -50,7 +50,7 @@ func main() {
 
 	httpSrv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           spaHandler(srv.Handler(), staticDir),
+		Handler:           withBuildHeader(spaHandler(srv.Handler(), staticDir), buildID(os.Getenv)),
 		ReadHeaderTimeout: readHeaderTimeout,
 		ReadTimeout:       readTimeout,
 		WriteTimeout:      writeTimeout,
