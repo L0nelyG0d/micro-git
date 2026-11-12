@@ -158,70 +158,79 @@ jobs:
           # Kept out of EC2 user data: the instance reads it at deploy time with its own role.
           umask 077
           f="$(mktemp)"
+          trap 'rm -f "$f"' EXIT
           printf '%s' "$AWS_JWT_SECRET" > "$f"
           aws ssm put-parameter --name "/${AWS_STACK_NAME}/jwt-secret" --type SecureString \
             --overwrite --value "file://$f" >/dev/null
-          rm -f "$f"
       - name: Pick the AMI (reuse the running instance's AMI; resolve latest only for a new stack)
         id: ami
         run: |
           # Never let a new AMI release replace the instance (that wipes Postgres).
-          iid="$(aws cloudformation describe-stack-resource --stack-name "$AWS_STACK_NAME" \
+          err="$(mktemp)"
+          trap 'rm -f "$err"' EXIT
+          iid=""
+          if ! iid="$(aws cloudformation describe-stack-resource --stack-name "$AWS_STACK_NAME" \
             --logical-resource-id AppInstance --query StackResourceDetail.PhysicalResourceId \
-            --output text 2>/dev/null || true)"
-          ami=""
+            --output text 2>"$err")"; then
+            # Only "stack/resource does not exist" means a new stack; anything else is a real error.
+            if grep -q 'does not exist' "$err"; then iid=""; else cat "$err" >&2; exit 1; fi
+          fi
           if [ -n "$iid" ] && [ "$iid" != "None" ]; then
+            existed=true
             ami="$(aws ec2 describe-instances --instance-ids "$iid" \
               --query 'Reservations[0].Instances[0].ImageId' --output text)"
             echo "existing stack: keeping AMI $ami"
           else
+            existed=false
             ami="$(aws ssm get-parameter \
               --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
               --query Parameter.Value --output text)"
             echo "new stack: using latest AMI $ami"
           fi
-          echo "ami=$ami" >> "$GITHUB_OUTPUT"
-      - name: Create the change set and refuse to replace or delete the instance
+          if ! printf '%s' "$ami" | grep -Eq '^ami-[0-9a-f]+$'; then
+            echo "::error::Unexpected AMI id format"; exit 1
+          fi
+          {
+            echo "ami=$ami"
+            echo "existed=$existed"
+          } >> "$GITHUB_OUTPUT"
+      - name: Create the change set, refuse to replace or delete the instance, execute that same change set
         env:
           AWS_CFN_ROLE_ARN: ${{ vars.AWS_CFN_ROLE_ARN }}
           AMI_ID: ${{ steps.ami.outputs.ami }}
+          EXISTED: ${{ steps.ami.outputs.existed }}
         run: |
+          out="$(mktemp)"
+          trap 'rm -f "$out"' EXIT
           aws cloudformation deploy \
             --template-file deploy/aws/main.yaml \
             --stack-name "$AWS_STACK_NAME" \
             --role-arn "$AWS_CFN_ROLE_ARN" \
             --capabilities CAPABILITY_IAM \
             --parameter-overrides "LatestAmiId=$AMI_ID" \
-            --no-execute-changeset --no-fail-on-empty-changeset
-          cs="$(aws cloudformation list-change-sets --stack-name "$AWS_STACK_NAME" \
-            --query 'sort_by(Summaries, &CreationTime)[-1].ChangeSetName' --output text)"
-          st="$(aws cloudformation describe-change-set --stack-name "$AWS_STACK_NAME" \
-            --change-set-name "$cs" --query Status --output text)"
-          if [ "$st" = "FAILED" ]; then
-            echo "change set has no changes; nothing to update"
-            aws cloudformation delete-change-set --stack-name "$AWS_STACK_NAME" --change-set-name "$cs" || true
+            --no-execute-changeset --no-fail-on-empty-changeset | tee "$out"
+          arn="$(grep -oE 'arn:aws[^ ]*:changeSet/[^ ]+' "$out" | head -n1 || true)"
+          if [ -z "$arn" ]; then
+            echo "no change set created (no changes); cleaning up FAILED change sets"
+            aws cloudformation list-change-sets --stack-name "$AWS_STACK_NAME" --output json \
+              | jq -r '.Summaries[] | select(.Status=="FAILED") | .ChangeSetId' \
+              | while read -r id; do aws cloudformation delete-change-set --change-set-name "$id" || true; done
             exit 0
           fi
-          bad="$(aws cloudformation describe-change-set --stack-name "$AWS_STACK_NAME" \
-            --change-set-name "$cs" --query "length(Changes[?ResourceChange.LogicalResourceId=='AppInstance' && (ResourceChange.Action=='Remove' || ResourceChange.Replacement=='True' || ResourceChange.Replacement=='Conditional')])" --output text)"
+          bad="$(aws cloudformation describe-change-set --change-set-name "$arn" \
+            --query "length(Changes[?ResourceChange.LogicalResourceId=='AppInstance' && (ResourceChange.Action=='Remove' || ResourceChange.Replacement=='True' || ResourceChange.Replacement=='Conditional')])" --output text)"
           if [ "$bad" != "0" ]; then
             echo "::error::Change set would replace or delete AppInstance (Postgres data lives on its root volume). Aborting; review it by hand."
-            aws cloudformation delete-change-set --stack-name "$AWS_STACK_NAME" --change-set-name "$cs" || true
+            aws cloudformation delete-change-set --change-set-name "$arn" || true
             exit 1
           fi
-          echo "change set is safe (no AppInstance replacement)"
-      - name: Create or update the stack (creates the ECR repository first time)
-        env:
-          AWS_CFN_ROLE_ARN: ${{ vars.AWS_CFN_ROLE_ARN }}
-          AMI_ID: ${{ steps.ami.outputs.ami }}
-        run: |
-          aws cloudformation deploy \
-            --template-file deploy/aws/main.yaml \
-            --stack-name "$AWS_STACK_NAME" \
-            --role-arn "$AWS_CFN_ROLE_ARN" \
-            --capabilities CAPABILITY_IAM \
-            --parameter-overrides "LatestAmiId=$AMI_ID" \
-            --no-fail-on-empty-changeset
+          echo "change set is safe (no AppInstance replacement); executing it"
+          aws cloudformation execute-change-set --change-set-name "$arn"
+          if [ "$EXISTED" = "true" ]; then
+            aws cloudformation wait stack-update-complete --stack-name "$AWS_STACK_NAME"
+          else
+            aws cloudformation wait stack-create-complete --stack-name "$AWS_STACK_NAME"
+          fi
       - name: Read stack outputs
         id: stack
         run: |
