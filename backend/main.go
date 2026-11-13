@@ -112,6 +112,7 @@ func main() {
 			log.Printf("metrics shutdown: %v", err)
 		}
 	}
+	srv.obs.exp.Close(shutCtx) // flush queued spans (nil-safe)
 	closeStore()
 }
 

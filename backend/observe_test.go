@@ -2,12 +2,14 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -325,4 +327,46 @@ func TestFaultInjection(t *testing.T) {
 	if !strings.Contains(obsDo(h, "GET", "/metrics", nil).Body.String(), `route="/repos/{owner}/{repo}",status="500"} 1`) {
 		t.Error("500 not counted in metrics")
 	}
+}
+
+func TestExporterNon2xxCountsDropped(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(503) }))
+	defer ts.Close()
+	e := &exporter{url: ts.URL + "/v1/traces", ch: make(chan span, 2), client: &http.Client{Timeout: time.Second}}
+	e.send([]span{{}, {}})
+	if got := e.dropped.Load(); got != 2 {
+		t.Fatalf("dropped = %d, want 2", got)
+	}
+	e.enqueue(span{})
+	e.enqueue(span{})
+	e.enqueue(span{}) // queue of 2 is full
+	if got := e.dropped.Load(); got != 3 {
+		t.Fatalf("dropped after full queue = %d, want 3", got)
+	}
+	m := newMetrics("v", "c")
+	m.spansDropped = e.dropped.Load
+	var sb strings.Builder
+	m.write(&sb)
+	if !strings.Contains(sb.String(), "otel_spans_dropped_total 3") {
+		t.Errorf("metric missing:\n%s", sb.String())
+	}
+}
+
+func TestExporterCloseFlushes(t *testing.T) {
+	var n atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { n.Add(1); w.WriteHeader(200) }))
+	defer ts.Close()
+	e := newExporter(ts.URL)
+	e.enqueue(span{name: "x"})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	e.Close(ctx) // well before the 2s ticker
+	e.Close(ctx) // idempotent
+	if n.Load() != 1 {
+		t.Fatalf("posts = %d, want 1", n.Load())
+	}
+	if e.dropped.Load() != 0 {
+		t.Fatalf("dropped = %d", e.dropped.Load())
+	}
+	(*exporter)(nil).Close(ctx)
 }
