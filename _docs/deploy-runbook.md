@@ -6,7 +6,7 @@ Short operational view. Details: `deploy/README.md` and the per-host READMEs.
 
 | Target | Status |
 | --- | --- |
-| Render | Live at https://micro-git.onrender.com, deployed by the Deploy workflow through `RENDER_DEPLOY_HOOK`. The server sets `X-Build` (`backend/build.go`: `RENDER_GIT_COMMIT`, else `APP_COMMIT`, else `dev`); last reported build `5acd89e...`. `autoDeploy` is `false`, so only the CI/E2E-gated deploy hook deploys. The `smoke` job in `deploy.yml` runs after `deploy-render`, waits until `X-Build` equals (or descends from) the deployed commit, then checks `/`. |
+| Render | Live at https://micro-git.onrender.com, deployed by the Deploy workflow through `RENDER_DEPLOY_HOOK`. The server sets `X-Build` (`backend/build.go`: `RENDER_GIT_COMMIT`, else `APP_COMMIT`, else `dev`); last reported build `5acd89e...`. `autoDeploy` is `false`, so only the CI/E2E-gated deploy hook deploys. The `smoke` job in `deploy.yml` runs after `deploy-render`, waits until `X-Build` equals the deployed commit (the hook is pinned with `ref=<sha>`), then checks `/`. |
 | AWS | Pending bootstrap. The `deploy-aws` job, `deploy/aws/main.yaml`, `bootstrap.sh` and `preflight.sh` exist but have never run against a real account; the job is skipped until `AWS_ROLE_ARN` is set. The hand-made stack `mg` (ap-southeast-2) is separate and must not be reused: deploy under a NEW stack name. |
 | GCP | Not configured (`GCP_WORKLOAD_IDENTITY` / `GCP_SERVICE_ACCOUNT` unset), job skipped. |
 | Railway | Not configured (`RAILWAY_TOKEN` unset), job skipped. |
