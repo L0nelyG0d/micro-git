@@ -16,6 +16,7 @@ type Server struct {
 	JWTSecret    []byte           // HMAC key for session tokens
 	CookieSecure bool             // Secure attribute on the session cookie
 	limiter      *limiter         // login/register rate limiter
+	obs          *observer        // logs, metrics, tracing, fault switch
 
 	// hook, if set (tests only), is called at named points of the read
 	// handlers so a test can act between two steps without sleeping.
@@ -30,7 +31,7 @@ func (s *Server) testHook(point string) {
 
 // NewServer builds a Server with the real clock.
 func NewServer(store Store) *Server {
-	s := &Server{Store: store, Now: time.Now}
+	s := &Server{Store: store, Now: time.Now, obs: newObserver()}
 	// The limiter reads s.Now at call time so a test can swap the clock.
 	s.limiter = newLimiter(func() time.Time { return s.Now() })
 	return s
@@ -47,7 +48,7 @@ func NewHandler() http.Handler {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	s.routes(mux)
-	return timing(mux, safeHeaders(gzipJSON(mux)))
+	return s.obs.middleware(mux, safeHeaders(gzipJSON(mux)))
 }
 
 // safeHeaders sets the basic safe response headers before any handler runs, so
@@ -65,6 +66,9 @@ func safeHeaders(next http.Handler) http.Handler {
 // routes is the single place endpoints are registered.
 func (s *Server) routes(mux *http.ServeMux) {
 	mux.HandleFunc("/health", health)
+	if s.obs.metricsPublic { // METRICS_ADDR set: own listener only; COOKIE_SECURE=true without it: disabled
+		mux.HandleFunc("/metrics", allow(http.MethodGet, s.obs.serveMetrics))
+	}
 	mux.HandleFunc("/auth/register", allow(http.MethodPost, s.limitRegister(s.register)))
 	mux.HandleFunc("/auth/login", allow(http.MethodPost, s.login))
 	mux.HandleFunc("/auth/logout", allow(http.MethodPost, s.logout))

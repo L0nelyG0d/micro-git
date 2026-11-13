@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"log"
 	"net/http"
 	"sync/atomic"
 	"time"
@@ -10,7 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// slowRequest is the duration over which a request is logged with "slow:".
+// slowRequest is the duration over which the access log carries slow=true.
 const slowRequest = 500 * time.Millisecond
 
 type reqStmtsKey struct{}
@@ -66,29 +65,3 @@ func (w *statusRecorder) Write(b []byte) (int, error) {
 }
 
 func (w *statusRecorder) Unwrap() http.ResponseWriter { return w.ResponseWriter }
-
-// timing logs one line per request: method, route pattern, status, duration
-// and DB statement count. The pattern (e.g. "/repos/{owner}/{repo}/commits")
-// is logged instead of the raw path, and no body, cookie or query value is.
-func timing(mux *http.ServeMux, next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		c := &reqStmts{}
-		rec := &statusRecorder{ResponseWriter: w}
-		next.ServeHTTP(rec, r.WithContext(context.WithValue(r.Context(), reqStmtsKey{}, c)))
-		d := time.Since(start)
-		status := rec.status
-		if status == 0 {
-			status = http.StatusOK
-		}
-		_, route := mux.Handler(r) // pattern that matched, e.g. "GET /x/{id}"
-		if route == "" {
-			route = "-"
-		}
-		prefix := ""
-		if d > slowRequest {
-			prefix = "slow: "
-		}
-		log.Printf("%s%s %s %d %.1fms stmts=%d", prefix, r.Method, route, status, float64(d.Microseconds())/1000, c.n.Load())
-	})
-}

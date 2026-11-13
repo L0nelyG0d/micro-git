@@ -3,25 +3,24 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
-	"log"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"regexp"
 	"sort"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
 
-// captureTimingLog redirects the standard logger into a buffer for one test.
+// captureTimingLog redirects the access log (JSON lines) into a buffer for one test.
 func captureTimingLog(t *testing.T) *bytes.Buffer {
 	t.Helper()
 	var buf bytes.Buffer
-	log.SetOutput(&buf)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	accessLogOut = &buf
+	t.Cleanup(func() { accessLogOut = os.Stdout })
 	return &buf
 }
 
@@ -32,7 +31,7 @@ func TestTimingLogsPatternNotPath(t *testing.T) {
 	req.AddCookie(&http.Cookie{Name: "session", Value: "cookie-value"})
 	h.ServeHTTP(httptest.NewRecorder(), req)
 	out := buf.String()
-	if !strings.Contains(out, "GET /repos/{owner}/{repo}/tree/{ref} ") {
+	if !strings.Contains(out, `"method":"GET","route":"/repos/{owner}/{repo}/tree/{ref}"`) {
 		t.Errorf("no route pattern in %q", out)
 	}
 	for _, leak := range []string{"alice", "secret-repo", "hunter2", "cookie-value", "token"} {
@@ -40,20 +39,20 @@ func TestTimingLogsPatternNotPath(t *testing.T) {
 			t.Errorf("log leaks %q: %q", leak, out)
 		}
 	}
-	if strings.Contains(out, "slow:") {
+	if strings.Contains(out, `"slow"`) {
 		t.Errorf("unexpected line %q", out)
 	}
 }
 
 func TestTimingStatusAndSlow(t *testing.T) {
 	buf := captureTimingLog(t)
-	h := timing(http.NewServeMux(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := newObserver().middleware(http.NewServeMux(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(slowRequest + 20*time.Millisecond)
 		w.WriteHeader(http.StatusTeapot)
 	}))
 	h.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/x", strings.NewReader("secret body")))
 	out := buf.String()
-	if !strings.Contains(out, "slow: POST - 418 ") {
+	if !strings.Contains(out, `"method":"POST","route":"-","status":418`) || !strings.Contains(out, `"slow":true`) {
 		t.Errorf("line = %q", out)
 	}
 	if strings.Contains(out, "secret") {
@@ -61,18 +60,18 @@ func TestTimingStatusAndSlow(t *testing.T) {
 	}
 }
 
-var timingLine = regexp.MustCompile(`([0-9.]+)ms stmts=(\d+)\n`)
-
 // lastTiming returns the duration and statement count of the last log line.
 func lastTiming(t *testing.T, buf *bytes.Buffer) (ms float64, stmts int) {
 	t.Helper()
-	m := timingLine.FindAllStringSubmatch(buf.String(), -1)
-	if len(m) == 0 {
-		t.Fatalf("no timing line in %q", buf.String())
+	lines := strings.Split(strings.TrimSpace(buf.String()), "\n")
+	var m struct {
+		Duration float64 `json:"duration_ms"`
+		Stmts    int     `json:"db_statements"`
 	}
-	ms, _ = strconv.ParseFloat(m[len(m)-1][1], 64)
-	stmts, _ = strconv.Atoi(m[len(m)-1][2])
-	return ms, stmts
+	if err := json.Unmarshal([]byte(lines[len(lines)-1]), &m); err != nil {
+		t.Fatalf("no timing line in %q: %v", buf, err)
+	}
+	return m.Duration, m.Stmts
 }
 
 func TestTimingCountsStatements(t *testing.T) {
@@ -86,7 +85,7 @@ func TestTimingCountsStatements(t *testing.T) {
 	if _, n := lastTiming(t, buf); n < 1 {
 		t.Errorf("stmts = %d, want >= 1; log %q", n, buf)
 	}
-	if !strings.Contains(buf.String(), "GET /repos ") {
+	if !strings.Contains(buf.String(), `"route":"/repos"`) {
 		t.Errorf("log %q", buf)
 	}
 }

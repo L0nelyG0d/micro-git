@@ -33,7 +33,8 @@ func spaHandler(api http.Handler, dir string) http.Handler {
 			api.ServeHTTP(w, r2)
 			return
 		}
-		if r.URL.Path == "/health" || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
+		// /metrics goes to the API mux, which answers 404 when it is not registered (METRICS_ADDR set or COOKIE_SECURE=true).
+		if r.URL.Path == "/health" || r.URL.Path == "/metrics" || (r.Method != http.MethodGet && r.Method != http.MethodHead) {
 			api.ServeHTTP(w, r)
 			return
 		}
