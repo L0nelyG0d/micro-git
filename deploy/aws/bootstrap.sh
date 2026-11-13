@@ -44,10 +44,15 @@ done
 if ! [[ "$STACK" =~ ^[a-z][a-z0-9-]{0,19}$ ]]; then
   echo "error: --stack-name must be lowercase letters, digits and '-' (max 20, start with a letter)" >&2; exit 2
 fi
-case "$STACK" in
-  cfn-deploy*|github-deploy*)
-    echo "error: --stack-name must not start with 'cfn-deploy' or 'github-deploy' (the stack role pattern <stack>-* would match the deploy roles)" >&2; exit 2 ;;
-esac
+for _role in cfn-deploy github-deploy; do
+  # The stack role pattern role/<stack>-* matches a deploy role <role>-<stack2> when "<stack>-" is a prefix of "<role>-"
+  # (stack names cfn, github) or when the stack name itself starts with the deploy role prefix.
+  case "$_role-" in "$STACK-"*) _clash=1 ;; esac
+  case "$STACK" in "$_role"*) _clash=1 ;; esac
+done
+if [ -n "${_clash:-}" ]; then
+  echo "error: --stack-name '$STACK' collides with the deploy role names: the stack role pattern <stack>-* would match cfn-deploy-* or github-deploy-* (reserved: cfn, github, and anything starting with cfn-deploy or github-deploy)" >&2; exit 2
+fi
 if ! [[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
   echo "error: --repo must look like OWNER/REPO" >&2; exit 2
 fi
