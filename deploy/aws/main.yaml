@@ -4,27 +4,26 @@ Description: >
   HTTP/HTTPS entry point) with a private ECR repository for the app image.
   Free-tier oriented: no load balancer, no NAT gateway, no RDS, no App Runner,
   no Elastic IP. Uses the account's DEFAULT VPC (no VPC parameters needed).
+  Deploy flow and cookie note: see the comments below.
 
-  Deploy steps
-  1. Create the stack, then build and push the image (root Dockerfile) to the
-     ECR repository (EcrRepositoryUri in Outputs):
-       aws ecr get-login-password --region <region> | docker login --username AWS --password-stdin <account>.dkr.ecr.<region>.amazonaws.com
-       docker build -t <ecr-uri>:latest . && docker push <ecr-uri>:latest
-     The first boot starts Postgres and Caddy; the app container fails to start
-     until the image exists. After the push, on the instance (SSM Session Manager):
-       sudo docker run -d --name mg-app --restart unless-stopped --network mg \
-         --env-file /opt/mg/app.env <ecr-uri>:<tag>
-     Later image updates: push a new tag, then re-create mg-app the same way.
-  2. Apply the schema once (the app does not migrate Postgres itself):
-       scp -i key.pem backend/db/schema.sql ec2-user@<PublicDnsName>:/tmp/
-       ssh ... 'sudo docker exec -i mg-db psql -U mg -d mg < /tmp/schema.sql'
-     or use SSM Session Manager (no open SSH port needed).
-  3. Open http://<PublicDnsName>. For HTTPS set DomainName to a name whose A record
-     points at the instance IP (see Outputs). Note: a stop/start changes the public
-     IP and DNS name because no Elastic IP is used.
-
-  Cookie note: with no DomainName the app runs over plain HTTP and COOKIE_SECURE is
-  false; with DomainName it is true (browsers drop Secure cookies over HTTP).
+# Deploy flow (automated by .github/workflows/deploy.yml, job deploy-aws)
+# 1. The workflow stores the JWT secret in SSM Parameter Store as the SecureString
+#    /<stack-name>/jwt-secret (outside this stack: CloudFormation cannot create
+#    SecureStrings), then creates/updates this stack.
+# 2. First boot (user data, runs once; later UserData changes only stop/start the instance) installs Docker, generates the database password, and
+#    starts Postgres and Caddy. It does NOT start the app and holds no app secret.
+# 3. The workflow builds and pushes the root Dockerfile to the ECR repository, then runs
+#    deploy/aws/remote-deploy.sh on the instance through SSM Run Command. That script
+#    reads the JWT secret from SSM with the instance role, applies
+#    backend/db/schema.sql (idempotent), and (re)creates the mg-app container.
+# 4. Open AppUrl. For HTTPS set DomainName to a name whose A record points at the
+#    instance IP. A stop/start changes the public IP (no Elastic IP is used).
+#
+# Manual equivalent: put the SecureString, deploy the stack, push the image, then
+# aws ssm send-command with remote-deploy.sh (see deploy/aws/README.md).
+#
+# Cookie note: with no DomainName the app runs over plain HTTP and COOKIE_SECURE is
+# false; with DomainName it is true (browsers drop Secure cookies over HTTP).
 
 Parameters:
   InstanceType:
@@ -33,9 +32,13 @@ Parameters:
     AllowedValues: [t2.micro, t3.micro]
     Description: Free-tier eligible under the classic 750 h/month allowance (check your account plan in Billing).
   LatestAmiId:
-    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
-    Default: /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64
-    Description: Amazon Linux 2023 AMI resolved from SSM (docker and the AWS CLI are preinstalled or installable via dnf).
+    Type: AWS::EC2::Image::Id
+    Description: >
+      AMI id of the instance (Amazon Linux 2023). Deliberately NOT an SSM-resolved
+      parameter: those are re-resolved on every update, so a new AMI release would
+      REPLACE the instance and wipe Postgres. CI resolves the latest AMI only for a new
+      stack and reuses the running instance's AMI afterwards. Changing the AMI is a
+      deliberate manual action (back up first).
   AdminCidr:
     Type: String
     Default: 127.0.0.1/32
@@ -49,21 +52,12 @@ Parameters:
     Type: String
     Default: ""
     Description: Optional public hostname (for example app.example.com). Caddy then obtains a Let's Encrypt certificate. Leave empty for plain HTTP on port 80.
-  ImageTag:
-    Type: String
-    Default: latest
-    Description: Tag of the app image in the ECR repository.
   VolumeSizeGb:
     Type: Number
     Default: 20
     MinValue: 8
     MaxValue: 30
     Description: Root EBS gp3 volume size. 30 GB is the free-tier limit.
-  JwtSecret:
-    Type: String
-    NoEcho: true
-    MinLength: 32
-    Description: HMAC key for session tokens (32+ bytes). Stored in instance user data; see Outputs/README tradeoff.
 
 Conditions:
   HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
@@ -92,9 +86,20 @@ Resources:
             Principal:
               Service: ec2.amazonaws.com
             Action: sts:AssumeRole
+      # Created once by hand (see README bootstrap). Caps what this role can ever do, so
+      # the CloudFormation service role cannot use it to escalate privileges.
+      PermissionsBoundary: !Sub "arn:${AWS::Partition}:iam::${AWS::AccountId}:policy/mg-instance-boundary"
       ManagedPolicyArns:
         - arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
         - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: read-jwt-secret
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Effect: Allow
+                Action: ssm:GetParameter
+                Resource: !Sub "arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:parameter/${AWS::StackName}/jwt-secret"
 
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
@@ -125,6 +130,9 @@ Resources:
 
   AppInstance:
     Type: AWS::EC2::Instance
+    # Postgres data lives on this instance's root volume: never delete or replace it implicitly.
+    DeletionPolicy: RetainExceptOnCreate
+    UpdateReplacePolicy: Retain
     Properties:
       ImageId: !Ref LatestAmiId
       InstanceType: !Ref InstanceType
@@ -162,13 +170,8 @@ Resources:
             umask 077
             PGPASS=$(openssl rand -hex 24)
             printf 'POSTGRES_USER=mg\nPOSTGRES_DB=mg\nPOSTGRES_PASSWORD=%s\n' "$PGPASS" > /opt/mg/db.env
-            {
-              printf 'DATABASE_URL=postgres://mg:%s@mg-db:5432/mg?sslmode=disable\n' "$PGPASS"
-              printf 'STORE=db\nDB_DRIVER=postgres\nPORT=8080\nCOOKIE_SECURE=%s\n' "${CookieSecure}"
-              cat <<'ENVEOF'
-            JWT_SECRET=${JwtSecret}
-            ENVEOF
-            } > /opt/mg/app.env
+            # app.env has no JWT_SECRET here: remote-deploy.sh adds it from SSM Parameter Store.
+            printf 'DATABASE_URL=postgres://mg:%s@mg-db:5432/mg?sslmode=disable\nSTORE=db\nDB_DRIVER=postgres\nPORT=8080\nCOOKIE_SECURE=%s\n' "$PGPASS" "${CookieSecure}" > /opt/mg/app.env
             chmod 600 /opt/mg/db.env /opt/mg/app.env
 
             cat > /opt/mg/Caddyfile <<'CADDYEOF'
@@ -178,25 +181,17 @@ Resources:
             }
             CADDYEOF
 
-            IMAGE_REGISTRY=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com
-            aws ecr get-login-password --region ${AWS::Region} | docker login --username AWS --password-stdin "$IMAGE_REGISTRY"
-
             docker network create mg 2>/dev/null || true
-            docker rm -f mg-db mg-app mg-proxy 2>/dev/null || true
+            docker rm -f mg-db mg-proxy 2>/dev/null || true
             docker run -d --name mg-db --restart unless-stopped --network mg \
               --env-file /opt/mg/db.env -v /opt/mg/pgdata:/var/lib/postgresql/data \
               postgres:16-alpine
-            # The app container starts only when the image exists in ECR (push it first).
-            docker run -d --name mg-app --restart unless-stopped --network mg \
-              --env-file /opt/mg/app.env "$IMAGE_REGISTRY/${AppRepository}:${ImageTag}" || \
-              echo "mg-app not started: push the image, then: docker run ... (see template header)"
             docker run -d --name mg-proxy --restart unless-stopped --network mg \
               -p 80:80 -p 443:443 \
               -v /opt/mg/Caddyfile:/etc/caddy/Caddyfile:ro -v /opt/mg/caddy-data:/data \
               caddy:2
           - SiteAddress: !If [HasDomain, !Ref DomainName, ":80"]
             CookieSecure: !If [HasDomain, "true", "false"]
-            JwtSecret: !Ref JwtSecret
 
 Outputs:
   EcrRepositoryUri:
@@ -208,12 +203,12 @@ Outputs:
   PublicIp:
     Description: Public IPv4 address (point DomainName's A record here)
     Value: !GetAtt AppInstance.PublicIp
-  SiteUrl:
-    Description: URL to open the app
+  AppUrl:
+    Description: URL to open the app (health check is AppUrl plus /health)
     Value: !If
       - HasDomain
       - !Sub "https://${DomainName}"
-      - !Sub "http://${AppInstance.PublicDnsName}"
+      - !Sub "http://${AppInstance.PublicIp}"
   InstanceId:
     Description: Use with SSM Session Manager (aws ssm start-session --target <id>)
     Value: !Ref AppInstance

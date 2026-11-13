@@ -107,18 +107,42 @@ jobs:
         run: npx --yes @railway/cli@5 up --ci
 
   deploy-aws:
-    name: Deploy to AWS (CloudFormation, OIDC)
+    name: Deploy to AWS (CloudFormation, ECR, SSM; OIDC)
     needs: gate
     if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.aws == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
+    # No extra GitHub permissions: AWS access comes from the OIDC role (id-token).
+    # The GitHub role only needs CloudFormation on the stack, iam:PassRole for the
+    # CloudFormation service role (AWS_CFN_ROLE_ARN, which holds the EC2/IAM/ECR rights),
+    # ECR push, and SSM put-parameter/send-command/get-command-invocation
+    # (policy examples in deploy/aws/README.md).
     permissions:
       contents: read
       id-token: write
     env:
       AWS_STACK_NAME: ${{ vars.AWS_STACK_NAME || 'mg' }}
       AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
+      - name: Require the AWS_JWT_SECRET secret (32+ characters)
+        env:
+          AWS_JWT_SECRET: ${{ secrets.AWS_JWT_SECRET }}
+          AWS_CFN_ROLE_ARN: ${{ vars.AWS_CFN_ROLE_ARN }}
+        run: |
+          if [ -z "$AWS_CFN_ROLE_ARN" ]; then
+            echo "::error::Variable AWS_CFN_ROLE_ARN is not set. Create the CloudFormation service role (see deploy/aws/README.md) and set its ARN."
+            exit 1
+          fi
+          # Only the length is checked; the value is never printed.
+          if [ -z "$AWS_JWT_SECRET" ]; then
+            echo "::error::Secret AWS_JWT_SECRET is not set. Add a random string of 32+ characters (for example: openssl rand -hex 32)."
+            exit 1
+          fi
+          if [ "${#AWS_JWT_SECRET}" -lt 32 ]; then
+            echo "::error::Secret AWS_JWT_SECRET is shorter than 32 characters."
+            exit 1
+          fi
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
@@ -127,13 +151,171 @@ jobs:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
           role-session-name: mg-deploy-${{ github.run_id }}
-      - name: CloudFormation deploy (deploy/aws/main.yaml)
+      - name: Store the JWT secret in SSM Parameter Store (SecureString)
+        env:
+          AWS_JWT_SECRET: ${{ secrets.AWS_JWT_SECRET }}
         run: |
+          # Kept out of EC2 user data: the instance reads it at deploy time with its own role.
+          umask 077
+          f="$(mktemp)"
+          trap 'rm -f "$f"' EXIT
+          printf '%s' "$AWS_JWT_SECRET" > "$f"
+          aws ssm put-parameter --name "/${AWS_STACK_NAME}/jwt-secret" --type SecureString \
+            --overwrite --value "file://$f" >/dev/null
+      - name: Pick the AMI (reuse the running instance's AMI; resolve latest only for a new stack)
+        id: ami
+        run: |
+          # Never let a new AMI release replace the instance (that wipes Postgres).
+          err="$(mktemp)"
+          trap 'rm -f "$err"' EXIT
+          iid=""
+          if ! iid="$(aws cloudformation describe-stack-resource --stack-name "$AWS_STACK_NAME" \
+            --logical-resource-id AppInstance --query StackResourceDetail.PhysicalResourceId \
+            --output text 2>"$err")"; then
+            # Only "stack/resource does not exist" means a new stack; anything else is a real error.
+            if grep -q 'does not exist' "$err"; then iid=""; else cat "$err" >&2; exit 1; fi
+          fi
+          if [ -n "$iid" ] && [ "$iid" != "None" ]; then
+            existed=true
+            ami="$(aws ec2 describe-instances --instance-ids "$iid" \
+              --query 'Reservations[0].Instances[0].ImageId' --output text)"
+            echo "existing stack: keeping AMI $ami"
+          else
+            existed=false
+            ami="$(aws ssm get-parameter \
+              --name /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
+              --query Parameter.Value --output text)"
+            echo "new stack: using latest AMI $ami"
+          fi
+          if ! printf '%s' "$ami" | grep -Eq '^ami-[0-9a-f]+$'; then
+            echo "::error::Unexpected AMI id format"; exit 1
+          fi
+          {
+            echo "ami=$ami"
+            echo "existed=$existed"
+          } >> "$GITHUB_OUTPUT"
+      - name: Create the change set, refuse to replace or delete the instance, execute that same change set
+        env:
+          AWS_CFN_ROLE_ARN: ${{ vars.AWS_CFN_ROLE_ARN }}
+          AMI_ID: ${{ steps.ami.outputs.ami }}
+          EXISTED: ${{ steps.ami.outputs.existed }}
+        run: |
+          set -o pipefail
+          out="$(mktemp)"
+          trap 'rm -f "$out"' EXIT
+          rc=0
           aws cloudformation deploy \
             --template-file deploy/aws/main.yaml \
             --stack-name "$AWS_STACK_NAME" \
+            --role-arn "$AWS_CFN_ROLE_ARN" \
             --capabilities CAPABILITY_IAM \
-            --no-fail-on-empty-changeset
+            --parameter-overrides "LatestAmiId=$AMI_ID" \
+            --no-execute-changeset --no-fail-on-empty-changeset 2>&1 | tee "$out" || rc=$?
+          arn="$(grep -oE 'arn:aws[^ ]*:changeSet/[^ ]+' "$out" | head -n1 || true)"
+          if [ "$rc" -eq 0 ] && [ -z "$arn" ] && grep -q 'No changes to deploy' "$out"; then
+            echo "no changes to deploy; cleaning up empty (FAILED) change sets"
+            aws cloudformation list-change-sets --stack-name "$AWS_STACK_NAME" --output json \
+              | jq -r '.Summaries[] | select(.Status=="FAILED") | .ChangeSetId' \
+              | while read -r id; do aws cloudformation delete-change-set --change-set-name "$id" || true; done
+            exit 0
+          fi
+          if [ "$rc" -ne 0 ] || [ -z "$arn" ]; then
+            echo "::error::Creating the change set failed (exit $rc). Status reasons of failed change sets follow (not deleted)."
+            aws cloudformation list-change-sets --stack-name "$AWS_STACK_NAME" --output json \
+              | jq -r '.Summaries[] | select(.Status=="FAILED") | .ChangeSetId' \
+              | while read -r id; do
+                  aws cloudformation describe-change-set --change-set-name "$id" --query '{status:Status,reason:StatusReason}' --output text || true
+                done
+            exit 1
+          fi
+          bad="$(aws cloudformation describe-change-set --change-set-name "$arn" \
+            --query "length(Changes[?ResourceChange.LogicalResourceId=='AppInstance' && (ResourceChange.Action=='Remove' || ResourceChange.Replacement=='True' || ResourceChange.Replacement=='Conditional')])" --output text)"
+          if [ "$bad" != "0" ]; then
+            echo "::error::Change set would replace or delete AppInstance (Postgres data lives on its root volume). Aborting; review it by hand."
+            aws cloudformation delete-change-set --change-set-name "$arn" || true
+            exit 1
+          fi
+          echo "change set is safe (no AppInstance replacement); executing it"
+          aws cloudformation execute-change-set --change-set-name "$arn"
+          if [ "$EXISTED" = "true" ]; then
+            aws cloudformation wait stack-update-complete --stack-name "$AWS_STACK_NAME"
+          else
+            aws cloudformation wait stack-create-complete --stack-name "$AWS_STACK_NAME"
+          fi
+      - name: Read stack outputs
+        id: stack
+        run: |
+          out() {
+            aws cloudformation describe-stacks --stack-name "$AWS_STACK_NAME" \
+              --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text
+          }
+          {
+            echo "instance_id=$(out InstanceId)"
+            echo "repo_uri=$(out EcrRepositoryUri)"
+            echo "app_url=$(out AppUrl)"
+          } >> "$GITHUB_OUTPUT"
+      - name: Log in to ECR
+        id: ecr
+        uses: aws-actions/amazon-ecr-login@v2
+      - name: Build and push the image (<sha7> and latest)
+        env:
+          REPO_URI: ${{ steps.stack.outputs.repo_uri }}
+        run: |
+          tag="${HEAD_SHA::7}"
+          docker build -t "$REPO_URI:$tag" -t "$REPO_URI:latest" .
+          docker push "$REPO_URI:$tag"
+          docker push "$REPO_URI:latest"
+      - name: Roll the instance to the new image (SSM Run Command)
+        env:
+          INSTANCE_ID: ${{ steps.stack.outputs.instance_id }}
+          REPO_URI: ${{ steps.stack.outputs.repo_uri }}
+        run: |
+          tag="${HEAD_SHA::7}"
+          # A new instance needs a minute or two to register with SSM.
+          for _ in $(seq 1 40); do
+            st="$(aws ssm describe-instance-information \
+              --filters "Key=InstanceIds,Values=$INSTANCE_ID" \
+              --query 'InstanceInformationList[0].PingStatus' --output text 2>/dev/null || true)"
+            [ "$st" = "Online" ] && break
+            sleep 15
+          done
+          [ "$st" = "Online" ] || { echo "::error::Instance $INSTANCE_ID is not Online in SSM"; exit 1; }
+
+          script="$(base64 -w0 deploy/aws/remote-deploy.sh)"
+          schema="$(base64 -w0 backend/db/schema.sql)"
+          cmd="echo $script | base64 -d > /tmp/remote-deploy.sh; echo $schema | base64 -d > /tmp/schema.sql; bash /tmp/remote-deploy.sh '$AWS_STACK_NAME' '$AWS_REGION' '$REPO_URI:$tag' /tmp/schema.sql"
+          params="$(jq -n --arg c "$cmd" '{commands: [$c], executionTimeout: ["900"]}')"
+          cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
+            --document-name AWS-RunShellScript --parameters "$params" \
+            --timeout-seconds 900 --query Command.CommandId --output text)"
+          status=""
+          for _ in $(seq 1 90); do
+            status="$(aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" \
+              --query Status --output text 2>/dev/null || echo Pending)"
+            case "$status" in
+              Pending|InProgress|Delayed) sleep 10 ;;
+              *) break ;;
+            esac
+          done
+          aws ssm get-command-invocation --command-id "$cid" --instance-id "$INSTANCE_ID" \
+            --query '{status:Status,stdout:StandardOutputContent,stderr:StandardErrorContent}' --output text || true
+          if [ "$status" != "Success" ]; then
+            echo "::error::SSM command finished with status '$status'"
+            exit 1
+          fi
+      - name: Health check (poll /health for up to 5 minutes)
+        env:
+          APP_URL: ${{ steps.stack.outputs.app_url }}
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS -L --max-time 10 -o /dev/null "$APP_URL/health"; then
+              echo "healthy: $APP_URL/health (attempt $i)"
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "::error::$APP_URL/health did not return 200 within 5 minutes"
+          exit 1
 
   deploy-gcp:
     name: Deploy to GCP (Terraform, Workload Identity)
