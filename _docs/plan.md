@@ -142,7 +142,7 @@ In-memory, standard library only; constants and their meaning are at the top of 
 - The check and the count are one atomic step: an admitted attempt is counted before the password is checked and the count is taken back when the login succeeds (or fails with a server error); a refused request is not counted. So a burst of simultaneous requests cannot all pass (at most the free count gets through) and cannot inflate the counter beyond what the same number of sequential attempts would. Requests with and without a valid `known_device` cookie use separate pair counters, so a bot bursting on the same IP and username cannot use up the cookie holder's budget. What remains: a real user without the cookie (new browser) who shares the IP and username with a bot shares the strict counter with it and waits like the bot does until the delay passes.
 - Unknown usernames are counted and answered exactly like known ones (no account enumeration).
 - `POST /auth/register`: more than 10 attempts per IP per window gives `429` (every attempt counts).
-- The client IP is `RemoteAddr` only. `X-Forwarded-For` and similar headers are ignored because a client-controlled header would let an attacker pick a fresh IP per request; behind a reverse proxy every client would look like the proxy (local-only project, follow-up if hosted).
+- The client IP is `RemoteAddr` only. `X-Forwarded-For` and similar headers are ignored because a client-controlled header would let an attacker pick a fresh IP per request; behind a reverse proxy every client would look like the proxy. Both hosted targets (Render's edge, Caddy on AWS) are such a proxy, so there the per-IP limits count the proxy address (open follow-up: issue #194).
 - At most 10,000 counters are kept (oldest evicted); the clock is injectable for tests.
 
 ### Auth
@@ -318,7 +318,16 @@ Observability (`backend/observe.go`): one JSON access log line per request (slog
 
 Process: `http.Server` with read-header, read, write and idle timeouts, graceful shutdown on SIGINT / SIGTERM, `X-Content-Type-Options: nosniff` on every response and `Cache-Control: no-store` on `/auth/*`.
 
-Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid for its 3 hours; objects of deleted branches are never garbage-collected (they go with the repository); login and register are rate limited in memory only (counters reset on restart, see "Rate limiting"); local only (Vite dev server proxies `/api`, no production hosting, issue #22 closed as not planned).
+Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid for its 3 hours; objects of deleted branches are never garbage-collected (they go with the repository); login and register are rate limited in memory only (counters reset on restart, see "Rate limiting"); locally the Vite dev server proxies `/api`; hosting is described in "Deployment" below.
+
+## Deployment
+
+One Docker image (root `Dockerfile`) serves the API and the SPA; the server strips `/api` in front of the API routes (`backend/static.go`). Two targets, both deployed by `.github/workflows/deploy.yml` only after CI and E2E are green for the commit on `main`:
+
+- Render (free plan): Blueprint `deploy/render.yaml`, service `micro-git` with managed Postgres `mg-db`, `autoDeploy: false`, deploy hook pinned with `ref=<sha>`, then the `smoke` job waits for `X-Build` == sha.
+- AWS (Free plan account, `ap-southeast-2`): stack `micro-git-prod` (one EC2 instance with Docker Postgres, the app and Caddy) through `deploy/aws/deploy.sh`, run by job `deploy-aws-keys` with an IAM-user key in environment `aws-prod`. The OIDC job `deploy-aws` is optional and unused (the org SCP denies the OIDC provider).
+
+Decision (user, 2026-11-13, #174): Railway, GCP and Vercel were removed; only Render and AWS are kept. Details: `deploy/README.md`, `docs/deployment.md`, `_docs/deploy-runbook.md`.
 
 ## Frontend
 

@@ -1,16 +1,15 @@
 # Deploy runbook
 
-Short operational view. Details: `deploy/README.md` and the per-host READMEs.
+Short operational view. Details: `deploy/README.md` and the per-host READMEs (`deploy/render/README.md`, `deploy/aws/README.md`). The targets are Render and AWS.
+
+Production AWS uses the IAM-user key path (job `deploy-aws-keys`, `deploy/aws/deploy.sh`). The GitHub OIDC path (job `deploy-aws`, `bootstrap.sh` without `--no-oidc`, and the "Owner checklist" at the bottom of this file) is OPTIONAL and currently blocked: the organization SCP of account 228619515667 denies creating the OIDC provider, so `AWS_ROLE_ARN` is not set and `deploy-aws` is skipped.
 
 ## Status per target
 
 | Target | Status |
 | --- | --- |
 | Render | Live at https://micro-git.onrender.com, deployed by the Deploy workflow through `RENDER_DEPLOY_HOOK`. The server sets `X-Build` (`backend/build.go`: `RENDER_GIT_COMMIT`, else `APP_COMMIT`, else `dev`); last reported build `5acd89e...`. `autoDeploy` is `false`, so only the CI/E2E-gated deploy hook deploys. The `smoke` job in `deploy.yml` runs after `deploy-render`, waits until `X-Build` equals the deployed commit (the hook is pinned with `ref=<sha>`), then checks `/`. |
-| AWS | Stack `micro-git-prod` in `ap-southeast-2`, deployed by `deploy/aws/deploy.sh --apply --account 228619515667` (one command, no OIDC: an org SCP denies `oidc-provider/*`). URL: stack output `AppUrl` (printed by `deploy.sh`). Live at http://3.26.221.66. GitHub deploys it automatically: job `deploy-aws-keys` (IAM user `github-deploy-micro-git-prod-user`, key in environment `aws-prod`, main only) ran `deploy.sh --apply --ci` in Deploy run 43480095153 for `39e71e0` (2026-11-13): no stack change, new image, smoke passed, X-Build == `39e71e0b02189935aaf321db7b0b4d6ba5a5aa7a`. The hand-made stack `mg` is separate and never touched. |
-| GCP | Not configured (`GCP_WORKLOAD_IDENTITY` / `GCP_SERVICE_ACCOUNT` unset), job skipped. |
-| Railway | Not configured (`RAILWAY_TOKEN` unset), job skipped. |
-| Vercel | Not configured (`VERCEL_TOKEN`, `VERCEL_ORG_ID`, `VERCEL_PROJECT_ID` unset), job skipped. |
+| AWS | Stack `micro-git-prod` in `ap-southeast-2`, deployed by `deploy/aws/deploy.sh --apply --account 228619515667` (one command, no OIDC: an org SCP denies `oidc-provider/*`). URL: stack output `AppUrl` (printed by `deploy.sh`). Live at http://3.26.221.66. GitHub deploys it automatically: job `deploy-aws-keys` (IAM user `github-deploy-micro-git-prod-user`, key in environment `aws-prod`, main only) ran `deploy.sh --apply --ci` in Deploy run 43480095153 for `39e71e0` (2026-11-13): no stack change, new image, smoke passed, X-Build == `39e71e0b02189935aaf321db7b0b4d6ba5a5aa7a`. The hand-made stack `mg` is separate and never touched. The OIDC job `deploy-aws` is optional and skipped (`AWS_ROLE_ARN` unset, see above). |
 
 ## Check which build is live
 
@@ -18,7 +17,7 @@ Short operational view. Details: `deploy/README.md` and the per-host READMEs.
     curl -s https://micro-git.onrender.com/health
     git rev-parse --short origin/main        # compare with the X-Build prefix
 
-Other views: Render dashboard (latest deploy commit SHA); `gh run list --workflow deploy.yml --json headSha,conclusion,createdAt`. A green `deploy-render` job only means the hook was accepted; the build continues on Render. For AWS use `<AppUrl>/health` (the job polls it for 5 minutes) and the stack output `AppUrl`.
+Other views: Render dashboard (latest deploy commit SHA); `gh run list --workflow deploy.yml --json headSha,conclusion,createdAt`. A green `deploy-render` job only means the hook was accepted; the build continues on Render. For AWS use `curl -sI <AppUrl>/health | grep -i '^x-build'` with the stack output `AppUrl` (`deploy.sh`, also in job `deploy-aws-keys`, waits up to 5 minutes for `X-Build` to equal the sha).
 
 ## AWS: deploy, update, tear down (account 228619515667)
 
@@ -61,6 +60,8 @@ Tracked in issues #167, #160, #166 and #168 (AWS hardening, backups and other de
 - `mg-instance-boundary` is a single account-wide policy and its name is fixed. It covers the secret path of the stack name used at bootstrap. A second stack name in the same account needs its `/<stack>/jwt-secret` path added by hand (`aws iam create-policy-version --set-as-default`); `bootstrap.sh` never modifies an existing policy.
 
 ## Owner checklist (AWS, your credentials only)
+
+OPTIONAL, OIDC path only (job `deploy-aws`). It cannot be completed in account 228619515667: the organization SCP denies creating the GitHub OIDC provider in step 4. Production uses the keys path above (`deploy.sh` and job `deploy-aws-keys`); follow this list only in an account without that SCP.
 
 1. `aws login` (or `aws sso login --profile NAME`).
 2. `deploy/aws/preflight.sh --region <region> --stack-name <new-stack>` and fix any `[FAIL]`.
