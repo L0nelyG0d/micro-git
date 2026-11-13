@@ -1,0 +1,152 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Security audit run",
+  "type": "object",
+  "required": [
+    "run_id",
+    "date",
+    "checks",
+    "findings"
+  ],
+  "properties": {
+    "run_id": {
+      "type": "string"
+    },
+    "date": {
+      "type": "string",
+      "format": "date"
+    },
+    "commit": {
+      "type": "string"
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "ok",
+              "findings",
+              "scanner_unavailable",
+              "not_run",
+              "error"
+            ]
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/finding"
+      }
+    }
+  },
+  "$defs": {
+    "finding": {
+      "type": "object",
+      "required": [
+        "id",
+        "source",
+        "rule",
+        "severity",
+        "file",
+        "line",
+        "description",
+        "disposition"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Stable id, e.g. SEC-20261112-001"
+        },
+        "source": {
+          "enum": [
+            "scanner",
+            "model",
+            "human"
+          ]
+        },
+        "rule": {
+          "type": "string",
+          "description": "Scanner rule id or model-assigned category"
+        },
+        "severity": {
+          "enum": [
+            "info",
+            "low",
+            "medium",
+            "high",
+            "critical"
+          ]
+        },
+        "file": {
+          "type": "string"
+        },
+        "line": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 1
+        },
+        "description": {
+          "type": "string"
+        },
+        "evidence": {
+          "type": "string",
+          "description": "Redacted excerpt or reasoning. NEVER include secret values."
+        },
+        "disposition": {
+          "enum": [
+            "open",
+            "confirmed",
+            "false_positive",
+            "accepted_risk",
+            "fixed"
+          ],
+          "description": "open until a human validates"
+        },
+        "reviewer": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "date": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date",
+          "description": "Date of disposition"
+        },
+        "related_incident": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^(INC-[0-9]{8}-[0-9]{3}|inc-[0-9]{8}T[0-9]{6}-[A-Za-z0-9]{1,16}(-[A-Za-z0-9]{1,16})?)$"
+        },
+        "disposition_reason": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional. Why the reviewer chose the disposition. Pending human confirmation unless reviewer says otherwise."
+        }
+      }
+    }
+  }
+}
