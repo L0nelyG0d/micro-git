@@ -515,7 +515,9 @@ same `DATABASE_URL`. The SQLite file is only read, never modified.
 
 ## Deployment
 
-- [Deployment and CD overview](deploy/README.md)
-- [Render](deploy/render/README.md), live: https://micro-git.onrender.com
-- [AWS](deploy/aws/README.md), live: http://ec2-13-211-236-62.ap-southeast-2.compute.amazonaws.com
-- [GCP](deploy/gcp/README.md)
+Two targets, both deployed by the Deploy workflow after CI and E2E are green on `main`:
+
+- [Deployment and CD overview](../deploy/README.md) (jobs, secrets and variables)
+- [Image, compose and environment variables](../docs/deployment.md)
+- [Render](../deploy/render/README.md), live: https://micro-git.onrender.com
+- [AWS](../deploy/aws/README.md), stack `micro-git-prod` in `ap-southeast-2` (job `deploy-aws-keys`); URL: stack output `AppUrl`, current address in the [deploy runbook](deploy-runbook.md)
