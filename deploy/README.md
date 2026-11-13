@@ -32,7 +32,7 @@ Current configuration (Settings > Secrets and variables > Actions, and Settings 
 | repository | secret | `RENDER_DEPLOY_HOOK` | gate, `deploy-render` | Full hook URL of the live Render service |
 | repository | variable | `AWS_DEPLOY_MODE` | gate | `keys` switches `deploy-aws-keys` on. Set last by `deploy/aws/bootstrap.sh --ci-user`, deleted by `destroy.sh` |
 | repository | variable | `AWS_ACCOUNT_ID` | `deploy-aws-keys` | Passed as `MG_AWS_ACCOUNT`; `deploy.sh` aborts if the key belongs to another account |
-| repository | variable | `AWS_REGION`, `AWS_STACK_NAME`, `AWS_CFN_ROLE_ARN` | `deploy-aws` only | Set by `bootstrap.sh --ci-user` (`ap-southeast-2`, `micro-git-prod`, role `cfn-deploy-micro-git-prod`). `deploy-aws-keys` does not read them: `deploy.sh` fixes region, stack and role itself. Without them `deploy-aws` would default to region `us-east-1` and stack `mg` |
+| repository | variable | `AWS_REGION`, `AWS_STACK_NAME`, `AWS_CFN_ROLE_ARN` | `deploy-aws` only | Set by `bootstrap.sh --ci-user` (`ap-southeast-2`, `micro-git-prod`, role `cfn-deploy-micro-git-prod`). `deploy-aws-keys` does not read them: `deploy.sh` fixes region, stack and role itself. Without them `deploy-aws` defaults to region `ap-southeast-2` and stack `micro-git-prod` (never the hand-made stack `mg`) |
 | environment `aws-prod` | secret | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | `deploy-aws-keys` | Key of IAM user `github-deploy-micro-git-prod-user`, piped in by `bootstrap.sh --ci-user` (rotate with `--rotate-ci-key`) |
 | repository | variable | `APP_URL` | `smoke` | Optional, default `https://micro-git.onrender.com` |
 | repository | variable | `SMOKE_WAIT_SECONDS` | `smoke` | Optional, default 480, capped at 780 |

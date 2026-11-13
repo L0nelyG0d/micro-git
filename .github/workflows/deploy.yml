@@ -109,8 +109,8 @@ jobs:
       contents: read
       id-token: write
     env:
-      AWS_STACK_NAME: ${{ vars.AWS_STACK_NAME || 'mg' }}
-      AWS_REGION: ${{ vars.AWS_REGION || 'us-east-1' }}
+      AWS_STACK_NAME: ${{ vars.AWS_STACK_NAME || 'micro-git-prod' }}
+      AWS_REGION: ${{ vars.AWS_REGION || 'ap-southeast-2' }}
       HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
     steps:
       - name: Require the AWS_JWT_SECRET secret (32+ characters)
