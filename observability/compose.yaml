@@ -1,0 +1,89 @@
+# Observability stack. It has NO network of its own: run it merged with the
+# root compose file so every service lands on the same default network as `app`:
+#
+#   docker compose -f docker-compose.yml -f observability/compose.yaml up -d --build
+#
+# (run from the repo root; bind-mount paths below are relative to the root,
+# because compose resolves them against the first -f file.)
+# Grafana: http://localhost:3000   Prometheus: http://localhost:9090 (all ports bound to 127.0.0.1)
+services:
+  collector:
+    image: otel/opentelemetry-collector-contrib:0.111.0
+    command: ["--config=/etc/otelcol/config.yaml"]
+    user: "0:0"   # needed to read /var/lib/docker/containers
+    volumes:
+      - ./observability/collector.yaml:/etc/otelcol/config.yaml:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    ports:
+      - "127.0.0.1:4318:4318"   # OTLP/HTTP, loopback only (app can also be pointed at localhost:4318)
+    depends_on: [prometheus, loki, tempo]
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --web.enable-remote-write-receiver   # only the collector (internal network) writes here; never publish a port for it beyond loopback
+      - --storage.tsdb.retention.time=3d
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/alerts.yaml:/etc/prometheus/alerts.yaml:ro
+      - prom-data:/prometheus
+    ports:
+      - "127.0.0.1:9090:9090"   # loopback only: the remote-write receiver is on this port, it has no auth
+    restart: unless-stopped
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    command: ["--config.file=/etc/alertmanager/alertmanager.yml"]
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      # Bearer token for the webhook; created by incident-response/make-token.sh
+      # (run it BEFORE `up`; if the file is missing Docker would create a directory in its place).
+      - ./incident-response/.alert-token:/etc/alertmanager/alert-token:ro
+    extra_hosts:
+      # Docker Desktop (macOS/Windows) already resolves host.docker.internal; on Linux this maps it to
+      # the host gateway. The listener on the host must then bind an address reachable from the bridge
+      # (not only 127.0.0.1), otherwise the webhook cannot connect.
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+
+  loki:
+    image: grafana/loki:3.2.1
+    command: ["-config.file=/etc/loki/loki.yaml"]
+    ports:
+      - "127.0.0.1:3100:3100"   # read API for incident-response/collect-evidence.sh
+    volumes:
+      - ./observability/loki.yaml:/etc/loki/loki.yaml:ro
+      - loki-data:/loki
+    restart: unless-stopped
+
+  tempo:
+    image: grafana/tempo:2.6.1
+    command: ["-config.file=/etc/tempo/tempo.yaml"]
+    ports:
+      - "127.0.0.1:3200:3200"   # search API for incident-response/collect-evidence.sh
+    volumes:
+      - ./observability/tempo.yaml:/etc/tempo/tempo.yaml:ro
+      - tempo-data:/var/tempo
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: "${GRAFANA_ADMIN_PASSWORD:?set GRAFANA_ADMIN_PASSWORD}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./observability/dashboard.json:/var/lib/grafana/dashboards/dashboard.json:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on: [prometheus, loki, tempo]
+    restart: unless-stopped
+
+volumes:
+  prom-data:
+  loki-data:
+  tempo-data:
+  grafana-data:
