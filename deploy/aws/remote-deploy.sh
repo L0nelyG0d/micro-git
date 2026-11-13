@@ -1,10 +1,14 @@
 #!/bin/bash
 # Runs ON the EC2 instance (sent by the deploy-aws workflow through SSM Run Command).
-# Usage: remote-deploy.sh <stack-name> <region> <image-uri:tag> <schema.sql>
+# Usage: remote-deploy.sh <stack-name> <region> <image-uri:tag> <schema.sql> [app-commit]
+# app-commit (git sha, hex) becomes APP_COMMIT in the container, which the server reports as X-Build.
 # Never prints the JWT secret. Idempotent: safe to re-run.
 set -euo pipefail
 
-STACK="$1"; REGION="$2"; IMAGE="$3"; SCHEMA="$4"
+STACK="$1"; REGION="$2"; IMAGE="$3"; SCHEMA="$4"; APP_COMMIT="${5:-}"
+if [ -n "$APP_COMMIT" ] && ! [[ "$APP_COMMIT" =~ ^[0-9a-f]{7,40}$ ]]; then
+  echo "app-commit must be a hex git sha" >&2; exit 1
+fi
 REGISTRY="${IMAGE%%/*}"
 
 # Wait for first-boot user data (Docker, Postgres, Caddy). Fails if cloud-init errored.
@@ -41,7 +45,7 @@ docker exec -i mg-db psql -v ON_ERROR_STOP=1 -q -U mg -d mg < "$SCHEMA"
 
 docker rm -f mg-app >/dev/null 2>&1 || true
 docker run -d --name mg-app --restart unless-stopped --network mg \
-  --env-file /opt/mg/app.env "$IMAGE" >/dev/null
+  --env-file /opt/mg/app.env ${APP_COMMIT:+-e "APP_COMMIT=$APP_COMMIT"} "$IMAGE" >/dev/null
 sleep 3
 docker ps --filter name=mg-app --filter status=running --format 'mg-app running: {{.Image}}' | grep -q running \
   || { docker logs --tail 30 mg-app >&2; exit 1; }
