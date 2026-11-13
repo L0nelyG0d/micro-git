@@ -64,6 +64,22 @@ paths:
           description: The server is up (headers only).
         '405':
           $ref: '#/components/responses/MethodNotAllowed'
+  /metrics:
+    get:
+      tags: [health]
+      operationId: metrics
+      security: []
+      summary: Prometheus metrics
+      description: Only registered when METRICS_ADDR is unset and COOKIE_SECURE is not true; with METRICS_ADDR set it is served on that separate listener and is absent here. Text exposition format 0.0.4 (http_requests_total, http_request_duration_seconds, http_requests_in_flight, build_info).
+      responses:
+        '200':
+          description: Metrics.
+          content:
+            text/plain:
+              schema:
+                type: string
+        '405':
+          $ref: '#/components/responses/MethodNotAllowed'
   /auth/register:
     post:
       tags: [auth]

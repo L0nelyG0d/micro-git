@@ -195,6 +195,14 @@ export class MockApiService implements ApiService {
 
   async health() {}
   async healthHead() {}
+  async metrics() {
+    return [
+      "# HELP http_requests_in_flight Requests being served.",
+      "# TYPE http_requests_in_flight gauge",
+      "http_requests_in_flight 0",
+      "",
+    ].join("\n")
+  }
 
   // ---- auth ----
 
