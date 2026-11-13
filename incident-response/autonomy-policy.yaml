@@ -3,6 +3,7 @@
   "version": 1,
   "confidence_threshold": 0.7,
   "max_automatic_actions_per_incident": 1,
+  "global_cooldown_seconds": 300,
   "_templates": "{{COMPOSE_ARGS}} expands (escaped) to '-p $COMPOSE_PROJECT_NAME -f <each of $COMPOSE_FILES>'; unset COMPOSE_FILES = no template can match = escalate (fail closed). rollback was removed: root compose hardcodes mg-app:local.",
   "on_violation": "escalate",
   "allowed_actions": [

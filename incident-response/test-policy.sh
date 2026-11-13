@@ -4,6 +4,7 @@ set -uo pipefail
 D="$(cd "$(dirname "$0")" && pwd)"
 T="$(mktemp -d)"; trap 'rm -rf "$T"' EXIT
 pass=0; fail=0
+export GLOBAL_COOLDOWN_SECONDS=0   # cooldown has its own tests below
 export COMPOSE_FILES="docker-compose.yml:observability/compose.yaml" COMPOSE_PROJECT_NAME=mgobs
 CA="-p mgobs -f docker-compose.yml -f observability/compose.yaml"
 mk() { # name command type confidence needs_human
@@ -41,6 +42,16 @@ mk bad-type "docker compose $CA restart app" nuke 0.9;                          
 mkdir -p "$T/no-file";                                                                                  expect no-file 3
 # max one automatic action: second run on the same incident must escalate
 mk once "docker compose $CA restart app" restart 0.9; expect once 0; expect once 3
+# global cooldown across incidents (separate dir so .last_action is isolated)
+CD="$T/cd"; mkdir -p "$CD/a" "$CD/b" "$CD/c"
+for i in a b c; do jq -n --arg id "$i" --arg c "docker compose $CA restart app" '{incident_id:$id,summary:"s",root_cause_hypothesis:"h",confidence:0.9,evidence_refs:["x"],proposed_action:{type:"restart",command:$c,files:[]},risk:"low",needs_human:false}' > "$CD/$i/response.json"; done
+cdrun() { GLOBAL_COOLDOWN_SECONDS="$2" python3 -I "$D/policy-check.py" "$CD/$1" "${@:3}" >/dev/null 2>&1; echo $?; }
+[ "$(cdrun a 300)" = 0 ] && [ -f "$CD/.last_action" ] && { pass=$((pass+1)); echo "ok   cooldown: first action allowed + .last_action stamped"; } || { fail=$((fail+1)); echo "FAIL cooldown first"; }
+[ "$(cdrun b 300)" = 3 ] && grep -q 'global action cooldown' "$CD/b/decision.json" && [ ! -f "$CD/b/action.lock" ] && { pass=$((pass+1)); echo "ok   cooldown: second incident escalated, no lock left"; } || { fail=$((fail+1)); echo "FAIL cooldown second"; }
+[ "$(cdrun b 300 --no-claim)" = 3 ] && { pass=$((pass+1)); echo "ok   cooldown: dry-run also reports it"; } || { fail=$((fail+1)); echo "FAIL cooldown dry-run"; }
+[ "$(cdrun b 0)" = 0 ] && { pass=$((pass+1)); echo "ok   cooldown: 0 disables"; } || { fail=$((fail+1)); echo "FAIL cooldown off"; }
+echo "1 x" > "$CD/.last_action"   # ancient timestamp: cooldown over
+[ "$(cdrun c 300)" = 0 ] && { pass=$((pass+1)); echo "ok   cooldown: expires"; } || { fail=$((fail+1)); echo "FAIL cooldown expiry"; }
 # a crash inside policy-check must exit 1 (not 0/3) and leave an audit line
 mkdir -p "$T/crash"; echo '{}' > "$T/crash/response.json"; echo '{broken' > "$T/crash/bad-policy.json"
 python3 -I "$D/policy-check.py" "$T/crash" --policy "$T/crash/bad-policy.json" >/dev/null 2>&1; rc=$?

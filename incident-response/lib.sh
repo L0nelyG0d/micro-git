@@ -24,12 +24,34 @@ audit() {
 # (never keep the unredacted file).
 redact() { head -c "${REDACT_MAX_BYTES:-4194304}" | TMO="${REDACT_TIMEOUT:-20}" run_limited python3 -I "$IR_DIR/redact.py"; }
 
-# run_limited <cmd...> : run with a timeout of ${TMO:-300}s when `timeout`/`gtimeout` exists (macOS ships neither by default).
+# run_limited <cmd...> : run with a timeout of ${TMO:-300}s (exit 124 on expiry): `timeout`, else `gtimeout`, else a python3 process-group fallback (macOS ships neither by default).
 run_limited() {
   local t="${TMO:-300}"
   if command -v timeout >/dev/null; then timeout "$t" "$@"
   elif command -v gtimeout >/dev/null; then gtimeout "$t" "$@"
-  else "$@"; fi
+  else
+    # Neither exists (stock macOS): python3 runs the command in its own process group and kills the group on expiry (rc 124, like timeout).
+    # stdin/stdout/stderr are inherited, so pipes work. Last resort without python3: run unlimited.
+    command -v python3 >/dev/null || { "$@"; return; }
+    python3 -I -c '
+import os, signal, subprocess, sys
+t = float(sys.argv[1])
+p = subprocess.Popen(sys.argv[2:], start_new_session=True)
+try:
+    sys.exit(p.wait(timeout=t))
+except subprocess.TimeoutExpired:
+    for sig in (signal.SIGTERM, signal.SIGKILL):
+        try: os.killpg(p.pid, sig)
+        except ProcessLookupError: break
+        try: p.wait(timeout=5); break
+        except subprocess.TimeoutExpired: continue
+    sys.exit(124)
+except KeyboardInterrupt:
+    try: os.killpg(p.pid, signal.SIGTERM)
+    except ProcessLookupError: pass
+    sys.exit(130)
+' "$t" "$@"
+  fi
 }
 
 # compose_args : fills the array COMPOSE_ARGS from COMPOSE_FILES (colon separated, falls back to COMPOSE_FILE)

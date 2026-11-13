@@ -38,6 +38,12 @@ def token():
 def gaudit(kind, detail, decision="n/a"):
     """Listener-level audit (requests that never became an incident)."""
     os.makedirs(INCIDENTS, exist_ok=True)
+    try:
+        if os.stat(TOKEN_FILE).st_mode & 0o077:
+            gaudit("config", "ALERT_TOKEN_FILE %s is readable by group/others; run chmod 600 on it" % TOKEN_FILE, "warn")
+            print("WARNING: alert token file is group/other accessible; chmod 600 it", file=sys.stderr)
+    except OSError:
+        pass
     with open(os.path.join(INCIDENTS, "listener-audit.jsonl"), "a") as f:
         f.write(json.dumps({"ts": now(), "actor": "listener.py", "kind": kind, "detail": detail, "decision": decision}) + "\n")
 

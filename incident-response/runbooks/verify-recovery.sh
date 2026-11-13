@@ -19,6 +19,9 @@ INC=""; [ -n "$ID" ] && valid_id "$ID" && INC="$INCIDENTS_DIR/$ID"
 log() { echo "verify: $*"; [ -n "$INC" ] && audit "$INC" verify "$*"; return 0; }
 if [ "${DRY_RUN:-0}" = 1 ]; then log "DRY_RUN simulated recovery for $ROUTE"; exit 0; fi
 
+if [ -n "${PROBE_URL:-}" ]; then   # audit what is probed (scheme://host/path only: query strings may carry tokens)
+  log "probe enabled: ${PROBE_COUNT:-5} GET per poll to ${PROBE_URL%%[?#]*}$([ -n "${PROBE_COOKIE_JAR:-}" ] && echo " with a cookie jar")"
+fi
 Q="(sum(rate(${M_REQ}{route=\"$ROUTE\",status=~\"5..\"}[1m])) or vector(0)) / sum(rate(${M_REQ}{route=\"$ROUTE\"}[1m]))"
 WARM="${WARMUP_SECONDS:-75}"; START_TS=$(date +%s)
 deadline=$(( START_TS + WARM + MIN*60 )); ok=0
