@@ -63,7 +63,7 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_DEPLOY_MODE: ${{ vars.AWS_DEPLOY_MODE }}
           GCP_WORKLOAD_IDENTITY: ${{ vars.GCP_WORKLOAD_IDENTITY }}
         run: |
           flag() { if [ -n "$1" ]; then echo true; else echo false; fi; }
@@ -72,7 +72,9 @@ jobs:
             echo "railway=$(flag "$RAILWAY_TOKEN")"
             echo "aws=$(flag "$AWS_ROLE_ARN")"
             # Access-key path only when OIDC is not configured (an SCP denies OIDC in this account).
-            if [ -z "$AWS_ROLE_ARN" ]; then echo "aws_keys=$(flag "$AWS_ACCESS_KEY_ID")"; else echo "aws_keys=false"; fi
+            # The key lives in environment aws-prod, which the gate cannot read, so a variable
+            # (set by deploy/aws/bootstrap.sh --ci-user after the key is stored) switches it on.
+            if [ -z "$AWS_ROLE_ARN" ] && [ "$AWS_DEPLOY_MODE" = keys ]; then echo "aws_keys=true"; else echo "aws_keys=false"; fi
             echo "gcp=$(flag "$GCP_WORKLOAD_IDENTITY")"
             echo "vercel=$(flag "$VERCEL_TOKEN")"
           } >> "$GITHUB_OUTPUT"
@@ -338,19 +340,22 @@ jobs:
     if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.aws_keys == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # The key is an environment secret: environment aws-prod only accepts deployments from main,
+    # so workflows on other branches cannot read it.
+    environment: aws-prod
     permissions:
       contents: read
     steps:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.workflow_run.head_sha }}
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ap-southeast-2
+          persist-credentials: false
+      # The static key goes only into this step's environment (no third-party action handles it).
       - name: deploy/aws/deploy.sh --apply --ci
         env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ap-southeast-2
           MG_AWS_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: deploy/aws/deploy.sh --apply --ci --ref "$HEAD_SHA"

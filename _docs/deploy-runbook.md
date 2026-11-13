@@ -31,7 +31,7 @@ Other views: Render dashboard (latest deploy commit SHA); `gh run list --workflo
 - Needs `aws login` (your own session), Docker running, `jq`, `openssl`. Region and stack are fixed in the scripts.
 - `deploy.sh` stops if the account is not on the Free plan. It runs preflight and bootstrap (`--no-oidc`), keeps the JWT secret in SSM (generated once, never printed; `--rotate-jwt` to replace), deploys the stack through a guarded change set, builds the exact commit for `linux/amd64`, rolls it out through SSM with `APP_COMMIT`, and smoke-checks `/health` (X-Build == sha), `/`, `/api/repos` (200) and `/api/auth/me` (401).
 - Automation: a git `post-merge` hook or a cron/launchd job can call the `--apply` command (needs a live `aws login`); GitHub runs the same script in job `deploy-aws-keys` after CI and E2E are green on `main`.
-- `destroy.sh` terminates the instance first (it is `RetainExceptOnCreate`, so a plain stack delete would leave it running), deletes the stack (ECR images with it), the CI user, its keys and the GitHub secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. `--all` also deletes `/micro-git-prod/jwt-secret`, role `cfn-deploy-micro-git-prod` and `mg-instance-boundary` (if unused). Postgres data is lost; there are no backups.
+- `destroy.sh` terminates the instance first (it is `RetainExceptOnCreate`, so a plain stack delete would leave it running), deletes the stack (ECR images with it), the CI user, its keys, the variable `AWS_DEPLOY_MODE` (switches the CI job off) and the `aws-prod` environment secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. `--all` also deletes `/micro-git-prod/jwt-secret`, role `cfn-deploy-micro-git-prod` and `mg-instance-boundary` (if unused). Postgres data is lost; there are no backups.
 - Check credits: `aws freetier get-account-plan-state --region us-east-1`.
 
 ### CI key rotation
@@ -39,7 +39,7 @@ Other views: Render dashboard (latest deploy commit SHA); `gh run list --workflo
     deploy/aws/bootstrap.sh --no-oidc --ci-user --rotate-ci-key --apply \
       --confirm-account 228619515667 --region ap-southeast-2 --stack-name micro-git-prod
 
-Creates a new key, pipes it into the GitHub secrets (never printed), then deletes the old key, leaving one active key. Needs github.com reachable (no key is created otherwise). Without `--rotate-ci-key` the same command only refreshes the user policy and sets the GitHub variables.
+Creates a new key, pipes it into the secrets of GitHub environment `aws-prod` (main only; never printed), then deletes the old key, leaving one active key. Needs github.com reachable (no key is created otherwise). Without `--rotate-ci-key` the same command only refreshes the user policy and sets the GitHub variables.
 
 ## Rollback
 

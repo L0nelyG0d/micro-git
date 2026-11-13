@@ -61,7 +61,9 @@ if [ -n "$R" ]; then
   if [ -n "$offered" ]; then ok "instance types offered in $R: $(echo "$offered" | tr -s '\t\n' ' ')"; else bad "neither t3.micro nor t2.micro offered in $R"; fi
 
   st="$("${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || true)"
-  if [ -n "$st" ] && [ "$st" != None ]; then
+  if [ -n "$st" ] && [ "$st" != None ] && [ -n "$NO_OIDC" ] && [ "$STACK" != mg ]; then
+    ok "stack '$STACK' exists in $R ($st); deploy.sh updates it in place"
+  elif [ -n "$st" ] && [ "$st" != None ]; then
     warn "stack '$STACK' already exists in $R ($st). If it is the hand-made one, use a NEW name: --stack-name <new> and AWS_STACK_NAME"
   else
     ok "no stack named '$STACK' in $R"

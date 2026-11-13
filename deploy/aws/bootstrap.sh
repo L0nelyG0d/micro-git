@@ -6,8 +6,9 @@
 #              denies oidc-provider/*; deploy/aws/deploy.sh uses this mode).
 #   --ci-user  adds the IAM user github-deploy-<stack>-user (+ inline policy, tag Project=micro-git)
 #              for GitHub Actions without OIDC, and, if it has no active key (or --rotate-ci-key),
-#              creates one and pipes it straight into the GitHub secrets AWS_ACCESS_KEY_ID /
-#              AWS_SECRET_ACCESS_KEY. The key is never printed, logged or written to a file.
+#              creates one and pipes it straight into the secrets AWS_ACCESS_KEY_ID /
+#              AWS_SECRET_ACCESS_KEY of GitHub environment aws-prod (deployable from main only).
+#              The key is never printed, logged or written to a file.
 # Policy JSON lives in deploy/aws/policies/*.json (placeholders <ACCOUNT_ID>, <STACK_NAME>, <REPO>).
 #
 # Default is --dry-run: read-only lookups run, every mutating command is only printed.
@@ -101,6 +102,7 @@ BOUNDARY_ARN="arn:$PART:iam::$ACCOUNT:policy/$BOUNDARY"
 CFN_ROLE="cfn-deploy-$STACK"
 GH_ROLE="github-deploy-$STACK"
 CI_USER_NAME="github-deploy-$STACK-user"
+GH_ENV=aws-prod
 CFN_ROLE_ARN="arn:$PART:iam::$ACCOUNT:role/$CFN_ROLE"
 GH_ROLE_ARN="arn:$PART:iam::$ACCOUNT:role/$GH_ROLE"
 
@@ -178,7 +180,17 @@ fi
 echo "2/5 Policy $BOUNDARY"
 rc=0; exists iam get-policy --policy-arn "$BOUNDARY_ARN" || rc=$?
 if [ "$rc" -eq 0 ]; then
-  echo "  exists, left unchanged (compare with deploy/aws/policies/$BOUNDARY.json; its secret path must cover /$STACK/jwt-secret)"
+  # Never changed here (its name is account-wide), but drift from the file is reported.
+  ver="$(ro iam get-policy --policy-arn "$BOUNDARY_ARN" --query Policy.DefaultVersionId --output text)"
+  cur="$(ro iam get-policy-version --policy-arn "$BOUNDARY_ARN" --version-id "$ver" --query PolicyVersion.Document --output json \
+    | python3 -c 'import sys,json,urllib.parse as u;d=json.load(sys.stdin);d=json.loads(u.unquote(d)) if isinstance(d,str) else d;print(json.dumps(d,sort_keys=True))' 2>/dev/null || echo)"
+  want="$(python3 -c 'import sys,json;print(json.dumps(json.load(open(sys.argv[1])),sort_keys=True))' "$TMP/$BOUNDARY.json")"
+  if [ -n "$cur" ] && [ "$cur" = "$want" ]; then
+    echo "  exists and matches deploy/aws/policies/$BOUNDARY.json"
+  else
+    echo "  WARNING: $BOUNDARY exists but differs from deploy/aws/policies/$BOUNDARY.json (or could not be compared)." >&2
+    echo "  It is left unchanged; update it on purpose: aws iam create-policy-version --policy-arn $BOUNDARY_ARN --policy-document file://<rendered json> --set-as-default" >&2
+  fi
 elif [ "$rc" -eq 1 ]; then
   mut iam create-policy --policy-name "$BOUNDARY" --policy-document "file://$TMP/$BOUNDARY.json"
 else
@@ -218,24 +230,40 @@ fi
 
 # Create one access key and hand it to GitHub without printing it: the JSON from
 # create-access-key goes through a pipe into python, which feeds each value to
-# `gh secret set` on stdin. Prints only "ok <last 4 of key id>" or "fail <id>".
+# `gh secret set --env` on stdin. Prints only "ok <key id>" or "fail <key id>"; the key id
+# is an identifier, not the secret, and the caller shows only its last 4 characters.
+# The secret value is set first, so a failure after it leaves the old (still valid) id/secret
+# pair only if neither was replaced.
 new_key_to_github() {
   ro iam create-access-key --user-name "$CI_USER_NAME" --output json | python3 -I -c '
 import json, subprocess, sys
 k = json.load(sys.stdin)["AccessKey"]
 ok = True
-for name, val in (("AWS_ACCESS_KEY_ID", k["AccessKeyId"]), ("AWS_SECRET_ACCESS_KEY", k["SecretAccessKey"])):
-    r = subprocess.run(["perl", "-e", "alarm 60; exec @ARGV or exit 127", "gh", "secret", "set", name, "--repo", sys.argv[1]],
+for name, val in (("AWS_SECRET_ACCESS_KEY", k["SecretAccessKey"]), ("AWS_ACCESS_KEY_ID", k["AccessKeyId"])):
+    r = subprocess.run(["perl", "-e", "alarm 60; exec @ARGV or exit 127", "gh", "secret", "set", name,
+                        "--repo", sys.argv[1], "--env", sys.argv[2]],
                        input=val.encode(), stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     if r.returncode != 0:
         ok = False
         break
 print(("ok " if ok else "fail ") + k["AccessKeyId"])
-' "$REPO"
+' "$REPO" "$GH_ENV"
+}
+
+# GitHub environment that holds the key: only branch main may deploy to it, so a workflow
+# on another branch cannot read the secrets.
+ensure_github_env() {
+  gh_t api -X PUT "repos/$REPO/environments/$GH_ENV" --input - >/dev/null <<'JSON'
+{"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
+JSON
+  if ! gh_t api "repos/$REPO/environments/$GH_ENV/deployment-branch-policies" --jq '.branch_policies[].name' | grep -qx main; then
+    gh_t api -X POST "repos/$REPO/environments/$GH_ENV/deployment-branch-policies" -f name=main -f type=branch >/dev/null
+  fi
+  echo "  GitHub environment $GH_ENV: deployments from branch main only"
 }
 
 if [ -n "$CI_USER" ]; then
-  echo "6/6 CI user $CI_USER_NAME (GitHub Actions without OIDC), its policy and its single access key"
+  echo "CI user $CI_USER_NAME (GitHub Actions without OIDC), its policy and its single access key"
   rc=0; exists iam get-user --user-name "$CI_USER_NAME" || rc=$?
   if [ "$rc" -eq 1 ]; then
     mut iam create-user --user-name "$CI_USER_NAME" --tags Key=Project,Value=micro-git
@@ -253,29 +281,38 @@ if [ -n "$CI_USER" ]; then
     [ "$old_keys" = None ] && old_keys=""
   fi
   nold="$(printf '%s' "$old_keys" | wc -w | tr -d ' ')"
+  if [ "$MODE" = apply ]; then
+    gh_t api "repos/$REPO" --jq .full_name >/dev/null 2>&1 \
+      || { echo "error: GitHub API unreachable or gh not logged in; no key was created. Retry later." >&2; exit 1; }
+    ensure_github_env
+  else
+    echo "[dry-run] gh api -X PUT repos/$REPO/environments/$GH_ENV (deployment branch policy: main only)"
+  fi
   if [ "$nold" -ge 1 ] && [ -z "$ROTATE" ]; then
     echo "  user has $nold access key(s); leaving them (use --rotate-ci-key to replace)"
     [ "$nold" -gt 1 ] && echo "  WARNING: more than one key; run with --rotate-ci-key to get back to exactly one" >&2
   elif [ "$nold" -ge 2 ]; then
     echo "error: $CI_USER_NAME already has 2 keys (the AWS maximum); delete the unused one first" >&2; exit 1
   elif [ "$MODE" != apply ]; then
-    echo "[dry-run] aws iam create-access-key --user-name $CI_USER_NAME | gh secret set AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY --repo $REPO (stdin; never printed)"
+    echo "[dry-run] aws iam create-access-key --user-name $CI_USER_NAME | gh secret set AWS_SECRET_ACCESS_KEY / AWS_ACCESS_KEY_ID --repo $REPO --env $GH_ENV (stdin; never printed)"
     for k in $old_keys; do echo "[dry-run] aws iam delete-access-key --user-name $CI_USER_NAME --access-key-id ...${k: -4}"; done
   else
-    # Check GitHub first: a key that cannot be stored is deleted at once.
-    if ! gh_t api "repos/$REPO" --jq .full_name >/dev/null 2>&1; then
-      echo "error: GitHub API unreachable or gh not logged in; no key was created. Retry later." >&2; exit 1
-    fi
     res="$(new_key_to_github)" || true
     new_id="${res#* }"
     if [ "${res%% *}" != ok ]; then
-      echo "error: creating the key or storing it in GitHub failed; deleting any key this run created" >&2
-      for k in $(ro iam list-access-keys --user-name "$CI_USER_NAME" --query 'AccessKeyMetadata[].AccessKeyId' --output text); do
-        case " $old_keys " in *" $k "*) ;; *) ro iam delete-access-key --user-name "$CI_USER_NAME" --access-key-id "$k"; echo "  deleted new key ...${k: -4}" >&2 ;; esac
-      done
+      echo "error: creating the key or storing it in GitHub failed; deleting the key this run created" >&2
+      echo "error: the environment secrets may now be a mismatched pair; CI deploys fail until you re-run with --rotate-ci-key" >&2
+      if [[ "$new_id" =~ ^A[A-Z0-9]{15,}$ ]]; then
+        ro iam delete-access-key --user-name "$CI_USER_NAME" --access-key-id "$new_id" && echo "  deleted new key ...${new_id: -4}" >&2
+      else  # python never saw the key: fall back to the list (eventually consistent, so re-check by hand)
+        for k in $(ro iam list-access-keys --user-name "$CI_USER_NAME" --query 'AccessKeyMetadata[].AccessKeyId' --output text); do
+          case " $old_keys " in *" $k "*) ;; *) ro iam delete-access-key --user-name "$CI_USER_NAME" --access-key-id "$k"; echo "  deleted new key ...${k: -4}" >&2 ;; esac
+        done
+        echo "  check: aws iam list-access-keys --user-name $CI_USER_NAME" >&2
+      fi
       exit 1
     fi
-    echo "  new key ...${new_id: -4} stored in GitHub secrets AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY"
+    echo "  new key ...${new_id: -4} stored in environment $GH_ENV secrets AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY"
     for k in $old_keys; do
       [ "$k" = "$new_id" ] && continue
       echo "  deleting old key ...${k: -4}"
@@ -284,16 +321,20 @@ if [ -n "$CI_USER" ]; then
     unset res new_id
   fi
   if [ "$MODE" = apply ]; then
-    for kv in "AWS_REGION=${REGION:-}" "AWS_STACK_NAME=$STACK" "AWS_CFN_ROLE_ARN=$CFN_ROLE_ARN" "AWS_ACCOUNT_ID=$ACCOUNT"; do
+    var_fail=0
+    # AWS_DEPLOY_MODE=keys is set last: it is what switches the deploy-aws-keys job on.
+    for kv in "AWS_REGION=${REGION:-}" "AWS_STACK_NAME=$STACK" "AWS_CFN_ROLE_ARN=$CFN_ROLE_ARN" "AWS_ACCOUNT_ID=$ACCOUNT" "AWS_DEPLOY_MODE=keys"; do
       [ -n "${kv#*=}" ] || continue
       if gh_t variable set "${kv%%=*}" --repo "$REPO" --body "${kv#*=}" >/dev/null 2>&1; then
         echo "  GitHub variable ${kv%%=*} set"
       else
-        echo "  WARNING: could not set GitHub variable ${kv%%=*} (retry: gh variable set ${kv%%=*} --repo $REPO --body ${kv#*=})" >&2
+        echo "  ERROR: could not set GitHub variable ${kv%%=*} (retry: gh variable set ${kv%%=*} --repo $REPO --body ${kv#*=})" >&2
+        var_fail=1
       fi
     done
+    [ "$var_fail" = 0 ] || { echo "error: GitHub variables incomplete; the deploy-aws-keys job needs them" >&2; exit 1; }
   else
-    echo "[dry-run] gh variable set AWS_REGION / AWS_STACK_NAME / AWS_CFN_ROLE_ARN / AWS_ACCOUNT_ID --repo $REPO"
+    echo "[dry-run] gh variable set AWS_REGION / AWS_STACK_NAME / AWS_CFN_ROLE_ARN / AWS_ACCOUNT_ID, then AWS_DEPLOY_MODE=keys --repo $REPO"
   fi
 fi
 

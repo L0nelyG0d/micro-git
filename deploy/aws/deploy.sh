@@ -65,11 +65,15 @@ dry() { [ "$MODE" != apply ]; }
 
 # One run at a time (a git hook and a scheduled run could overlap).
 LOCK="${TMPDIR:-/tmp}/mg-deploy-$STACK.lock"
-if ! mkdir "$LOCK" 2>/dev/null; then
-  die "another deploy of $STACK is running (lock $LOCK; remove it if that run is dead)"
-fi
+# Per machine only: a local --apply can still overlap the CI job (that one is serialized by the
+# workflow's concurrency group). Dry-runs are read-only and take no lock.
 WORK="$(mktemp -d)"
-trap 'rm -rf "$LOCK" "$WORK"' EXIT
+if [ "$MODE" = apply ]; then
+  mkdir "$LOCK" 2>/dev/null || { rm -rf "$WORK"; die "another deploy of $STACK is running (lock $LOCK; remove it if that run is dead)"; }
+  trap 'rm -rf "$LOCK" "$WORK"' EXIT
+else
+  trap 'rm -rf "$WORK"' EXIT
+fi
 
 SHA="$(git -C "$ROOT" rev-parse --verify "$REF^{commit}")" || die "unknown git ref $REF"
 SHA7="${SHA:0:7}"
@@ -142,13 +146,20 @@ else
 fi
 
 step "5/8 Stack $STACK (change set through role cfn-deploy-$STACK)"
-stack_status() {
-  "${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>/dev/null || echo NONE
+stack_status() { # NONE only when the stack does not exist; any other error (denied, throttled) stops
+  local out
+  if out="$("${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK" --query 'Stacks[0].StackStatus' --output text 2>&1)"; then
+    echo "$out"
+  elif printf '%s' "$out" | grep -q 'does not exist'; then
+    echo NONE
+  else
+    echo "describe-stacks failed: $(printf '%s' "$out" | head -n1)" >&2; return 1
+  fi
 }
-st="$(stack_status)"
+st="$(stack_status)" || die "cannot read the stack status"
 echo "current status: $st"
 case "$st" in
-  ROLLBACK_COMPLETE|ROLLBACK_FAILED|REVIEW_IN_PROGRESS)
+  ROLLBACK_COMPLETE|REVIEW_IN_PROGRESS)
     # A failed first create (AppInstance is deleted on a failed create) or an abandoned change set: nothing to keep.
     if [ -n "$CI_MODE" ]; then die "stack is $st; run deploy/aws/deploy.sh --apply locally (it recreates it)"; fi
     if dry; then plan aws cloudformation delete-stack --stack-name "$STACK" --role-arn "$CFN_ROLE_ARN"; st=NONE
@@ -216,6 +227,15 @@ else
       die "stack is $(stack_status)"
     fi
     echo "stack is $(stack_status)"
+  fi
+  # Server-side guard as well (the client-side check above can be skipped by anyone holding
+  # ExecuteChangeSet): the stack policy denies replacing or deleting AppInstance. Local runs
+  # only; the CI user has no SetStackPolicy right.
+  if [ -z "$CI_MODE" ]; then
+    "${AWS[@]}" cloudformation set-stack-policy --stack-name "$STACK" --stack-policy-body '{"Statement":[
+      {"Effect":"Deny","Action":["Update:Replace","Update:Delete"],"Principal":"*","Resource":"LogicalResourceId/AppInstance"},
+      {"Effect":"Allow","Action":"Update:*","Principal":"*","Resource":"*"}]}'
+    echo "stack policy: AppInstance cannot be replaced or deleted by a stack update"
   fi
 fi
 

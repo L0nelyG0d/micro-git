@@ -9,8 +9,8 @@
 #   - EC2 instance(s) tagged aws:cloudformation:stack-name=micro-git-prod (terminated first:
 #     AppInstance is DeletionPolicy RetainExceptOnCreate, so a plain delete-stack would leave it running)
 #   - stack micro-git-prod (security group, instance role/profile, ECR repo micro-git-prod-app with its images)
-#   - IAM user github-deploy-micro-git-prod-user, its access keys, and the GitHub secrets
-#     AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY (if gh can reach GitHub)
+#   - IAM user github-deploy-micro-git-prod-user, its access keys, the variable AWS_DEPLOY_MODE and
+#     the secrets AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY of GitHub environment aws-prod (if gh can reach GitHub)
 # With --all also the free leftovers: SSM parameter /micro-git-prod/jwt-secret, role
 #   cfn-deploy-micro-git-prod, policy mg-instance-boundary (only if nothing else uses it).
 #
@@ -45,9 +45,11 @@ run() {
 }
 gh_t() { perl -e 'alarm shift; exec @ARGV or exit 127' 60 gh "$@"; }
 
-LOCK="${TMPDIR:-/tmp}/mg-deploy-$STACK.lock"
-mkdir "$LOCK" 2>/dev/null || die "a deploy of $STACK is running (lock $LOCK)"
-trap 'rm -rf "$LOCK"' EXIT
+if [ "$MODE" = apply ]; then   # dry-runs are read-only and need no lock
+  LOCK="${TMPDIR:-/tmp}/mg-deploy-$STACK.lock"
+  mkdir "$LOCK" 2>/dev/null || die "a deploy of $STACK is running (lock $LOCK; remove it if that run is dead)"
+  trap 'rm -rf "$LOCK"' EXIT
+fi
 
 ACCOUNT="$("${AWS[@]}" sts get-caller-identity --query Account --output text 2>/dev/null)" \
   || die "no usable AWS session: run 'aws login' and retry"
@@ -73,8 +75,11 @@ if [ -z "$ids" ] || [ "$ids" = None ]; then echo "none"
 else
   # shellcheck disable=SC2086
   run ec2 terminate-instances --instance-ids $ids
-  # shellcheck disable=SC2086
-  [ "$MODE" = apply ] && "${AWS[@]}" ec2 wait instance-terminated --instance-ids $ids && echo "terminated: $ids"
+  if [ "$MODE" = apply ]; then
+    # shellcheck disable=SC2086
+    "${AWS[@]}" ec2 wait instance-terminated --instance-ids $ids || die "instances did not terminate: $ids"
+    echo "terminated: $ids"
+  fi
 fi
 
 echo; echo "== 2. Stack $STACK"
@@ -106,12 +111,17 @@ if "${AWS[@]}" iam get-user --user-name "$CI_USER" >/dev/null 2>&1; then
     run iam delete-user-policy --user-name "$CI_USER" --policy-name "$p"
   done
   run iam delete-user --user-name "$CI_USER"
-  for s in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
-    if [ "$MODE" = apply ]; then
-      gh_t secret delete "$s" --repo "$REPO_GH" >/dev/null 2>&1 && echo "GitHub secret $s deleted" \
-        || echo "note: could not delete GitHub secret $s (already gone, or GitHub unreachable); the key itself is deleted"
-    else echo "[dry-run] gh secret delete $s --repo $REPO_GH"; fi
-  done
+  if [ "$MODE" = apply ]; then
+    # Switch the CI job off first, then remove the (already useless) secrets.
+    gh_t variable delete AWS_DEPLOY_MODE --repo "$REPO_GH" >/dev/null 2>&1 && echo "GitHub variable AWS_DEPLOY_MODE deleted" \
+      || echo "note: could not delete GitHub variable AWS_DEPLOY_MODE (already gone, or GitHub unreachable)"
+    for s in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+      gh_t secret delete "$s" --repo "$REPO_GH" --env aws-prod >/dev/null 2>&1 && echo "GitHub secret $s (environment aws-prod) deleted" \
+        || echo "note: could not delete secret $s of environment aws-prod (already gone, or GitHub unreachable); the key itself is deleted"
+    done
+  else
+    echo "[dry-run] gh variable delete AWS_DEPLOY_MODE; gh secret delete AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY --env aws-prod --repo $REPO_GH"
+  fi
 else
   echo "none"
 fi
@@ -130,7 +140,7 @@ if [ -n "$ALL" ]; then
   fi
   if "${AWS[@]}" iam get-policy --policy-arn "$BOUNDARY_ARN" >/dev/null 2>&1; then
     users="$("${AWS[@]}" iam list-entities-for-policy --policy-arn "$BOUNDARY_ARN" \
-      --query 'length(PolicyRoles)' --output text)"
+      --query 'length(PolicyRoles) + length(PolicyUsers) + length(PolicyGroups)' --output text)"
     bnd="$("${AWS[@]}" iam list-entities-for-policy --policy-arn "$BOUNDARY_ARN" --policy-usage-filter PermissionsBoundary \
       --query 'length(PolicyRoles)' --output text)"
     if [ "$users" != 0 ] || [ "$bnd" != 0 ]; then
