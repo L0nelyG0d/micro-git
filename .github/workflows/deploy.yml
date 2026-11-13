@@ -36,6 +36,7 @@ jobs:
       render: ${{ steps.targets.outputs.render }}
       railway: ${{ steps.targets.outputs.railway }}
       aws: ${{ steps.targets.outputs.aws }}
+      aws_keys: ${{ steps.targets.outputs.aws_keys }}
       gcp: ${{ steps.targets.outputs.gcp }}
       vercel: ${{ steps.targets.outputs.vercel }}
     steps:
@@ -62,6 +63,7 @@ jobs:
           RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          AWS_DEPLOY_MODE: ${{ vars.AWS_DEPLOY_MODE }}
           GCP_WORKLOAD_IDENTITY: ${{ vars.GCP_WORKLOAD_IDENTITY }}
         run: |
           flag() { if [ -n "$1" ]; then echo true; else echo false; fi; }
@@ -69,6 +71,10 @@ jobs:
             echo "render=$(flag "$RENDER_DEPLOY_HOOK")"
             echo "railway=$(flag "$RAILWAY_TOKEN")"
             echo "aws=$(flag "$AWS_ROLE_ARN")"
+            # Access-key path only when OIDC is not configured (an SCP denies OIDC in this account).
+            # The key lives in environment aws-prod, which the gate cannot read, so a variable
+            # (set by deploy/aws/bootstrap.sh --ci-user after the key is stored) switches it on.
+            if [ -z "$AWS_ROLE_ARN" ] && [ "$AWS_DEPLOY_MODE" = keys ]; then echo "aws_keys=true"; else echo "aws_keys=false"; fi
             echo "gcp=$(flag "$GCP_WORKLOAD_IDENTITY")"
             echo "vercel=$(flag "$VERCEL_TOKEN")"
           } >> "$GITHUB_OUTPUT"
@@ -287,7 +293,7 @@ jobs:
 
           script="$(base64 -w0 deploy/aws/remote-deploy.sh)"
           schema="$(base64 -w0 backend/db/schema.sql)"
-          cmd="echo $script | base64 -d > /tmp/remote-deploy.sh; echo $schema | base64 -d > /tmp/schema.sql; bash /tmp/remote-deploy.sh '$AWS_STACK_NAME' '$AWS_REGION' '$REPO_URI:$tag' /tmp/schema.sql"
+          cmd="echo $script | base64 -d > /tmp/remote-deploy.sh; echo $schema | base64 -d > /tmp/schema.sql; bash /tmp/remote-deploy.sh '$AWS_STACK_NAME' '$AWS_REGION' '$REPO_URI:$tag' /tmp/schema.sql '$HEAD_SHA'"
           params="$(jq -n --arg c "$cmd" '{commands: [$c], executionTimeout: ["900"]}')"
           cid="$(aws ssm send-command --instance-ids "$INSTANCE_ID" \
             --document-name AWS-RunShellScript --parameters "$params" \
@@ -320,6 +326,39 @@ jobs:
           done
           echo "::error::$APP_URL/health did not return 200 within 5 minutes"
           exit 1
+
+  deploy-aws-keys:
+    # Same deploy as deploy/aws/deploy.sh run locally, with the dedicated IAM user
+    # github-deploy-micro-git-prod-user (created by deploy/aws/bootstrap.sh --ci-user; its key is
+    # piped straight into these two secrets). Used only when AWS_ROLE_ARN (OIDC) is not set.
+    # deploy.sh --ci skips preflight/bootstrap (the user has no IAM rights), creates and executes
+    # the guarded change set through role cfn-deploy-micro-git-prod, builds and pushes the image of
+    # this exact commit, rolls it out through SSM with APP_COMMIT, then checks X-Build == this sha,
+    # / 200, /api/repos 200 and /api/auth/me 401. Region and stack are fixed in the script.
+    name: Deploy to AWS (deploy.sh, IAM user keys)
+    needs: gate
+    if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.aws_keys == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # The key is an environment secret: environment aws-prod only accepts deployments from main,
+    # so workflows on other branches cannot read it.
+    environment: aws-prod
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      # The static key goes only into this step's environment (no third-party action handles it).
+      - name: deploy/aws/deploy.sh --apply --ci
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ap-southeast-2
+          MG_AWS_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: deploy/aws/deploy.sh --apply --ci --ref "$HEAD_SHA"
 
   deploy-gcp:
     name: Deploy to GCP (Terraform, Workload Identity)

@@ -13,6 +13,9 @@
      "Resource": "*"},
     {"Effect": "Allow", "Action": "ssm:GetParameter",
      "Resource": "arn:aws:ssm:*:<ACCOUNT_ID>:parameter/<STACK_NAME>/jwt-secret",
-     "Condition": {"Null": {"ec2:SourceInstanceARN": "false"}}}
+     "Condition": {"Null": {"ec2:SourceInstanceARN": "false"}}},
+    {"Effect": "Allow", "Action": "kms:Decrypt",
+     "Resource": "arn:aws:kms:*:<ACCOUNT_ID>:key/*",
+     "Condition": {"StringLike": {"kms:ViaService": "ssm.*.amazonaws.com"}}}
   ]
 }

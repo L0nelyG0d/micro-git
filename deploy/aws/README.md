@@ -1,13 +1,52 @@
 # AWS deploy (CloudFormation)
 
-Used by `.github/workflows/deploy.yml`, job `deploy-aws`. The job runs only when the repository variable `AWS_ROLE_ARN` is set and CI and E2E are green for the commit on `main`.
-
 Template: `deploy/aws/main.yaml`. Instance-side script: `deploy/aws/remote-deploy.sh`.
+
+## One command: `deploy.sh` (the path that works in this account)
+
+Account 228619515667 is on the AWS Free plan. Its organization SCP (`p-lao05jll`, part of AWS's free-plan setup; lifting it means upgrading to a paid account) denies everything on `oidc-provider/*` and denies CloudFormation, EC2, ECR and SSM outside `ap-southeast-2`. So the GitHub OIDC path below cannot be used here. Instead:
+
+    deploy/aws/deploy.sh                                  # dry-run: read-only checks and the plan
+    deploy/aws/deploy.sh --apply --account 228619515667   # first deploy, and every later update
+    deploy/aws/destroy.sh                                 # dry-run of the teardown
+    deploy/aws/destroy.sh --apply --account 228619515667  # stop spending credits
+
+Region `ap-southeast-2` and stack `micro-git-prod` are fixed in the scripts; the hand-made stack `mg` is never touched. `deploy.sh` steps, each idempotent:
+
+1. Account guard (`--account` or `MG_AWS_ACCOUNT`, or a typed answer on a terminal) and `aws freetier get-account-plan-state`: stops unless the plan is `FREE`.
+2. `preflight.sh --no-oidc` (read-only).
+3. `bootstrap.sh --no-oidc --apply`: only the boundary policy `mg-instance-boundary` and the CloudFormation service role `cfn-deploy-micro-git-prod`.
+4. JWT secret: if `/micro-git-prod/jwt-secret` does not exist, `openssl rand -hex 32` is piped straight into `ssm put-parameter --type SecureString --value file:///dev/stdin` (never in argv, a file or the output). Kept on later runs; `--rotate-jwt` replaces it (logs everyone out).
+5. Stack through a change set with `--role-arn` of the service role. Same guard as the workflow: abort if `AppInstance` would be removed or replaced. New stack: latest AL2023 AMI; existing stack: the running instance's AMI. A stack left in `ROLLBACK_COMPLETE`/`REVIEW_IN_PROGRESS` by a failed first create is deleted and recreated automatically (local runs only).
+6. Image: `git archive <sha> | docker build --platform linux/amd64 -` (exactly the commit: no uncommitted or git-ignored files), pushed as `<sha7>` and `latest`. Skipped if `<sha7>` is already in ECR.
+7. `remote-deploy.sh` through SSM Run Command with `APP_COMMIT=<full sha>`, so `X-Build` names the commit.
+8. Smoke: waits until `/health` is 200 with `X-Build` equal to the sha, then `/` 200, `/api/repos` 200, `/api/auth/me` 401 (all with the same `X-Build`), prints the URL.
+
+Options: `--ref <commit>` deploys another commit (default `HEAD`), `--profile`, `--rotate-jwt`, `--ci` (used by GitHub Actions: skips preflight and bootstrap, Free plan check informational). A lock in `$TMPDIR` stops two runs overlapping.
+
+Automating updates: any run of `deploy.sh --apply --account 228619515667` is the update. Options: a local git hook (for example `.git/hooks/post-merge` that runs it when `main` is pulled), a scheduled run (cron or launchd), or the `deploy-aws-keys` GitHub job below. Local hooks and schedules need a live `aws login` session; there are no stored keys on the machine.
+
+### GitHub Actions without OIDC: CI IAM user
+
+User decision (2026-11-13): GitHub deploys with one dedicated IAM user, because OIDC is denied by the SCP.
+
+- `deploy/aws/bootstrap.sh --no-oidc --ci-user --apply --confirm-account 228619515667 --region ap-southeast-2 --stack-name micro-git-prod` creates user `github-deploy-micro-git-prod-user` (tag `Project=micro-git`) with the customer-managed policy `github-deploy-micro-git-prod-user-policy` from `policies/ci-user-policy.json` (too big for an inline user policy, 2 KB limit): change sets on `micro-git-prod` only and only with `cloudformation:RoleArn` = the service role, `iam:PassRole` only for `cfn-deploy-micro-git-prod`, ECR push to `micro-git-prod-app`, `PutParameter` on `/micro-git-prod/jwt-secret` (no read), `SendCommand` only to instances tagged with the stack, explicit denies for stack `mg`, its repo and instance, and for every region except `ap-southeast-2`. No other IAM rights.
+- It creates (idempotently) the GitHub environment `aws-prod` with a deployment branch policy that allows only `main`, so workflows on other branches cannot read its secrets.
+- If the user has no key, one is created and its JSON is piped through `python3` straight into `gh secret set --env aws-prod AWS_SECRET_ACCESS_KEY` / `AWS_ACCESS_KEY_ID` (stdin). It is never printed, logged or written to a file; only the last 4 characters of the key id are shown. If GitHub is unreachable no key is created; if storing fails, the new key is deleted again and the script says to re-run with `--rotate-ci-key` (the secrets may be a mismatched pair). It then sets the repository variables `AWS_REGION`, `AWS_STACK_NAME`, `AWS_CFN_ROLE_ARN`, `AWS_ACCOUNT_ID` and, last, `AWS_DEPLOY_MODE=keys` (not secrets).
+- Rotation: same command plus `--rotate-ci-key`: new key into the secrets, then the old key is deleted, so there is one active key.
+- Workflow: the gate sets `aws_keys=true` when the variable `AWS_DEPLOY_MODE` is `keys` and `AWS_ROLE_ARN` is not set; job `deploy-aws-keys` (environment `aws-prod`, after CI and E2E are green on `main`, workflow concurrency `deploy-main`) passes the key only as env of the step that runs `deploy/aws/deploy.sh --apply --ci --ref <sha>` (no third-party action sees it); that includes the change-set guard and the X-Build smoke.
+- Server-side guard: local `deploy.sh --apply` runs set a stack policy that denies `Update:Replace` and `Update:Delete` on `AppInstance`, so even a hand-made change set cannot replace the instance.
+- Teardown: `destroy.sh --apply` deletes the user, its keys, the variable `AWS_DEPLOY_MODE` and the two environment secrets.
+- Accepted risk: anyone holding this key (or able to change the workflow on `main`) can deploy any image and run any command as root on the `micro-git-prod` instance through `ssm:SendCommand` (scoped to instances tagged with this stack). That is what a deploy credential does; it cannot reach other stacks, IAM, or other regions. Rotate it with `--rotate-ci-key` and delete it with `destroy.sh` when not needed.
+
+## OIDC path (job `deploy-aws`; not usable in account 228619515667)
+
+Used by `.github/workflows/deploy.yml`, job `deploy-aws`. The job runs only when the repository variable `AWS_ROLE_ARN` is set and CI and E2E are green for the commit on `main`.
 
 ## Status: what is verified and what is not
 
-- Verified (static only): `cfn-lint` on `deploy/aws/main.yaml` is clean; `actionlint` on `.github/workflows/deploy.yml` is clean; `shellcheck` on `deploy/aws/remote-deploy.sh` is clean.
-- NOT verified: nothing here has ever been run against a real AWS account (no credentials were available). The OIDC role, the stack create, the SSM Run Command step, the first boot and the health check are untested. Expect to fix small things on the first real run.
+- Static: `cfn-lint` on `deploy/aws/main.yaml`, `actionlint` on `.github/workflows/deploy.yml` and `shellcheck` on all `deploy/aws/*.sh` are clean.
+- Real account (2026-11-13, account 228619515667): `deploy.sh --apply` (no-OIDC path) was run end to end; see `_docs/deploy-runbook.md` for the result. The OIDC path (`deploy-aws` job) is still unverified and cannot run in this account (SCP).
 
 ## How the deploy works (job `deploy-aws`)
 
