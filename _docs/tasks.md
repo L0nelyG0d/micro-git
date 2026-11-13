@@ -283,4 +283,30 @@ Description: File: `docs/operations-and-security-report.md` only. Links to `obse
 
 ## 160. Module 4 hardening follow-ups (from the Opus review of #161-#163)
 Goal: Close the non-blocking review findings deferred from #161-#163 so the responder and exporter are safe to leave running.
-Description: Issue #160, created 2026-11-12 after the review. (1) Global action cooldown across incidents: a lock plus `incidents/.last_action` checked in `policy-check.py` so flapping alerts or a listener restart cannot loop restarts (review finding 9). (2) Exporter: `otel_spans_dropped_total` counter, treat non-2xx as failure, flush the span queue on graceful shutdown (finding 16). (3) Align `responder-task.md` with the tools the headless agent really gets: `code_fix_pr` is propose-only text, no worktree (finding 19). (4) Decide whether `ApiService.metrics()` stays (contract test only, no UI caller) (finding 21). Depends on #161, #163.
+Description: Issue #160, created 2026-11-12 after the review. Status: merged as 071f666 on 2026-11-13, closed; item (4) default is keep (see questions.md), notes moved to #171. (1) Global action cooldown across incidents: a lock plus `incidents/.last_action` checked in `policy-check.py` so flapping alerts or a listener restart cannot loop restarts (review finding 9). (2) Exporter: `otel_spans_dropped_total` counter, treat non-2xx as failure, flush the span queue on graceful shutdown (finding 16). (3) Align `responder-task.md` with the tools the headless agent really gets: `code_fix_pr` is propose-only text, no worktree (finding 19). (4) Decide whether `ApiService.metrics()` stays (contract test only, no UI caller) (finding 21). Depends on #161, #163.
+
+## Follow-up round after module 4 (issues #166-#171)
+
+## 166. AWS deploy hardening follow-ups
+Goal: A stack name can no longer make the stack role pattern match the deploy roles, and a trust-policy overwrite is visible.
+Description: Issue #166. `deploy/aws/bootstrap.sh` and `deploy/aws/preflight.sh` reject `cfn`, `github` and names starting with `cfn-deploy` or `github-deploy`; `ensure_role` warns when the current trust policy differs; note on the OIDC thumbprint. Status: merged as f9191f3 on 2026-11-13, closed. Remaining items moved to #169.
+
+## 167. Deploy/Render follow-ups
+Goal: The Render deploy builds exactly the commit that passed CI and E2E, and the startup schema apply waits for the advisory lock.
+Description: Issue #167. `.github/workflows/deploy.yml` passes `ref=<sha>` to the Render hook and the smoke requires `X-Build` equal to that sha; index guards in `backend/db/schema.sql` are scoped to the table; `ApplySchema` in `backend/db.go` sets `statement_timeout` before the advisory lock and `lock_timeout` after it; tests in `backend/schema_apply_test.go`.
+
+## 168. Observability follow-ups
+Goal: Compose passes `METRICS_ADDR`, the backend refuses to start when the metrics port equals `PORT`, and `COOKIE_SECURE` is parsed in one place.
+Description: Issue #168. `backend/config.go`, `backend/main.go` (API and metrics servers shut down in parallel), `backend/observe.go`, `docker-compose.yml`. Status: merged as c035df7 on 2026-11-13, closed. Review notes moved to #170.
+
+## 169. AWS deploy hardening: remaining items from #166
+Goal: Close the AWS items that need a decision or a real account.
+Description: Issue #169, created 2026-11-13. See the issue for the list (trust-policy overwrite needs `--force`, IAM Path, OIDC trust scope, container rollback, new JWT secret, EBS volume for pgdata, X-Build check in the AWS health check). Mutating AWS calls are run by the owner only. Depends on #166.
+
+## 170. Observability config and shutdown: notes from the #168 review
+Goal: The port-clash check compares real port numbers, config values are read once, and the shutdown path has a test.
+Description: Issue #170, created 2026-11-13. `backend/config.go` (compare `net.LookupPort` results), pass `cfg` values into `NewServer`/`newObserver`, a testable shutdown helper, a garbled sentence in `_docs/plan.md`, spans enqueued after the exporter's `Close`. Depends on #168.
+
+## 171. Incident responder: notes from the #160 review
+Goal: The responder's timeout fallback cannot orphan a child, and the cooldown fails closed on unreadable state.
+Description: Issue #171, created 2026-11-13. `incident-response/lib.sh` (forward SIGTERM/SIGHUP), `policy-check.py` (only a missing `.last_action` counts as free; future timestamps), `make-token.sh` ownership on Linux, README wording, credentials in the probe audit line, test gaps, and the `ApiService.metrics()` decision. Depends on #160.
