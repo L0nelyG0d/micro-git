@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -104,14 +105,21 @@ func main() {
 	log.Printf("shutting down")
 	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	// Shut both listeners down in parallel so a slow API drain does not keep /metrics up.
+	var wg sync.WaitGroup
+	if metricsSrv != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := metricsSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("metrics shutdown: %v", err)
+			}
+		}()
+	}
 	if err := httpSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Printf("shutdown: %v", err)
 	}
-	if metricsSrv != nil {
-		if err := metricsSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("metrics shutdown: %v", err)
-		}
-	}
+	wg.Wait()
 	closeStore()
 }
 

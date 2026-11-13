@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"strconv"
 	"time"
 )
@@ -34,6 +35,9 @@ type Config struct {
 	JWTSecret  string
 	// CookieSecure adds the Secure attribute to the session cookie (COOKIE_SECURE=true).
 	CookieSecure bool
+	// MetricsAddr is METRICS_ADDR: a separate listener for /metrics ("" = none).
+	// Its port never equals PORT.
+	MetricsAddr string
 	// ApplySchema (APPLY_SCHEMA=true) applies the embedded db/schema.sql to the
 	// Postgres database at startup. The script is idempotent.
 	ApplySchema bool
@@ -142,9 +146,21 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if err != nil {
 		return Config{}, err
 	}
+	metricsAddr := getenv("METRICS_ADDR")
+	if metricsAddr != "" {
+		_, mport, err := net.SplitHostPort(metricsAddr)
+		if err != nil {
+			return Config{}, fmt.Errorf("METRICS_ADDR must be host:port such as \"127.0.0.1:9100\", got %q", metricsAddr)
+		}
+		if mport == port {
+			// BSD/macOS accepts a loopback bind on the public port and would shadow the API.
+			return Config{}, fmt.Errorf("METRICS_ADDR port %s must differ from PORT", mport)
+		}
+	}
+	secure, cookieWarn := parseCookieSecure(getenv("COOKIE_SECURE"))
 	var warnings []string
-	if getenv("COOKIE_SECURE") == "" {
-		warnings = append(warnings, "COOKIE_SECURE is not set: the session cookie is sent without the Secure attribute. Set COOKIE_SECURE=true when serving over HTTPS")
+	if cookieWarn != "" {
+		warnings = append(warnings, cookieWarn)
 	}
 	if store == StoreMemory {
 		warnings = append(warnings, "STORE=memory: all data is lost when the process exits")
@@ -158,7 +174,23 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		Addr:         ":" + port,
 		DatabaseURL:  dbURL,
 		JWTSecret:    secret,
-		CookieSecure: getenv("COOKIE_SECURE") == "true",
+		CookieSecure: secure,
+		MetricsAddr:  metricsAddr,
 		ApplySchema:  getenv("APPLY_SCHEMA") == "true",
 	}, nil
+}
+
+// parseCookieSecure is the single reading of COOKIE_SECURE (also used by the
+// observer): only the exact value "true" turns it on. It returns a warning for
+// an empty value and for anything other than true/false.
+func parseCookieSecure(v string) (bool, string) {
+	switch v {
+	case "true":
+		return true, ""
+	case "false":
+		return false, ""
+	case "":
+		return false, "COOKIE_SECURE is not set: the session cookie is sent without the Secure attribute. Set COOKIE_SECURE=true when serving over HTTPS"
+	}
+	return false, "COOKIE_SECURE must be \"true\" or \"false\"; other values are treated as false and the session cookie is sent without the Secure attribute"
 }

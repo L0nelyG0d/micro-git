@@ -23,7 +23,9 @@ App should set `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318` for traces.
 HighErrorRatioOnRoute (5xx > 5% for 2m, min ~3 req/min), P95LatencyHigh (p95 > 1s for 5m, same min traffic), AppDown (`up==0` for 1m). Alertmanager POSTs to `http://host.docker.internal:9099/alert` (the local responder) with a Bearer token from `/etc/alertmanager/alert-token`. `extra_hosts: host-gateway` maps the name on Linux, but the responder must listen on an address reachable from the Docker bridge, not only 127.0.0.1.
 
 ## /metrics exposure
-By default (METRICS_ADDR unset, COOKIE_SECURE not `true`) `/metrics` is on the public app port (the collector scrapes `app:8080/metrics`). It reveals routes, traffic and version. With `COOKIE_SECURE=true` and no `METRICS_ADDR`, `/metrics` is disabled (WARN logged). In production set `METRICS_ADDR` (e.g. `:9100`): `/metrics` is then served only on that listener and removed from the public port; point the collector scrape target at `app:9100` and do not publish that port.
+By default (METRICS_ADDR unset, COOKIE_SECURE not `true`) `/metrics` is on the public app port (the collector scrapes `app:8080/metrics`). It reveals routes, traffic and version. With `COOKIE_SECURE=true` and no `METRICS_ADDR`, `/metrics` is disabled (WARN logged). In production set `METRICS_ADDR` (e.g. `:9100`): `/metrics` is then served only on that listener and removed from the public port; point the collector scrape target at `app:9100` and do not publish that port. `METRICS_ADDR` must not use the same port as `PORT` (startup is refused). In `docker-compose.yml` it is passed through from the environment.
+
+**Gotcha:** with `COOKIE_SECURE=true` and `METRICS_ADDR` unset, the collector's scrape of `app:8080/metrics` gets 404 and the `AppDown` alert fires after 1m. Set `METRICS_ADDR` (e.g. `0.0.0.0:9100` in the container) and change the target in `collector.yaml` to `app:9100`.
 
 ## Gotchas
 - Dashboard trace panel and log filter use the `trace_id` textbox variable; default `.*` shows all logs, and the trace panel stays empty/errors until a real id is pasted (or use the log "View trace" link).

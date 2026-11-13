@@ -16,6 +16,14 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+for _role in cfn-deploy github-deploy; do
+  case "$_role-" in "$STACK-"*) _clash=1 ;; esac
+  case "$STACK" in "$_role"*) _clash=1 ;; esac
+done
+if [ -n "${_clash:-}" ]; then
+  echo "[FAIL] stack name '$STACK' collides with the deploy role names: <stack>-* would match cfn-deploy-* or github-deploy-* (reserved: cfn, github, and anything starting with cfn-deploy or github-deploy)" >&2; exit 2
+fi
+
 AWS=(aws)
 [ -n "$PROFILE" ] && AWS+=(--profile "$PROFILE")
 [ -n "$REGION" ] && AWS+=(--region "$REGION")
