@@ -16,6 +16,10 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+case "$STACK" in
+  cfn-deploy*|github-deploy*) echo "[FAIL] stack name '$STACK' must not start with 'cfn-deploy' or 'github-deploy' (collides with the deploy role names)" >&2; exit 2 ;;
+esac
+
 AWS=(aws)
 [ -n "$PROFILE" ] && AWS+=(--profile "$PROFILE")
 [ -n "$REGION" ] && AWS+=(--region "$REGION")

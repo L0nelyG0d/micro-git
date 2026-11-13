@@ -44,6 +44,10 @@ done
 if ! [[ "$STACK" =~ ^[a-z][a-z0-9-]{0,19}$ ]]; then
   echo "error: --stack-name must be lowercase letters, digits and '-' (max 20, start with a letter)" >&2; exit 2
 fi
+case "$STACK" in
+  cfn-deploy*|github-deploy*)
+    echo "error: --stack-name must not start with 'cfn-deploy' or 'github-deploy' (the stack role pattern <stack>-* would match the deploy roles)" >&2; exit 2 ;;
+esac
 if ! [[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
   echo "error: --repo must look like OWNER/REPO" >&2; exit 2
 fi
@@ -111,6 +115,7 @@ echo "1/5 GitHub OIDC provider"
 if ro iam get-open-id-connect-provider --open-id-connect-provider-arn "$OIDC_ARN" >/dev/null 2>&1; then
   echo "  exists, skipping: $OIDC_ARN"
 else
+  # No --thumbprint-list: AWS validates the GitHub OIDC certificate chain itself and ignores thumbprints for it.
   mut iam create-open-id-connect-provider --url https://token.actions.githubusercontent.com --client-id-list sts.amazonaws.com
 fi
 
@@ -125,6 +130,12 @@ ensure_role() { # name trust-file policy-file
   local name="$1" trust="$2" pol="$3"
   if ro iam get-role --role-name "$name" >/dev/null 2>&1; then
     echo "  role $name exists: refreshing trust policy"
+    local cur want
+    cur="$(ro iam get-role --role-name "$name" --query 'Role.AssumeRolePolicyDocument' --output json 2>/dev/null | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin),sort_keys=True))' 2>/dev/null || echo)"
+    want="$(python3 -c 'import sys,json;print(json.dumps(json.load(open(sys.argv[1])),sort_keys=True))' "$TMP/$trust.json" 2>/dev/null || echo)"
+    if [ -n "$cur" ] && [ -n "$want" ] && [ "$cur" != "$want" ]; then
+      echo "  WARNING: current trust policy of $name differs from deploy/aws/policies/$trust.json; the refresh overwrites any hand edits" >&2
+    fi
     mut iam update-assume-role-policy --role-name "$name" --policy-document "file://$TMP/$trust.json"
   else
     mut iam create-role --role-name "$name" --assume-role-policy-document "file://$TMP/$trust.json"
