@@ -113,6 +113,15 @@ print(listener.run('$T/tmo', ['$T/slow.sh', '$T/tmo'], timeout=2))")
   check "probe audit drops the query string" "! grep -q SECRETQ '$T/vinc/vinc/audit.jsonl'"
   "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -f %Lp "$T/tok-new" 2>/dev/null || stat -c %a "$T/tok-new")"
   check "make-token creates mode 600" "[ '$TM' = 600 ]"
+  echo "== listener audit with group-readable token (N5 regression)"
+  mkdir -p "$T/ltok"; echo dummy-not-a-secret > "$T/ltok/tok"; chmod 644 "$T/ltok/tok"
+  LW=$( ALERT_TOKEN_FILE="$T/ltok/tok" INCIDENTS_DIR="$T/ltok/inc" python3 -I -c "
+import sys; sys.path.insert(0, '$D'); import listener
+listener.gaudit('auth_rejected', 'x', 'reject'); listener.gaudit('auth_rejected', 'y', 'reject')" 2>&1 ); LRC=$?
+  check "gaudit with 644 token does not crash" "[ '$LRC' = 0 ]"
+  check "original audit lines are written" "[ \$(grep -c auth_rejected '$T/ltok/inc/listener-audit.jsonl') = 2 ]"
+  check "permission warning audited once" "[ \$(grep -c '\"config\"' '$T/ltok/inc/listener-audit.jsonl') = 1 ]"
+  check "permission warning printed to stderr" "echo '$LW' | grep -q 'chmod 600'"
   echo "== redaction failure drops content (fake python3)"
   mkdir -p "$T/badpy"; printf '#!/bin/sh\nexit 1\n' > "$T/badpy/python3"; chmod +x "$T/badpy/python3"
   PATH="$T/badpy:$PATH" EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" drill-badredact "$ROUTE" >/dev/null 2>&1
