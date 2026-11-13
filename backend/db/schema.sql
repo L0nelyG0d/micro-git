@@ -15,7 +15,7 @@ CREATE TABLE IF NOT EXISTS users (
     created_at    timestamptz NOT NULL DEFAULT now()
 );
 
-DO $$ BEGIN IF to_regclass('users_username_lower_idx') IS NULL THEN CREATE UNIQUE INDEX users_username_lower_idx ON users (lower(username)); END IF; END $$;
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = 'users'::regclass AND c.relname = 'users_username_lower_idx') THEN CREATE UNIQUE INDEX users_username_lower_idx ON users (lower(username)); END IF; END $$;
 
 CREATE TABLE IF NOT EXISTS repos (
     id             bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -26,8 +26,8 @@ CREATE TABLE IF NOT EXISTS repos (
     created_at     timestamptz NOT NULL DEFAULT now()
 );
 
-DO $$ BEGIN IF to_regclass('repos_owner_name_lower_idx') IS NULL THEN CREATE UNIQUE INDEX repos_owner_name_lower_idx ON repos (owner_id, lower(name)); END IF; END $$;
-DO $$ BEGIN IF to_regclass('repos_created_idx') IS NULL THEN CREATE INDEX repos_created_idx ON repos (created_at DESC, id DESC); END IF; END $$;
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = 'repos'::regclass AND c.relname = 'repos_owner_name_lower_idx') THEN CREATE UNIQUE INDEX repos_owner_name_lower_idx ON repos (owner_id, lower(name)); END IF; END $$;
+DO $$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = 'repos'::regclass AND c.relname = 'repos_created_idx') THEN CREATE INDEX repos_created_idx ON repos (created_at DESC, id DESC); END IF; END $$;
 
 CREATE TABLE IF NOT EXISTS objects (
     repo_id bigint   NOT NULL REFERENCES repos (id) ON DELETE CASCADE,

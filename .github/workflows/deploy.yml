@@ -85,9 +85,13 @@ jobs:
       - name: Trigger the Render deploy hook
         env:
           RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
         run: |
+          # Pin the deploy to the gated commit (Render hook query parameter ref=<sha>)
+          # so a newer, ungated commit cannot ride along.
+          case "$RENDER_DEPLOY_HOOK" in *\?*) sep='&' ;; *) sep='?' ;; esac
           # The hook URL is a secret; curl is silent on success, only the status is shown.
-          curl -fsS -X POST "$RENDER_DEPLOY_HOOK" -o /dev/null -w 'render: deploy hook HTTP %{http_code}\n'
+          curl -fsS -X POST "${RENDER_DEPLOY_HOOK}${sep}ref=${SHA}" -o /dev/null -w 'render: deploy hook HTTP %{http_code}\n'
 
   deploy-railway:
     name: Deploy to Railway (railway up)
@@ -380,10 +384,9 @@ jobs:
 
   smoke:
     # Render smoke test. It must verify the NEW build: it polls /health until the
-    # X-Build response header (the server sets it from RENDER_GIT_COMMIT) is the
-    # commit that was just deployed or a descendant of it (the deploy hook deploys
-    # the branch tip, which may have moved on). An old instance, or a build that
-    # never arrives within the window, fails the job.
+    # X-Build response header (the server sets it from RENDER_GIT_COMMIT) equals the
+    # commit that was just deployed (the deploy hook is pinned with ref=SHA). An old
+    # instance, or a build that never arrives within the window, fails the job.
     # Only /health and / are requested, so no users or repos are created.
     # Repository variables: APP_URL (default https://micro-git.onrender.com) and
     # SMOKE_WAIT_SECONDS (default 480).
@@ -398,25 +401,19 @@ jobs:
       APP_URL: ${{ vars.APP_URL || 'https://micro-git.onrender.com' }}
       WAIT_SECONDS: ${{ vars.SMOKE_WAIT_SECONDS || '480' }}
       EXPECTED_SHA: ${{ github.event.workflow_run.head_sha }}
-      GH_TOKEN: ${{ github.token }}
     steps:
-      - name: Wait for /health to report the deployed commit or a descendant (X-Build)
+      - name: Wait for /health to report the deployed commit (X-Build)
         run: |
+          case "$WAIT_SECONDS" in ''|*[!0-9]*) echo "SMOKE_WAIT_SECONDS must be a whole number, got a non-numeric value" >&2; exit 1 ;; esac
+          [ "$WAIT_SECONDS" -le 780 ] || WAIT_SECONDS=780
           base="${APP_URL%/}"
           deadline=$((SECONDS + WAIT_SECONDS))
           while :; do
             hdrs="$(curl -sS -D - -o /dev/null --connect-timeout 10 --max-time 60 "$base/health" || true)"
             code="$(printf '%s' "$hdrs" | head -n1 | tr -d '\r' | awk '{print $2}')"
             build="$(printf '%s' "$hdrs" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-build"{print $2}')"
-            echo "health: HTTP ${code:-none}, X-Build ${build:-none} (want $EXPECTED_SHA or a descendant)"
-            if [ "$code" = "200" ] && [ -n "$build" ]; then
-              if [ "$build" = "$EXPECTED_SHA" ]; then exit 0; fi
-              # status of build relative to expected: "ahead" means build is a descendant.
-              # A failure (unknown or short sha, such as "dev") keeps polling.
-              rel="$(gh api "repos/$GITHUB_REPOSITORY/compare/$EXPECTED_SHA...$build" --jq .status 2>/dev/null || true)"
-              echo "compare: ${rel:-unknown}"
-              if [ "$rel" = "identical" ] || [ "$rel" = "ahead" ]; then exit 0; fi
-            fi
+            echo "health: HTTP ${code:-none}, X-Build ${build:-none} (want $EXPECTED_SHA)"
+            if [ "$code" = "200" ] && [ "$build" = "$EXPECTED_SHA" ]; then exit 0; fi
             [ "$SECONDS" -lt "$deadline" ] || break
             sleep 15
           done

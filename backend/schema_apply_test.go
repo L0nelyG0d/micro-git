@@ -137,3 +137,86 @@ func TestApplySchemaDoesNotBlockOnTraffic(t *testing.T) {
 		t.Fatalf("apply took %v with open transactions", d)
 	}
 }
+
+// The index guards must look at the table's own indexes: a same-named index in
+// another schema on the search_path must not stop ours from being created.
+func TestApplySchemaIndexGuardScopedToTable(t *testing.T) {
+	raw := os.Getenv("TEST_DATABASE_URL")
+	if raw == "" {
+		t.Skip("TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	admin, err := NewPool(ctx, raw, DefaultPoolConfig())
+	if err != nil {
+		t.Fatal("NewPool failed (details hidden)")
+	}
+	defer admin.Close()
+	schema := fmt.Sprintf("schema_guard_%d", time.Now().UnixNano())
+	other := schema + "_pub"
+	for _, s := range []string{schema, other} {
+		if _, err := admin.Exec(ctx, "CREATE SCHEMA "+s); err != nil {
+			t.Fatalf("create schema: %v", err)
+		}
+		defer admin.Exec(ctx, "DROP SCHEMA "+s+" CASCADE")
+	}
+	// Decoys with the guarded index names in the later schema on the path.
+	for _, q := range []string{
+		"CREATE TABLE " + other + ".decoy (a text, b text, c timestamptz)",
+		"CREATE INDEX users_username_lower_idx ON " + other + ".decoy (a)",
+		"CREATE INDEX repos_owner_name_lower_idx ON " + other + ".decoy (b)",
+		"CREATE INDEX repos_created_idx ON " + other + ".decoy (c)",
+	} {
+		if _, err := admin.Exec(ctx, q); err != nil {
+			t.Fatalf("decoy: %v", err)
+		}
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		t.Fatal("bad TEST_DATABASE_URL (details hidden)")
+	}
+	q := u.Query()
+	q.Set("search_path", schema+","+other)
+	u.RawQuery = q.Encode()
+	pool, err := NewPool(ctx, u.String(), DefaultPoolConfig())
+	if err != nil {
+		t.Fatal("NewPool failed (details hidden)")
+	}
+	defer pool.Close()
+	for i := 0; i < 2; i++ {
+		if err := ApplySchema(ctx, pool); err != nil {
+			t.Fatalf("apply #%d: %v", i+1, err)
+		}
+	}
+	var n int
+	err = pool.QueryRow(ctx, `SELECT count(*) FROM pg_indexes WHERE schemaname = $1 AND indexname IN ('users_username_lower_idx','repos_owner_name_lower_idx','repos_created_idx')`, schema).Scan(&n)
+	if err != nil || n != 3 {
+		t.Fatalf("indexes in %s = %d, err %v (want 3)", schema, n, err)
+	}
+}
+
+// Lock order: the advisory lock is taken before lock_timeout and the statement
+// timeout is raised, so waiting longer than lock_timeout (3s) behind another
+// instance must still succeed.
+func TestApplySchemaWaitsForAdvisoryLock(t *testing.T) {
+	pool, _ := tempSchemaPool(t)
+	ctx := context.Background()
+	holder, err := pool.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(ctx)
+	if _, err := holder.Exec(ctx, "SELECT pg_advisory_xact_lock($1)", int64(schemaLockID)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() { done <- ApplySchema(ctx, pool) }()
+	time.Sleep(4 * time.Second)
+	holder.Rollback(ctx)
+	if err := <-done; err != nil {
+		t.Fatalf("apply after waiting on the advisory lock: %v", err)
+	}
+	if d := time.Since(start); d < 3*time.Second {
+		t.Fatalf("apply finished in %v, did not wait for the lock", d)
+	}
+}
