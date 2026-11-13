@@ -34,12 +34,16 @@ Other views: Render dashboard (latest deploy commit SHA); `gh run list --workflo
 - `destroy.sh` terminates the instance first (it is `RetainExceptOnCreate`, so a plain stack delete would leave it running), deletes the stack (ECR images with it), the CI user, its keys, the variable `AWS_DEPLOY_MODE` (switches the CI job off) and the `aws-prod` environment secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. `--all` also deletes `/micro-git-prod/jwt-secret`, role `cfn-deploy-micro-git-prod` and `mg-instance-boundary` (if unused). Postgres data is lost; there are no backups.
 - Check credits: `aws freetier get-account-plan-state --region us-east-1`.
 
+### Changing the AMI on purpose
+
+The stack policy set by `deploy.sh` denies replacing or deleting `AppInstance`. To move to a new AMI deliberately (the instance and its Postgres data are replaced; back up first), deploy by hand with a temporary override: `aws cloudformation deploy ... --parameter-overrides LatestAmiId=<new> --role-arn <cfn-deploy ARN>` after `aws cloudformation set-stack-policy --stack-name micro-git-prod --stack-policy-body '{"Statement":[{"Effect":"Allow","Action":"Update:*","Principal":"*","Resource":"*"}]}'`; the next `deploy.sh --apply` puts the protective policy back. The `deploy.sh` change-set guard refuses this change, so it cannot be done through `deploy.sh`.
+
 ### CI key rotation
 
     deploy/aws/bootstrap.sh --no-oidc --ci-user --rotate-ci-key --apply \
       --confirm-account 228619515667 --region ap-southeast-2 --stack-name micro-git-prod
 
-Creates a new key, pipes it into the secrets of GitHub environment `aws-prod` (main only; never printed), then deletes the old key, leaving one active key. Needs github.com reachable (no key is created otherwise). Without `--rotate-ci-key` the same command only refreshes the user policy and sets the GitHub variables.
+Creates a new key, pipes it into the secrets of GitHub environment `aws-prod` (main only; never printed), then deletes the old key, leaving one active key. Needs github.com reachable (no key is created otherwise). It switches the CI job on (`AWS_DEPLOY_MODE=keys`) only when both secrets are in `aws-prod` and no repository-level secret of the same name exists. Re-running it re-applies the `aws-prod` branch policy and may reset protection rules added by hand. Without `--rotate-ci-key` the same command only refreshes the user policy and sets the GitHub variables.
 
 ## Rollback
 

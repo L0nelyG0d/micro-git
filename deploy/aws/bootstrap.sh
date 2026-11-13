@@ -251,7 +251,8 @@ print(("ok " if ok else "fail ") + k["AccessKeyId"])
 }
 
 # GitHub environment that holds the key: only branch main may deploy to it, so a workflow
-# on another branch cannot read the secrets.
+# on another branch cannot read the secrets. The PUT sends only the branch policy; GitHub may
+# reset other protection rules (reviewers, wait timer) added by hand, so re-add those after a run.
 ensure_github_env() {
   gh_t api -X PUT "repos/$REPO/environments/$GH_ENV" --input - >/dev/null <<'JSON'
 {"deployment_branch_policy": {"protected_branches": false, "custom_branch_policies": true}}
@@ -322,8 +323,7 @@ if [ -n "$CI_USER" ]; then
   fi
   if [ "$MODE" = apply ]; then
     var_fail=0
-    # AWS_DEPLOY_MODE=keys is set last: it is what switches the deploy-aws-keys job on.
-    for kv in "AWS_REGION=${REGION:-}" "AWS_STACK_NAME=$STACK" "AWS_CFN_ROLE_ARN=$CFN_ROLE_ARN" "AWS_ACCOUNT_ID=$ACCOUNT" "AWS_DEPLOY_MODE=keys"; do
+    for kv in "AWS_REGION=${REGION:-}" "AWS_STACK_NAME=$STACK" "AWS_CFN_ROLE_ARN=$CFN_ROLE_ARN" "AWS_ACCOUNT_ID=$ACCOUNT"; do
       [ -n "${kv#*=}" ] || continue
       if gh_t variable set "${kv%%=*}" --repo "$REPO" --body "${kv#*=}" >/dev/null 2>&1; then
         echo "  GitHub variable ${kv%%=*} set"
@@ -333,6 +333,24 @@ if [ -n "$CI_USER" ]; then
       fi
     done
     [ "$var_fail" = 0 ] || { echo "error: GitHub variables incomplete; the deploy-aws-keys job needs them" >&2; exit 1; }
+    # Only switch CI on when the key really is in the environment, and no repo-level secret of the
+    # same name exists (Actions would fall back to it, outside the main-only environment).
+    env_secs="$(gh_t secret list --repo "$REPO" --env "$GH_ENV" 2>/dev/null | cut -f1)"
+    repo_secs="$(gh_t secret list --repo "$REPO" 2>/dev/null | cut -f1)"
+    mode_ok=1
+    for n in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+      printf '%s\n' "$env_secs" | grep -qx "$n" || { echo "  ERROR: secret $n missing in environment $GH_ENV" >&2; mode_ok=0; }
+      if printf '%s\n' "$repo_secs" | grep -qx "$n"; then
+        echo "  ERROR: repository-level secret $n exists; delete it (gh secret delete $n --repo $REPO) so only $GH_ENV holds the key" >&2; mode_ok=0
+      fi
+    done
+    [ "$mode_ok" = 1 ] || { echo "error: not switching the CI job on (AWS_DEPLOY_MODE unchanged)" >&2; exit 1; }
+    # Set last: this is what switches the deploy-aws-keys job on.
+    if gh_t variable set AWS_DEPLOY_MODE --repo "$REPO" --body keys >/dev/null 2>&1; then
+      echo "  GitHub variable AWS_DEPLOY_MODE=keys set (deploy-aws-keys job enabled)"
+    else
+      echo "error: could not set AWS_DEPLOY_MODE (retry: gh variable set AWS_DEPLOY_MODE --repo $REPO --body keys)" >&2; exit 1
+    fi
   else
     echo "[dry-run] gh variable set AWS_REGION / AWS_STACK_NAME / AWS_CFN_ROLE_ARN / AWS_ACCOUNT_ID, then AWS_DEPLOY_MODE=keys --repo $REPO"
   fi
