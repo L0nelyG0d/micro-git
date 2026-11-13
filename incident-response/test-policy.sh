@@ -52,6 +52,10 @@ cdrun() { GLOBAL_COOLDOWN_SECONDS="$2" python3 -I "$D/policy-check.py" "$CD/$1" 
 [ "$(cdrun b 0)" = 0 ] && { pass=$((pass+1)); echo "ok   cooldown: 0 disables"; } || { fail=$((fail+1)); echo "FAIL cooldown off"; }
 echo "1 x" > "$CD/.last_action"   # ancient timestamp: cooldown over
 [ "$(cdrun c 300)" = 0 ] && { pass=$((pass+1)); echo "ok   cooldown: expires"; } || { fail=$((fail+1)); echo "FAIL cooldown expiry"; }
+for bad in nan inf -inf NaN; do   # non-finite timestamp = no previous action (nan used to crash, inf locked forever)
+  echo "$bad x" > "$CD/.last_action"; rm -f "$CD/c/action.lock" "$CD/c/decision.json"
+  [ "$(cdrun c 300 --no-claim)" = 0 ] && { pass=$((pass+1)); echo "ok   cooldown: .last_action '$bad' treated as free"; } || { fail=$((fail+1)); echo "FAIL cooldown non-finite $bad"; }
+done
 # a crash inside policy-check must exit 1 (not 0/3) and leave an audit line
 mkdir -p "$T/crash"; echo '{}' > "$T/crash/response.json"; echo '{broken' > "$T/crash/bad-policy.json"
 python3 -I "$D/policy-check.py" "$T/crash" --policy "$T/crash/bad-policy.json" >/dev/null 2>&1; rc=$?

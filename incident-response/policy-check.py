@@ -13,7 +13,7 @@ global_cooldown_seconds (policy, default 300; env GLOBAL_COOLDOWN_SECONDS overri
 Env: COMPOSE_FILES (colon list; COMPOSE_FILE fallback) and COMPOSE_PROJECT_NAME expand the {{COMPOSE_ARGS}}
 placeholder of command templates.
 """
-import json, os, re, sys, time, datetime
+import json, math, os, re, sys, time, datetime
 try:
     import fcntl
 except ImportError:  # non-POSIX: cooldown still works, without the cross-process lock
@@ -122,6 +122,8 @@ def cooldown_left(inc, policy):
         ts = float(open(last_action_path(inc)).read().split()[0])
     except (OSError, ValueError, IndexError):
         return 0
+    if not math.isfinite(ts):
+        return 0   # nan/inf: treat like garbage, "no previous action"
     return max(0, int(cd - (time.time() - min(ts, time.time())) + 0.999))
 
 
