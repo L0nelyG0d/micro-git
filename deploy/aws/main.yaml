@@ -131,7 +131,7 @@ Resources:
   AppInstance:
     Type: AWS::EC2::Instance
     # Postgres data lives on this instance's root volume: never delete or replace it implicitly.
-    DeletionPolicy: Retain
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       ImageId: !Ref LatestAmiId

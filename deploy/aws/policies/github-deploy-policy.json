@@ -21,7 +21,7 @@
      "Resource": "arn:aws:ssm:*:<ACCOUNT_ID>:parameter/<STACK_NAME>/jwt-secret"},
     {"Effect": "Allow", "Action": "ssm:GetParameter",
      "Resource": "arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*"},
-    {"Effect": "Allow", "Action": "ec2:DescribeInstances", "Resource": "*"},
+    {"Effect": "Allow", "Action": ["ec2:DescribeInstances", "ec2:DescribeImages"], "Resource": "*"},
     {"Effect": "Allow", "Action": "ssm:SendCommand",
      "Resource": "arn:aws:ssm:*::document/AWS-RunShellScript"},
     {"Effect": "Allow", "Action": "ssm:SendCommand",
