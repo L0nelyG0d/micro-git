@@ -1,6 +1,6 @@
 # Deploy runbook
 
-Short operational view. Details: `deploy/README.md` and the per-host READMEs (`deploy/render/README.md`, `deploy/aws/README.md`). The targets are Render and AWS; Railway, GCP and Vercel were removed in #174.
+Short operational view. Details: `deploy/README.md` and the per-host READMEs (`deploy/render/README.md`, `deploy/aws/README.md`). The targets are Render and AWS.
 
 Production AWS uses the IAM-user key path (job `deploy-aws-keys`, `deploy/aws/deploy.sh`). The GitHub OIDC path (job `deploy-aws`, `bootstrap.sh` without `--no-oidc`, and the "Owner checklist" at the bottom of this file) is OPTIONAL and currently blocked: the organization SCP of account 228619515667 denies creating the OIDC provider, so `AWS_ROLE_ARN` is not set and `deploy-aws` is skipped.
 

@@ -2,8 +2,6 @@
 
 Two targets: Render and AWS. Continuous delivery is one workflow, [`.github/workflows/deploy.yml`](../.github/workflows/deploy.yml). Per-target notes: [`render/README.md`](render/README.md) (Blueprint `render.yaml`) and [`aws/README.md`](aws/README.md) (CloudFormation and scripts). Operations (status, live check, rollback): [`_docs/deploy-runbook.md`](../_docs/deploy-runbook.md). Image, compose and environment variables: [`docs/deployment.md`](../docs/deployment.md).
 
-Railway, GCP and Vercel were removed in #174; no job, file, secret or variable for them remains.
-
 ## How CD works
 
 1. The Deploy workflow triggers on `workflow_run` (type `completed`) of the `CI` and `E2E` workflows, for branch `main` only.
