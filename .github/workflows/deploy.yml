@@ -34,11 +34,8 @@ jobs:
     outputs:
       ready: ${{ steps.check.outputs.ready }}
       render: ${{ steps.targets.outputs.render }}
-      railway: ${{ steps.targets.outputs.railway }}
       aws: ${{ steps.targets.outputs.aws }}
       aws_keys: ${{ steps.targets.outputs.aws_keys }}
-      gcp: ${{ steps.targets.outputs.gcp }}
-      vercel: ${{ steps.targets.outputs.vercel }}
     steps:
       - name: Both CI and E2E succeeded for this commit
         id: check
@@ -60,23 +57,17 @@ jobs:
         id: targets
         env:
           RENDER_DEPLOY_HOOK: ${{ secrets.RENDER_DEPLOY_HOOK }}
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
           AWS_ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
           AWS_DEPLOY_MODE: ${{ vars.AWS_DEPLOY_MODE }}
-          GCP_WORKLOAD_IDENTITY: ${{ vars.GCP_WORKLOAD_IDENTITY }}
         run: |
           flag() { if [ -n "$1" ]; then echo true; else echo false; fi; }
           {
             echo "render=$(flag "$RENDER_DEPLOY_HOOK")"
-            echo "railway=$(flag "$RAILWAY_TOKEN")"
             echo "aws=$(flag "$AWS_ROLE_ARN")"
             # Access-key path only when OIDC is not configured (an SCP denies OIDC in this account).
             # The key lives in environment aws-prod, which the gate cannot read, so a variable
             # (set by deploy/aws/bootstrap.sh --ci-user after the key is stored) switches it on.
             if [ -z "$AWS_ROLE_ARN" ] && [ "$AWS_DEPLOY_MODE" = keys ]; then echo "aws_keys=true"; else echo "aws_keys=false"; fi
-            echo "gcp=$(flag "$GCP_WORKLOAD_IDENTITY")"
-            echo "vercel=$(flag "$VERCEL_TOKEN")"
           } >> "$GITHUB_OUTPUT"
 
   deploy-render:
@@ -99,23 +90,10 @@ jobs:
           # The hook URL is a secret; curl is silent on success, only the status is shown.
           curl -fsS -X POST "${RENDER_DEPLOY_HOOK}${sep}ref=${SHA}" -o /dev/null -w 'render: deploy hook HTTP %{http_code}\n'
 
-  deploy-railway:
-    name: Deploy to Railway (railway up)
-    needs: gate
-    if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.railway == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-      - name: railway up (project token from RAILWAY_TOKEN)
-        env:
-          RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
-        run: npx --yes @railway/cli@5 up --ci
-
+  # OPTIONAL: the OIDC variant of the AWS deploy. It runs only when the repository
+  # variable AWS_ROLE_ARN is set. In the current account an organization SCP denies
+  # creating the GitHub OIDC provider, so AWS_ROLE_ARN is unset and production uses
+  # deploy-aws-keys below.
   deploy-aws:
     name: Deploy to AWS (CloudFormation, ECR, SSM; OIDC)
     needs: gate
@@ -359,67 +337,6 @@ jobs:
           MG_AWS_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
         run: deploy/aws/deploy.sh --apply --ci --ref "$HEAD_SHA"
-
-  deploy-gcp:
-    name: Deploy to GCP (Terraform, Workload Identity)
-    needs: gate
-    if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.gcp == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY }}
-          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_wrapper: false
-      - name: terraform apply (deploy/gcp)
-        working-directory: deploy/gcp
-        run: |
-          terraform init -input=false
-          terraform apply -input=false -auto-approve
-
-  deploy-vercel-frontend:
-    # Frontend only. The Go backend and its database cannot run on Vercel static
-    # hosting, so /api must be proxied by a Vercel rewrite to the backend deployed
-    # elsewhere (Render, Railway or AWS). Requires VERCEL_ORG_ID and VERCEL_PROJECT_ID vars.
-    name: Deploy frontend to Vercel
-    needs: gate
-    if: needs.gate.outputs.ready == 'true' && needs.gate.outputs.vercel == 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    permissions:
-      contents: read
-    env:
-      VERCEL_ORG_ID: ${{ vars.VERCEL_ORG_ID }}
-      VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
-    defaults:
-      run:
-        working-directory: frontend
-    steps:
-      - uses: actions/checkout@v5
-        with:
-          ref: ${{ github.event.workflow_run.head_sha }}
-      - uses: actions/setup-node@v5
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
-      - name: Vercel pull, build, deploy (VERCEL_TOKEN from env, production)
-        env:
-          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
-        run: |
-          npx --yes vercel@65 pull --yes --environment=production
-          npx --yes vercel@65 build --prod
-          npx --yes vercel@65 deploy --prebuilt --prod
 
   smoke:
     # Render smoke test. It must verify the NEW build: it polls /health until the
