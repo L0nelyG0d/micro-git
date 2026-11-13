@@ -11,6 +11,7 @@ function respond(status: number, body?: unknown, headers: Record<string, string>
     status,
     ok: status >= 200 && status < 300,
     headers: new Headers(headers),
+    text: async () => (typeof body === "string" ? body : JSON.stringify(body ?? "")),
     json: async () => {
       if (body === undefined) throw new SyntaxError("no body")
       return body
@@ -37,10 +38,11 @@ function lastCall(): Call {
 
 const OID = "a".repeat(40)
 
-// One row per ApiService method (the 23 operationIds of openapi.yaml).
+// One row per ApiService method (the 24 operationIds of openapi.yaml).
 const cases: { name: string; run: () => Promise<unknown>; method: string; url: string; body?: unknown }[] = [
   { name: "health", run: () => svc.health(), method: "GET", url: "/api/health" },
   { name: "healthHead", run: () => svc.healthHead(), method: "HEAD", url: "/api/health" },
+  { name: "metrics", run: () => svc.metrics(), method: "GET", url: "/api/metrics" },
   { name: "register", run: () => svc.register("al", "pw"), method: "POST", url: "/api/auth/register", body: { username: "al", password: "pw" } },
   { name: "login", run: () => svc.login("al", "pw"), method: "POST", url: "/api/auth/login", body: { username: "al", password: "pw" } },
   { name: "logout", run: () => svc.logout(), method: "POST", url: "/api/auth/logout" },
@@ -80,7 +82,7 @@ describe("HttpApiService", () => {
 
   it("covers every operationId of the interface", () => {
     const methods = Object.getOwnPropertyNames(HttpApiService.prototype).filter((m) => m !== "constructor" && m !== "get")
-    expect(methods).toHaveLength(23)
+    expect(methods).toHaveLength(24)
     const tested = new Set(cases.map((c) => c.name.split(" ")[0]))
     for (const m of methods) expect(tested, m).toContain(m)
   })

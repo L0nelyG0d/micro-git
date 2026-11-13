@@ -21,6 +21,8 @@ export interface ApiService {
 
   health(): Promise<void>
   healthHead(): Promise<void>
+  /** Prometheus text exposition (GET /metrics). */
+  metrics(): Promise<string>
 
   register(username: string, password: string): Promise<User>
   login(username: string, password: string): Promise<User>

@@ -29,6 +29,10 @@ export class HttpApiService implements ApiService {
     return request<void>("/health", { method: "HEAD" })
   }
 
+  metrics() {
+    return request<string>("/metrics", { text: true })
+  }
+
   register(username: string, password: string) {
     return request<User>("/auth/register", { method: "POST", body: { username, password } })
   }

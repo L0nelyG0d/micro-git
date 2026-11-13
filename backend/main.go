@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -60,9 +61,38 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	errc := make(chan error, 1)
-	go func() { errc <- httpSrv.ListenAndServe() }()
+	// Bind synchronously so a bad address fails before "listening on" is logged.
+	ln, err := net.Listen("tcp", cfg.Addr)
+	if err != nil {
+		closeStore()
+		log.Fatalf("server: %v", err)
+	}
+	// METRICS_ADDR: /metrics on its own listener, not on the public one.
+	var metricsSrv *http.Server
+	var mln net.Listener
+	if addr := srv.obs.metricsAddr; addr != "" {
+		mln, err = net.Listen("tcp", addr)
+		if err != nil {
+			_ = ln.Close()
+			closeStore()
+			log.Fatalf("metrics: %v", err)
+		}
+		metricsSrv = &http.Server{
+			Handler:           srv.obs.metricsHandler(),
+			ReadHeaderTimeout: readHeaderTimeout,
+			ReadTimeout:       readHeaderTimeout,
+			WriteTimeout:      readHeaderTimeout,
+			IdleTimeout:       idleTimeout,
+		}
+	}
+
+	errc := make(chan error, 2)
+	go func() { errc <- httpSrv.Serve(ln) }()
 	log.Printf("listening on %s", cfg.Addr)
+	if metricsSrv != nil {
+		go func() { errc <- fmt.Errorf("metrics: %w", metricsSrv.Serve(mln)) }()
+		log.Printf("metrics listening on %s", srv.obs.metricsAddr)
+	}
 
 	select {
 	case err := <-errc:
@@ -76,6 +106,11 @@ func main() {
 	defer cancel()
 	if err := httpSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Printf("shutdown: %v", err)
+	}
+	if metricsSrv != nil {
+		if err := metricsSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Printf("metrics shutdown: %v", err)
+		}
 	}
 	closeStore()
 }

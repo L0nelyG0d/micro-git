@@ -1,0 +1,45 @@
+groups:
+  - name: micro-git-user-impact
+    rules:
+      - alert: HighErrorRatioOnRoute
+        # >5% of responses are 5xx for a route, ignoring routes with < ~3 req/min.
+        expr: |
+          (
+            sum by (route) (rate(http_requests_total{status=~"5.."}[5m]))
+            /
+            sum by (route) (rate(http_requests_total[5m]))
+          ) > 0.05
+          and
+          sum by (route) (rate(http_requests_total[5m])) > 0.05
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "More than 5% of requests to {{ $labels.route }} fail with 5xx"
+          runbook: "Check 5xx logs for the route, open a failing trace, compare with the last deploy (build_info version)."
+          what_to_look_at: "Dashboard panel 'Error ratio by route'; Loki: {service_name=\"micro-git\"} | json | route=\"{{ $labels.route }}\" | status>=500; Tempo trace via trace_id; DB connectivity."
+      - alert: P95LatencyHigh
+        # p95 above 1s for a route that has real traffic.
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, route) (rate(http_request_duration_seconds_bucket[5m]))
+          ) > 1
+          and on (route)
+          sum by (route) (rate(http_requests_total[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "p95 latency of {{ $labels.route }} is above 1s"
+          runbook: "Find slow traces for the route in Tempo, check DB latency and in-flight requests for saturation."
+          what_to_look_at: "Dashboard panels 'p95 latency by route' and 'In-flight requests'; slow spans in Tempo; Postgres load."
+      - alert: AppDown
+        expr: up{job="micro-git"} == 0
+        for: 1m
+        labels:
+          severity: critical
+          route: all
+        annotations:
+          summary: "micro-git app is not reachable by the collector"
+          runbook: "docker compose ps; docker compose logs app; check /health and the db container."
+          what_to_look_at: "Container state/restarts, app logs just before the outage, database health."

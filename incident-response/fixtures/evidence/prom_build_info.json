@@ -1,0 +1,1 @@
+{"status":"success","data":{"resultType":"vector","result":[{"metric":{"__name__":"build_info","version":"89ca535","fault_endpoint_500":"/api/repos"},"value":[1760000000,"1"]}]}}

@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
-	"log"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"testing"
 )
@@ -134,13 +132,11 @@ func TestGzipJSON(t *testing.T) {
 		}
 	})
 	t.Run("timing still sees the status", func(t *testing.T) {
-		var buf bytes.Buffer
-		log.SetOutput(&buf)
-		t.Cleanup(func() { log.SetOutput(os.Stderr) })
+		buf := captureTimingLog(t)
 		mux := http.NewServeMux()
 		mux.Handle("/x", jsonHandler(418, 3000))
-		serve(timing(mux, gzipJSON(mux)), "GET", "/x", gz)
-		if !strings.Contains(buf.String(), " 418 ") {
+		serve(newObserver().middleware(mux, gzipJSON(mux)), "GET", "/x", gz)
+		if !strings.Contains(buf.String(), `"status":418`) {
 			t.Errorf("log = %q", buf.String())
 		}
 	})
@@ -225,9 +221,7 @@ func TestReadCacheHeaders(t *testing.T) {
 
 func TestRead304(t *testing.T) {
 	f := newReadFixture(t)
-	var logs bytes.Buffer
-	log.SetOutput(&logs)
-	t.Cleanup(func() { log.SetOutput(os.Stderr) })
+	logs := captureTimingLog(t)
 
 	first := f.req("GET", "/blob/main/README.md", nil)
 	et := first.Header().Get("ETag")
@@ -237,7 +231,7 @@ func TestRead304(t *testing.T) {
 		t.Fatalf("304 path: %d body=%d %v", rec.Code, rec.Body.Len(), rec.Header())
 	}
 	// the statement count only means something on Postgres
-	if !strings.Contains(logs.String(), " 304 ") || testStoreKind() == "postgres" && !strings.Contains(logs.String(), "stmts=1\n") {
+	if !strings.Contains(logs.String(), `"status":304`) || testStoreKind() == "postgres" && !strings.Contains(logs.String(), `"db_statements":1,`) {
 		t.Errorf("304 should cost exactly the ref lookup statement: %q", logs.String())
 	}
 

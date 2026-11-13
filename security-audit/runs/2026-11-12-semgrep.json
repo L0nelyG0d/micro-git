@@ -1,0 +1,98 @@
+{
+  "run_id": "2026-11-12-semgrep",
+  "date": "2026-11-12",
+  "commit": "89ca535 (branch fix/home-list-race, dirty working tree)",
+  "checks": [
+    {
+      "name": "semgrep p/golang p/typescript p/secrets",
+      "status": "findings",
+      "summary": "Scope backend/, frontend/src. Image semgrep/semgrep 1.184.0. 6 findings (Semgrep WARNING mapped to medium); orchestrator triage below is pending human confirmation."
+    }
+  ],
+  "findings": [
+    {
+      "id": "SEC-20261112-462d9174",
+      "source": "scanner",
+      "rule": "go.lang.security.audit.net.cookie-missing-httponly.cookie-missing-httponly",
+      "severity": "medium",
+      "file": "backend/cmd/mg/main.go",
+      "line": 89,
+      "description": "A session cookie was detected without setting the 'HttpOnly' flag. The 'HttpOnly' flag for cookies instructs the browser to forbid client-side scripts from reading the cookie which mitigates XSS attac",
+      "evidence": "semgrep p/golang p/typescript p/secrets",
+      "disposition": "open",
+      "reviewer": null,
+      "date": null,
+      "disposition_reason": "Suggested triage: false_positive. backend/cmd/mg/main.go:89 builds a request cookie in the CLI client; HttpOnly/Secure apply to Set-Cookie. Pending human confirmation."
+    },
+    {
+      "id": "SEC-20261112-c7b3f056",
+      "source": "scanner",
+      "rule": "go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure",
+      "severity": "medium",
+      "file": "backend/cmd/mg/main.go",
+      "line": 89,
+      "description": "A session cookie was detected without setting the 'Secure' flag. The 'secure' flag for cookies prevents the client from transmitting the cookie over insecure channels such as HTTP. Set the 'Secure' fl",
+      "evidence": "semgrep p/golang p/typescript p/secrets",
+      "disposition": "open",
+      "reviewer": null,
+      "date": null,
+      "disposition_reason": "Suggested triage: accepted_risk. Server cookies set HttpOnly+SameSite=Lax and Secure from COOKIE_SECURE (off only for local http); must be true in production. mg CLI line is a request cookie. Pending human confirmation."
+    },
+    {
+      "id": "SEC-20261112-4a8a341f",
+      "source": "scanner",
+      "rule": "go.lang.security.audit.crypto.use_of_weak_crypto.use-of-sha1",
+      "severity": "medium",
+      "file": "backend/cmd/mg/sync.go",
+      "line": 74,
+      "description": "Detected SHA1 hash algorithm which is considered insecure. SHA1 is not collision resistant and is therefore not suitable as a cryptographic signature. Use SHA256 or SHA3 instead.",
+      "evidence": "semgrep p/golang p/typescript p/secrets",
+      "disposition": "open",
+      "reviewer": null,
+      "date": null,
+      "disposition_reason": "Suggested triage: false_positive. SHA-1 is git's mandatory object id format (gitobj.Hash, mg sync); not used for security. Pending human confirmation."
+    },
+    {
+      "id": "SEC-20261112-e10d06ea",
+      "source": "scanner",
+      "rule": "go.lang.security.audit.crypto.use_of_weak_crypto.use-of-sha1",
+      "severity": "medium",
+      "file": "backend/gitobj/gitobj.go",
+      "line": 38,
+      "description": "Detected SHA1 hash algorithm which is considered insecure. SHA1 is not collision resistant and is therefore not suitable as a cryptographic signature. Use SHA256 or SHA3 instead.",
+      "evidence": "semgrep p/golang p/typescript p/secrets",
+      "disposition": "open",
+      "reviewer": null,
+      "date": null,
+      "disposition_reason": "Suggested triage: false_positive. SHA-1 is git's mandatory object id format (gitobj.Hash, mg sync); not used for security. Pending human confirmation."
+    },
+    {
+      "id": "SEC-20261112-7b732c72",
+      "source": "scanner",
+      "rule": "go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure",
+      "severity": "medium",
+      "file": "backend/ratelimit.go",
+      "line": 345,
+      "description": "A session cookie was detected without setting the 'Secure' flag. The 'secure' flag for cookies prevents the client from transmitting the cookie over insecure channels such as HTTP. Set the 'Secure' fl",
+      "evidence": "semgrep p/golang p/typescript p/secrets",
+      "disposition": "open",
+      "reviewer": null,
+      "date": null,
+      "disposition_reason": "Suggested triage: accepted_risk. Server cookies set HttpOnly+SameSite=Lax and Secure from COOKIE_SECURE (off only for local http); must be true in production. Pending human confirmation."
+    },
+    {
+      "id": "SEC-20261112-5b44560c",
+      "source": "scanner",
+      "rule": "go.lang.security.audit.net.cookie-missing-secure.cookie-missing-secure",
+      "severity": "medium",
+      "file": "backend/session.go",
+      "line": 112,
+      "description": "A session cookie was detected without setting the 'Secure' flag. The 'secure' flag for cookies prevents the client from transmitting the cookie over insecure channels such as HTTP. Set the 'Secure' fl",
+      "evidence": "semgrep p/golang p/typescript p/secrets",
+      "disposition": "open",
+      "reviewer": null,
+      "date": null,
+      "disposition_reason": "Suggested triage: accepted_risk. Server cookies set HttpOnly+SameSite=Lax and Secure from COOKIE_SECURE (off only for local http); must be true in production. Pending human confirmation."
+    }
+  ]
+}

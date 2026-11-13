@@ -1,0 +1,25 @@
+{
+  "_comment": "JSON-compatible YAML (parsed by policy-check.py without dependencies). The model proposes; this file decides.",
+  "version": 1,
+  "confidence_threshold": 0.7,
+  "max_automatic_actions_per_incident": 1,
+  "_templates": "{{COMPOSE_ARGS}} expands (escaped) to '-p $COMPOSE_PROJECT_NAME -f <each of $COMPOSE_FILES>'; unset COMPOSE_FILES = no template can match = escalate (fail closed). rollback was removed: root compose hardcodes mg-app:local.",
+  "on_violation": "escalate",
+  "allowed_actions": [
+    {"id": "restart-app", "type": "restart",
+     "command_regex": "^docker compose {{COMPOSE_ARGS}} restart app$",
+     "description": "Restart the app container"},
+    {"id": "fault-flag-off", "type": "config_change",
+     "command_regex": "^FAULT_ENDPOINT_500= docker compose {{COMPOSE_ARGS}} up -d --no-deps app$",
+     "description": "Set env flag FAULT_ENDPOINT_500 to empty (off)"}
+  ],
+  "propose_only_types": ["code_fix_pr", "escalate"],
+  "denied_patterns": [
+    {"id": "db-write", "regex": "(?i)\\b(psql|pg_dump|pg_restore|sqlite3|mysql)\\b|\\b(insert|update|delete|drop|truncate|alter|create)\\s+(into|from|table|database|index)\\b|\\bdocker compose (exec|run)\\b.*\\bdb\\b|migrate"},
+    {"id": "secrets", "regex": "(?i)\\.env\\b|secret|token|password|credential|id_rsa|\\.pem\\b|printenv|aws_|ssh "},
+    {"id": "force-push", "regex": "(?i)git\\s+push|--force"},
+    {"id": "prod-deploy", "regex": "(?i)\\b(deploy|kubectl|terraform|helm|flyctl|railway|vercel|gcloud|aws)\\b"},
+    {"id": "shell-metachar", "regex": "[;&|`$<>\\n(){}\\\\]"}
+  ],
+  "escalation": {"packet_file": "escalation-packet.json", "notify": "write file only; a human reads it"}
+}

@@ -15,11 +15,11 @@ export class ApiError extends Error {
   }
 }
 
-export type RequestOptions = { method?: string; body?: unknown; signal?: AbortSignal }
+export type RequestOptions = { method?: string; body?: unknown; signal?: AbortSignal; text?: boolean }
 
 /**
  * The only place that calls fetch. Calls the backend through the /api proxy
- * with the session cookie. Returns the parsed JSON body (undefined for 204 or a
+ * with the session cookie. Returns the parsed JSON body (the raw text with `text: true`) (undefined for 204 or a
  * body that is not JSON). Non-2xx responses throw ApiError carrying the
  * server's `error` message; network failures throw the original TypeError.
  */
@@ -41,6 +41,8 @@ export async function request<T = unknown>(path: string, options: RequestOptions
     if (init.method !== "GET" && init.method !== "HEAD") invalidateAfterWrite(path)
   }
   if (res.status === 204) return undefined as T
+  // text option: a text/plain answer (Prometheus metrics); errors below are still JSON.
+  if (options.text && res.ok) return (await res.text()) as T
   let data: unknown
   try {
     data = await res.json()

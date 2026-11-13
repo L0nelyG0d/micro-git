@@ -1,0 +1,14 @@
+{
+  "run_id": "2026-11-12-baseline",
+  "date": "2026-11-12",
+  "commit": "89ca535 (branch fix/home-list-race, dirty working tree)",
+  "checks": [
+    {"name": "go vet ./... (backend)", "status": "ok", "summary": "exit 0, no diagnostics"},
+    {"name": "npm audit --omit=dev (frontend)", "status": "ok", "summary": "0 vulnerabilities (info 0, low 0, moderate 0, high 0, critical 0)"},
+    {"name": "grep secret scan (CI pattern, git-tracked files only)", "status": "ok", "summary": "0 hits for postgres URL with password / npg_ token; untracked files and .env not scanned"},
+    {"name": "semgrep p/golang p/typescript p/secrets", "status": "scanner_unavailable", "summary": "semgrep not installed; docker present but fallback not run in baseline"},
+    {"name": "model review pass", "status": "not_run", "summary": "not executed in baseline"},
+    {"name": "human validation", "status": "not_run", "summary": "no findings to validate"}
+  ],
+  "findings": []
+}

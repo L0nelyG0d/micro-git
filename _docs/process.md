@@ -12,7 +12,7 @@ The main session is the orchestrator. It launches the roles below as subagents a
 - QA - checks the result against the acceptance criteria, follows `_docs/team/qa-engineer.md`
 - Code reviewer - reviews the code after QA PASS, then merges into `main` and pushes, follows `_docs/team/code-reviewer.md`
 
-Models (user decision 2026-10-19): PM and QA run on Haiku 5.5 (`haiku`); the system analyst, engineer and code reviewer run on Sonnet 5.5 (`sonnet`). At most 3 subagents at once. Tests run against the local Postgres on port 54329 (see AGENTS.md), not Neon.
+Models (user decision 2026-11-12, replaces 2026-10-19): PM runs on Haiku (`haiku`); the engineer on Sonnet or Opus (`sonnet`/`opus`); the code reviewer and the system analyst on Opus (`opus`); QA on Sonnet (`sonnet`). At most 5 subagents at once (user decision 2026-11-12, was 3). Tests run against the local Postgres on port 54329 (see AGENTS.md), not Neon.
 
 ## Lifecycle
 

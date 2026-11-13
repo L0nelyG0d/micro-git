@@ -1,0 +1,9 @@
+# Metrics arrive via the collector's remote write; Prometheus does not scrape the app.
+global:
+  evaluation_interval: 15s
+rule_files:
+  - /etc/prometheus/alerts.yaml
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets: ["alertmanager:9093"]

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest"
 
 // Every API path the frontend builds must exist in the OpenAPI contract
 // (_docs/openapi.yaml). Paths are found as string/template literals
-// that start with /repos, /auth or /health, or with the local `base` /
+// that start with /repos, /auth, /health or /metrics, or with the local `base` /
 // `apiBase` variables (the repository path) followed by a sub-path.
 
 // Vitest runs from frontend/.
@@ -41,7 +41,7 @@ function clientPaths(source: string): string[] {
     let lit = m[1] ?? m[2]
     if (/^\$\{(base|apiBase)\}\/[a-z]/.test(lit)) {
       lit = lit.replace(/^\$\{(base|apiBase)\}/, "/repos/${owner}/${repo}")
-    } else if (!/^\/(repos|auth|health)(\/|\?|$)/.test(lit)) {
+    } else if (!/^\/(repos|auth|health|metrics)(\/|\?|$)/.test(lit)) {
       continue
     }
     lit = lit.split("?")[0]

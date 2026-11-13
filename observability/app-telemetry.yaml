@@ -1,0 +1,10 @@
+# Adds telemetry settings to the root compose `app` service without editing docker-compose.yml.
+# docker compose -f docker-compose.yml -f observability/compose.yaml -f observability/app-telemetry.yaml up -d --build
+services:
+  app:
+    environment:
+      OTEL_EXPORTER_OTLP_ENDPOINT: "http://collector:4318"
+      APP_VERSION: "${APP_VERSION:-dev}"
+      APP_COMMIT: "${APP_COMMIT:-unknown}"
+      # Incident drill switch: a route pattern such as /repos/{owner}/{repo}; empty = off.
+      FAULT_ENDPOINT_500: "${FAULT_ENDPOINT_500:-}"

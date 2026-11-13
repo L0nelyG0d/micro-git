@@ -99,7 +99,7 @@ function flowList(line: string): string[] {
   return m[1].split(",").map((s) => s.trim()).filter(Boolean)
 }
 
-type OpInfo = { id: string; method: string; path: string; schema: Shape | null; status: string | null }
+type OpInfo = { id: string; method: string; path: string; schema: Shape | null; status: string | null; text?: boolean }
 
 /** Every operation of `paths:` with the shape of its first 2xx application/json response. */
 function operations(yamlText: string): OpInfo[] {
@@ -128,7 +128,16 @@ function operations(yamlText: string): OpInfo[] {
       if (content < 0) continue
       const contentBlock = blockAfter(body, content)
       const json = findKey(contentBlock, 12, "application/json")
-      if (json < 0) continue
+      if (json < 0) {
+        // text/plain 2xx (health, metrics): no JSON shape, only the media type is recorded.
+        const text = findKey(contentBlock, 12, "text/plain")
+        if (text < 0) continue
+        const textSchema = findKey(blockAfter(contentBlock, text), 14, "schema")
+        if (textSchema < 0) throw new Error(`${op.id}: ${code[1]} has text/plain without a schema`)
+        op.status = code[1]
+        op.text = true
+        break
+      }
       const schemaBlock = blockAfter(contentBlock, json)
       const sch = findKey(schemaBlock, 14, "schema")
       if (sch < 0) throw new Error(`${op.id}: ${code[1]} has application/json without a schema`)
@@ -161,6 +170,7 @@ async function callAll(svc: MockApiService): Promise<Map<string, unknown>> {
   const r = new Map<string, unknown>()
   r.set("health", await svc.health())
   r.set("healthHead", await svc.healthHead())
+  r.set("metrics", await svc.metrics())
   r.set("register", await svc.register("ann", PW))
   r.set("login", await svc.login("ann", PW))
   r.set("me", await svc.me())
@@ -209,14 +219,24 @@ describe("mock service against openapi.yaml", () => {
     svc = new MockApiService()
   })
 
-  it("finds the 23 operations of the spec", () => {
-    expect(ops).toHaveLength(23)
-    expect(new Set(ops.map((o) => o.id)).size).toBe(23)
+  it("finds the 24 operations of the spec", () => {
+    expect(ops).toHaveLength(24)
+    expect(new Set(ops.map((o) => o.id)).size).toBe(24)
     const withBody = ops.filter((o) => o.schema).map((o) => o.id)
     expect(withBody).toHaveLength(17)
     for (const id of ["health", "healthHead", "logout", "deleteRepo", "deleteBranch", "getBlobRoot"]) {
       expect(withBody).not.toContain(id)
     }
+  })
+
+  it("treats metrics as a text/plain 200 answered with an exposition string", async () => {
+    expect(ops.filter((o) => o.text).map((o) => o.id).sort()).toEqual(["health", "metrics"])
+    const m = ops.find((o) => o.id === "metrics")
+    expect([m?.method, m?.path, m?.status]).toEqual(["get", "/metrics", "200"])
+    const body = await svc.metrics()
+    expect(typeof body).toBe("string")
+    expect(body).toMatch(/^# TYPE \w+ (counter|gauge|histogram)$/m)
+    expect(body).toMatch(/^\w+ \d+$/m)
   })
 
   it("resolves $ref, inline and allOf schemas", () => {

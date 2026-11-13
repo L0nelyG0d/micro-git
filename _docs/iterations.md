@@ -130,3 +130,25 @@ Open issues per `gh issue list --state open`:
 - #107 browser E2E of the main journey on SQLite.
 - #124 docs fix (README port note, api client path, Settings route row): merged as `dc71775`, issue still open.
 - #125 E2E journey: console errors and page errors never fail the run.
+
+## Module 4: observability and incident response
+
+Added after the five iterations above; sections 1-5 are unchanged. Everything is uncommitted and tracked by no GitHub issue yet (#161-#165 proposed, see `_docs/questions.md`).
+
+| What | Where |
+| --- | --- |
+| App telemetry: JSON logs with redaction, `/metrics`, `traceparent`, OTLP/HTTP JSON, `FAULT_ENDPOINT_500` fault flag (stdlib only) | `backend/observe.go`, `observe_test.go` |
+| Stack: collector, Prometheus, Loki, Tempo, Alertmanager, Grafana, alert rules, dashboard | `observability/` |
+| Alert to action: listener, evidence collector, responder (stub), policy gate, runbooks | `incident-response/` |
+| Semgrep run and triage, capability table | `security-audit/` |
+| Real drill record (incident `inc-20261112T141757-93395f6a36fedc71`) and gaps | `docs/operations-and-security-report.md` |
+
+Run:
+
+```
+docker compose -f docker-compose.yml -f observability/compose.yaml -f observability/app-telemetry.yaml up -d --build
+incident-response/test-incident.sh --dry-run
+security-audit/run-audit.sh
+```
+
+Live drill result: alert fired, evidence came from live Prometheus, Loki and Tempo, the stub responder (not a model) escalated at confidence 0.3, nothing was executed (`AUTO_EXECUTE=0`), recovery was not verified, and the `/health` evidence failed (`APP_URL` default `:8080` vs app on `:18080`).
