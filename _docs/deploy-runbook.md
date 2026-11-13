@@ -6,7 +6,7 @@ Short operational view. Details: `deploy/README.md` and the per-host READMEs.
 
 | Target | Status |
 | --- | --- |
-| Render | Live at https://micro-git.onrender.com, deployed by the Deploy workflow through `RENDER_DEPLOY_HOOK`. Last reported build: `X-Build` `5acd89e...` (reported by the owner; re-check with the command below, the header is not defined in this branch's code). |
+| Render | Live at https://micro-git.onrender.com, deployed by the Deploy workflow through `RENDER_DEPLOY_HOOK`. The server sets `X-Build` (`backend/build.go`: `RENDER_GIT_COMMIT`, else `APP_COMMIT`, else `dev`); last reported build `5acd89e...`. `autoDeploy` is `false`, so only the CI/E2E-gated deploy hook deploys. The `smoke` job in `deploy.yml` runs after `deploy-render`, waits until `X-Build` equals (or descends from) the deployed commit, then checks `/`. |
 | AWS | Pending bootstrap. The `deploy-aws` job, `deploy/aws/main.yaml`, `bootstrap.sh` and `preflight.sh` exist but have never run against a real account; the job is skipped until `AWS_ROLE_ARN` is set. The hand-made stack `mg` (ap-southeast-2) is separate and must not be reused: deploy under a NEW stack name. |
 | GCP | Not configured (`GCP_WORKLOAD_IDENTITY` / `GCP_SERVICE_ACCOUNT` unset), job skipped. |
 | Railway | Not configured (`RAILWAY_TOKEN` unset), job skipped. |
@@ -22,9 +22,18 @@ Other views: Render dashboard (latest deploy commit SHA); `gh run list --workflo
 
 ## Rollback
 
-- Render: dashboard > service > Events/Deploys > pick the previous good deploy > Rollback. Or revert the bad commit on `main`; the next green CI and E2E redeploys. If Render's build fails, the previous deploy keeps serving (per Render docs, untested here). Note `autoDeploy: true` in `deploy/render.yaml` can deploy before CI is green.
+- Render: dashboard > service > Events/Deploys > pick the previous good deploy > Rollback. Or revert the bad commit on `main`; the next green CI and E2E redeploys. If Render's build fails, the previous deploy keeps serving (per Render docs, untested here). `autoDeploy` is `false`, so pushes alone do not deploy.
 - AWS (once live): the image tag is `<repo>:<sha7>`; re-run `deploy-aws` on an older green commit, or run `deploy/aws/remote-deploy.sh` through SSM with an older tag. Postgres data is not rolled back and there are no backups. Never roll the AMI or replace `AppInstance` (the change-set guard blocks it; the data would be lost).
 - Any target: `git revert <sha>` on `main` and let CI/E2E gate the redeploy.
+
+## Known follow-ups
+
+Tracked in issues #167, #160, #166 and #168 (AWS hardening, backups and other deferred review items; see `deploy/aws/README.md` Known gaps). Not done in this branch.
+
+## AWS caveats
+
+- After a failed FIRST create the stack sits in `ROLLBACK_COMPLETE`/`ROLLBACK_FAILED`: an admin must `aws cloudformation delete-stack` and wait for `DELETE_COMPLETE` before re-running; re-running alone does not help.
+- `mg-instance-boundary` is a single account-wide policy and its name is fixed. It covers the secret path of the stack name used at bootstrap. A second stack name in the same account needs its `/<stack>/jwt-secret` path added by hand (`aws iam create-policy-version --set-as-default`); `bootstrap.sh` never modifies an existing policy.
 
 ## Owner checklist (AWS, your credentials only)
 
