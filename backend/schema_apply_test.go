@@ -38,6 +38,12 @@ func TestSchemaEmbedded(t *testing.T) {
 // is dropped when the test ends.
 func tempSchemaPool(t *testing.T) (*pgxpool.Pool, string) {
 	t.Helper()
+	return tempSchemaPoolCfg(t, DefaultPoolConfig())
+}
+
+// tempSchemaPoolCfg is tempSchemaPool with a custom config for the pool under test.
+func tempSchemaPoolCfg(t *testing.T, pc PoolConfig) (*pgxpool.Pool, string) {
+	t.Helper()
 	raw := os.Getenv("TEST_DATABASE_URL")
 	if raw == "" {
 		t.Skip("TEST_DATABASE_URL is not set")
@@ -62,7 +68,7 @@ func tempSchemaPool(t *testing.T) (*pgxpool.Pool, string) {
 	q := u.Query()
 	q.Set("search_path", schema)
 	u.RawQuery = q.Encode()
-	pool, err := NewPool(ctx, u.String(), DefaultPoolConfig())
+	pool, err := NewPool(ctx, u.String(), pc)
 	if err != nil {
 		t.Fatal("NewPool failed (details hidden)")
 	}
@@ -194,11 +200,17 @@ func TestApplySchemaIndexGuardScopedToTable(t *testing.T) {
 	}
 }
 
-// Lock order: the advisory lock is taken before lock_timeout and the statement
-// timeout is raised, so waiting longer than lock_timeout (3s) behind another
-// instance must still succeed.
+// Lock order: the wait for the advisory lock must not be capped by the pool's
+// statement_timeout, and must not be capped by lock_timeout (3s) either.
+// ApplySchema therefore raises statement_timeout first, then takes the advisory
+// lock, then sets lock_timeout. The pool here has a 2s statement timeout and the
+// lock is held for 4s: with statement_timeout raised after the lock statement the
+// wait fails with SQLSTATE 57014 (query_canceled); with lock_timeout set before
+// the lock it fails with 55P03 (lock_not_available).
 func TestApplySchemaWaitsForAdvisoryLock(t *testing.T) {
-	pool, _ := tempSchemaPool(t)
+	pc := DefaultPoolConfig()
+	pc.StatementTimeout = 2 * time.Second
+	pool, _ := tempSchemaPoolCfg(t, pc)
 	ctx := context.Background()
 	holder, err := pool.Begin(ctx)
 	if err != nil {

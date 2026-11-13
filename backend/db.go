@@ -90,13 +90,14 @@ const schemaLockID = 7203001
 // (IF NOT EXISTS or catalog-guarded statements everywhere), so applying it to a
 // ready database is a no-op.
 // It is one multi-statement simple-protocol query, so it runs in a single
-// implicit transaction: the transaction-scoped advisory lock and lock_timeout
-// cover all of it, so schema.sql must never contain BEGIN or COMMIT. The
-// advisory lock is taken first so waiting for another instance's apply is not
-// capped by lock_timeout. The pool's statement_timeout (15s by default) does cap
-// the lock wait, so SET LOCAL statement_timeout raises it to 60s for this
-// transaction, matching the context cap; lock_timeout then bounds waits for
-// table locks.
+// implicit transaction: the SET LOCALs and the transaction-scoped advisory lock
+// cover all of it, so schema.sql must never contain BEGIN or COMMIT.
+// Order matters. The pool's statement_timeout (15s by default) would cap the
+// wait for the advisory lock, so SET LOCAL statement_timeout = '60s' (matching
+// the context cap) comes first. The advisory lock follows. lock_timeout is set
+// only after it, because it applies to advisory-lock waits too: set earlier, it
+// would abort a start that is merely queued behind another instance. After the
+// lock it bounds the waits for table locks taken by the schema statements.
 func ApplySchema(ctx context.Context, pool *pgxpool.Pool) error {
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
@@ -105,7 +106,7 @@ func ApplySchema(ctx context.Context, pool *pgxpool.Pool) error {
 		return fmt.Errorf("apply schema: %s", dbErrorClass(err))
 	}
 	defer conn.Release()
-	script := fmt.Sprintf("SELECT pg_advisory_xact_lock(%d); SET LOCAL statement_timeout = '60s'; SET LOCAL lock_timeout = '3s';\n", schemaLockID) + schemaSQL
+	script := fmt.Sprintf("SET LOCAL statement_timeout = '60s'; SELECT pg_advisory_xact_lock(%d); SET LOCAL lock_timeout = '3s';\n", schemaLockID) + schemaSQL
 	if _, err := conn.Conn().PgConn().Exec(ctx, script).ReadAll(); err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) {
