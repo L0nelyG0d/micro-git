@@ -273,8 +273,31 @@ if [ -n "$CI_USER" ]; then
   else
     echo "  user exists: refreshing its policy"
   fi
-  mut iam put-user-policy --user-name "$CI_USER_NAME" --policy-name "$CI_USER_NAME" \
-    --policy-document "file://$TMP/ci-user-policy.json"
+  # Customer-managed policy, not inline: the policy is ~3.7 KB and inline user policies are capped at 2 KB.
+  CI_POL_ARN="arn:$PART:iam::$ACCOUNT:policy/$CI_USER_NAME-policy"
+  prc=0; exists iam get-policy --policy-arn "$CI_POL_ARN" || prc=$?
+  if [ "$prc" -eq 1 ]; then
+    mut iam create-policy --policy-name "$CI_USER_NAME-policy" --policy-document "file://$TMP/ci-user-policy.json" \
+      --tags Key=Project,Value=micro-git
+  elif [ "$prc" -eq 0 ]; then
+    ver="$(ro iam get-policy --policy-arn "$CI_POL_ARN" --query Policy.DefaultVersionId --output text)"
+    cur="$(ro iam get-policy-version --policy-arn "$CI_POL_ARN" --version-id "$ver" --query PolicyVersion.Document --output json \
+      | python3 -c 'import sys,json,urllib.parse as u;d=json.load(sys.stdin);d=json.loads(u.unquote(d)) if isinstance(d,str) else d;print(json.dumps(d,sort_keys=True))' 2>/dev/null || echo)"
+    want="$(python3 -c 'import sys,json;print(json.dumps(json.load(open(sys.argv[1])),sort_keys=True))' "$TMP/ci-user-policy.json")"
+    if [ "$cur" = "$want" ]; then
+      echo "  policy $CI_USER_NAME-policy is up to date"
+    else
+      # At most 5 versions: drop the oldest non-default one first.
+      vers="$(ro iam list-policy-versions --policy-arn "$CI_POL_ARN" --query 'Versions[?!IsDefaultVersion].VersionId' --output text)"
+      if [ "$(printf '%s' "$vers" | wc -w | tr -d ' ')" -ge 4 ]; then
+        mut iam delete-policy-version --policy-arn "$CI_POL_ARN" --version-id "$(printf '%s' "$vers" | tr -s '[:space:]' '\n' | sort -V | head -n1)"
+      fi
+      mut iam create-policy-version --policy-arn "$CI_POL_ARN" --policy-document "file://$TMP/ci-user-policy.json" --set-as-default
+    fi
+  else
+    exit 1
+  fi
+  mut iam attach-user-policy --user-name "$CI_USER_NAME" --policy-arn "$CI_POL_ARN"
 
   old_keys=""
   if [ "$rc" -eq 0 ]; then

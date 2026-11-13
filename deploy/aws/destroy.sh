@@ -110,6 +110,9 @@ if "${AWS[@]}" iam get-user --user-name "$CI_USER" >/dev/null 2>&1; then
   for p in $("${AWS[@]}" iam list-user-policies --user-name "$CI_USER" --query 'PolicyNames[]' --output text); do
     run iam delete-user-policy --user-name "$CI_USER" --policy-name "$p"
   done
+  for p in $("${AWS[@]}" iam list-attached-user-policies --user-name "$CI_USER" --query 'AttachedPolicies[].PolicyArn' --output text); do
+    run iam detach-user-policy --user-name "$CI_USER" --policy-arn "$p"
+  done
   run iam delete-user --user-name "$CI_USER"
   if [ "$MODE" = apply ]; then
     # Switch the CI job off first, then remove the (already useless) secrets.
@@ -124,6 +127,13 @@ if "${AWS[@]}" iam get-user --user-name "$CI_USER" >/dev/null 2>&1; then
   fi
 else
   echo "none"
+fi
+CI_POL_ARN="arn:aws:iam::$ACCOUNT:policy/$CI_USER-policy"
+if "${AWS[@]}" iam get-policy --policy-arn "$CI_POL_ARN" >/dev/null 2>&1; then
+  for v in $("${AWS[@]}" iam list-policy-versions --policy-arn "$CI_POL_ARN" --query 'Versions[?!IsDefaultVersion].VersionId' --output text); do
+    run iam delete-policy-version --policy-arn "$CI_POL_ARN" --version-id "$v"
+  done
+  run iam delete-policy --policy-arn "$CI_POL_ARN"
 fi
 
 if [ -n "$ALL" ]; then
