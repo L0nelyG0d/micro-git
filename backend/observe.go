@@ -17,6 +17,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -94,6 +95,8 @@ type metrics struct {
 	inFlight int64
 	version  string
 	commit   string
+	// spansDropped reports the exporter's drop counter; nil when OTLP is off (exported as 0).
+	spansDropped func() uint64
 }
 
 func newMetrics(version, commit string) *metrics {
@@ -186,6 +189,13 @@ func (m *metrics) write(w io.Writer) {
 	fmt.Fprintln(w, "# HELP http_requests_in_flight Requests currently being served.")
 	fmt.Fprintln(w, "# TYPE http_requests_in_flight gauge")
 	fmt.Fprintf(w, "http_requests_in_flight %d\n", m.inFlight)
+	var dropped uint64
+	if m.spansDropped != nil {
+		dropped = m.spansDropped()
+	}
+	fmt.Fprintln(w, "# HELP otel_spans_dropped_total Spans dropped by the OTLP exporter (full queue, failed POST, non-2xx, shutdown).")
+	fmt.Fprintln(w, "# TYPE otel_spans_dropped_total counter")
+	fmt.Fprintf(w, "otel_spans_dropped_total %d\n", dropped)
 	fmt.Fprintln(w, "# HELP build_info Build information.")
 	fmt.Fprintln(w, "# TYPE build_info gauge")
 	fmt.Fprintf(w, "build_info{version=\"%s\",commit=\"%s\"} 1\n", promEscape(m.version), promEscape(m.commit))
@@ -237,11 +247,16 @@ type span struct {
 }
 
 // exporter batches spans in a goroutine and posts them as OTLP/HTTP JSON.
-// enqueue never blocks; a full queue or a failed POST drops the spans.
+// enqueue never blocks; a full queue, a failed POST or a non-2xx answer drops
+// the spans and counts them in dropped. Close flushes what is still queued.
 type exporter struct {
-	url    string
-	ch     chan span
-	client *http.Client
+	url     string
+	ch      chan span
+	client  *http.Client
+	dropped atomic.Uint64
+	stop    chan struct{} // closed by Close
+	done    chan struct{} // closed when the loop has flushed and exited
+	once    sync.Once
 }
 
 func newExporter(endpoint string) *exporter {
@@ -249,6 +264,8 @@ func newExporter(endpoint string) *exporter {
 		url:    strings.TrimRight(endpoint, "/") + "/v1/traces",
 		ch:     make(chan span, 1024),
 		client: &http.Client{Timeout: 3 * time.Second},
+		stop:   make(chan struct{}),
+		done:   make(chan struct{}),
 	}
 	go e.loop(100, 2*time.Second)
 	return e
@@ -258,10 +275,25 @@ func (e *exporter) enqueue(s span) {
 	select {
 	case e.ch <- s:
 	default: // queue full: drop
+		e.dropped.Add(1)
+	}
+}
+
+// Close stops the loop after sending every queued span, waiting at most until
+// ctx ends. Safe to call more than once and on a nil exporter.
+func (e *exporter) Close(ctx context.Context) {
+	if e == nil || e.stop == nil {
+		return
+	}
+	e.once.Do(func() { close(e.stop) })
+	select {
+	case <-e.done:
+	case <-ctx.Done():
 	}
 }
 
 func (e *exporter) loop(maxBatch int, every time.Duration) {
+	defer close(e.done)
 	t := time.NewTicker(every)
 	defer t.Stop()
 	var batch []span
@@ -280,6 +312,19 @@ func (e *exporter) loop(maxBatch int, every time.Duration) {
 			}
 		case <-t.C:
 			flush()
+		case <-e.stop:
+			for { // drain what is queued, then send the rest
+				select {
+				case s := <-e.ch:
+					batch = append(batch, s)
+					if len(batch) >= maxBatch {
+						flush()
+					}
+				default:
+					flush()
+					return
+				}
+			}
 		}
 	}
 }
@@ -287,14 +332,19 @@ func (e *exporter) loop(maxBatch int, every time.Duration) {
 func (e *exporter) send(batch []span) {
 	body, err := json.Marshal(otlpPayload(batch))
 	if err != nil {
+		e.dropped.Add(uint64(len(batch)))
 		return
 	}
 	resp, err := e.client.Post(e.url, "application/json", bytes.NewReader(body))
 	if err != nil {
-		return // dropped
+		e.dropped.Add(uint64(len(batch)))
+		return
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	_ = resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		e.dropped.Add(uint64(len(batch)))
+	}
 }
 
 type kv map[string]any
@@ -385,6 +435,7 @@ func newObserver() *observer {
 	o.metrics = newMetrics(o.version, buildID(os.Getenv))
 	if ep := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); ep != "" {
 		o.exp = newExporter(ep)
+		o.metrics.spansDropped = o.exp.dropped.Load
 	}
 	return o
 }

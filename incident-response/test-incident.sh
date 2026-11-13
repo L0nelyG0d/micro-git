@@ -101,6 +101,27 @@ print(listener.run('$T/tmo', ['$T/slow.sh', '$T/tmo'], timeout=2))")
   check "timeout audited"              "grep -q command_timeout '$T/tmo/audit.jsonl'"
   check "child process was killed too" "! kill -0 \$(cat '$T/tmo/child.pid') 2>/dev/null"
 
+  echo "== run_limited fallback without timeout/gtimeout (N2)"
+  mkdir -p "$T/minbin"; for b in python3 sleep cat bash dirname; do ln -sf "$(command -v $b)" "$T/minbin/$b"; done
+  RL=$( PATH="$T/minbin" bash -c ". '$D/lib.sh'; ! command -v timeout >/dev/null && ! command -v gtimeout >/dev/null || exit 9; TMO=1 run_limited sleep 30; echo rc=\$?" 2>&1 )
+  check "fallback times out with rc 124 (no timeout binary)" "[ '$RL' = rc=124 ]"
+  RL=$( PATH="$T/minbin" bash -c ". '$D/lib.sh'; echo piped | TMO=5 run_limited cat" 2>&1 )
+  check "fallback passes stdin through" "[ '$RL' = piped ]"
+  echo "== probe audit line + token perms (N6, N5)"
+  mkdir -p "$T/vinc"; ( DRY_RUN=0 INCIDENTS_DIR="$T/vinc" PROBE_URL='http://127.0.0.1:1/x?token=SECRETQ' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc >/dev/null 2>&1 )
+  check "probe enabled is audited" "grep -q 'probe enabled' '$T/vinc/vinc/audit.jsonl'"
+  check "probe audit drops the query string" "! grep -q SECRETQ '$T/vinc/vinc/audit.jsonl'"
+  "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -f %Lp "$T/tok-new" 2>/dev/null || stat -c %a "$T/tok-new")"
+  check "make-token creates mode 600" "[ '$TM' = 600 ]"
+  echo "== listener audit with group-readable token (N5 regression)"
+  mkdir -p "$T/ltok"; echo dummy-not-a-secret > "$T/ltok/tok"; chmod 644 "$T/ltok/tok"
+  LW=$( ALERT_TOKEN_FILE="$T/ltok/tok" INCIDENTS_DIR="$T/ltok/inc" python3 -I -c "
+import sys; sys.path.insert(0, '$D'); import listener
+listener.gaudit('auth_rejected', 'x', 'reject'); listener.gaudit('auth_rejected', 'y', 'reject')" 2>&1 ); LRC=$?
+  check "gaudit with 644 token does not crash" "[ '$LRC' = 0 ]"
+  check "original audit lines are written" "[ \$(grep -c auth_rejected '$T/ltok/inc/listener-audit.jsonl') = 2 ]"
+  check "permission warning audited once" "[ \$(grep -c '\"config\"' '$T/ltok/inc/listener-audit.jsonl') = 1 ]"
+  check "permission warning printed to stderr" "echo '$LW' | grep -q 'chmod 600'"
   echo "== redaction failure drops content (fake python3)"
   mkdir -p "$T/badpy"; printf '#!/bin/sh\nexit 1\n' > "$T/badpy/python3"; chmod +x "$T/badpy/python3"
   PATH="$T/badpy:$PATH" EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" drill-badredact "$ROUTE" >/dev/null 2>&1
