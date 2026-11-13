@@ -254,3 +254,33 @@ Description: Remove the `t.Skip("pgx store returns the raw driver error here")` 
 ## 125. E2E journey script: enforce the console check and the layout render check
 Goal: `_docs/e2e/journey.js` reports FAIL when the console check documented in `_docs/e2e.md` fails or when the layout pass did not see rendered pages.
 Description: The script only collected console errors (status-only 401/404 filter, any URL) and returned them while all steps passed; the layout step checked only `scrollWidth`, so it passed with the backend down. Add a final "console clean" step with an exact status + URL-path allow-list, make the layout step assert expected page content, and return an overall PASS/FAIL verdict with counts. Label `user-test-bug`. Found in QA of #107.
+
+## Zoomcamp module 4 round (issues #161-#165 (proposed as #149-#153; those numbers were already taken by PRs))
+
+Groomed by the PM on 2026-11-12 from the module 4 brief. Status of all five: built on 2026-11-12, awaiting QA and review, not yet issues. The numbers #161-#165 are proposed and no GitHub issues exist yet.
+
+Dependencies: #162 needs #161; #163 needs #161 and #162; #164 needs #163; #165 needs #163 and #164.
+
+## 161. Backend observability: JSON logs, metrics, traces, fault injection
+Goal: The backend writes structured JSON logs with secrets redacted, serves Prometheus-format metrics at `GET /metrics`, emits OTLP/HTTP JSON trace spans with W3C `traceparent` propagation, and can return a 500 on demand through `FAULT_ENDPOINT_500`. Standard library only.
+Description: Files: `backend/observe.go` (new), `backend/handler.go`, `backend/static.go`, `_docs/openapi.yaml` (document `/metrics`), frontend `ApiService` gets a `metrics()` method. Keep the existing handler/middleware pattern; no new Go modules. Redaction covers passwords, tokens, cookies and Authorization headers. `FAULT_ENDPOINT_500` is off by default and names the endpoint it breaks. Status: built on 2026-11-12, awaiting QA and review, not yet issues.
+
+## 162. Observability stack under observability/
+Goal: `observability/` runs an OpenTelemetry collector, Prometheus, Loki, Tempo, Grafana and Alertmanager, so the logs, metrics and traces from #161 appear in Grafana after one compose command.
+Description: Files: `observability/` (`compose.yaml`, `collector.yaml`, `prometheus.yml`, `alerts.yaml`, `alertmanager.yml`, `loki.yaml`, `tempo.yaml`, `grafana/`, `dashboard.json`, `app-telemetry.yaml` as a compose override that points the backend at the collector, `README.md`). Depends on #161. Status: built on 2026-11-12, awaiting QA and review, not yet issues.
+
+## 163. Incident responder under incident-response/
+Goal: A listener receives an alert, collects an evidence packet, validates it against the response schema and the autonomy policy gate, runs the matching runbook action, verifies recovery, and writes an audit log. It runs as dry-run by default and has a recorded live drill.
+Description: Files: `incident-response/` (`listener.py`, `collect-evidence.sh`, `lib.sh`, `run-responder.sh`, `policy-check.py`, `autonomy-policy.yaml`, `response.schema.json`, `responder-task.md`, `runbooks/`, `incidents/`, `fixtures/`, `test-policy.sh`, `test-incident.sh`). Depends on #161 and #162. Any live action must pass the policy gate; dry-run is the default. Out of scope: remediation beyond the listed runbooks, which goes to a follow-up issue if wanted (not yet filed). Status: built on 2026-11-12, awaiting QA and review, not yet issues.
+
+## 164. Security audit under security-audit/
+Goal: A reproducible Semgrep run over backend and frontend writes findings that match `findings.schema.json`, and a capability table states what each component can reach.
+Description: Files: `security-audit/` (`run-audit.sh`, `audit-brief.md`, `findings.schema.json`, `capability-table.md`, `runs/`, `README.md`). Depends on #163, since the capability table covers the responder. Each finding is marked fixed, accepted (with reason) or false positive. No application code changes in this task; fixes go to follow-up issues (not yet filed). Status: built on 2026-11-12, awaiting QA and review, not yet issues.
+
+## 165. Operations and security report
+Goal: `docs/operations-and-security-report.md` lets a reviewer see how the system is observed, how incidents are handled, and what the security audit found and accepted.
+Description: File: `docs/operations-and-security-report.md` only. Links to `observability/README.md`, `incident-response/README.md`, `security-audit/README.md` and the audit runs. Depends on #163 and #164. Status: built on 2026-11-12, awaiting QA and review, not yet issues.
+
+## 160. Module 4 hardening follow-ups (from the Opus review of #161-#163)
+Goal: Close the non-blocking review findings deferred from #161-#163 so the responder and exporter are safe to leave running.
+Description: Issue #160, created 2026-11-12 after the review. (1) Global action cooldown across incidents: a lock plus `incidents/.last_action` checked in `policy-check.py` so flapping alerts or a listener restart cannot loop restarts (review finding 9). (2) Exporter: `otel_spans_dropped_total` counter, treat non-2xx as failure, flush the span queue on graceful shutdown (finding 16). (3) Align `responder-task.md` with the tools the headless agent really gets: `code_fix_pr` is propose-only text, no worktree (finding 19). (4) Decide whether `ApiService.metrics()` stays (contract test only, no UI caller) (finding 21). Depends on #161, #163.

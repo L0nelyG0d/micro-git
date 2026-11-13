@@ -27,3 +27,12 @@ resolving the issues.txt
 20[0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*.txt
 /scratch_bin
 /*.zip
+
+# Session transcripts (may contain credentials)
+2026-*-this-session-*.txt
+_docs/2026-*.txt
+
+# security audit raw outputs (may contain code excerpts) and caches
+security-audit/runs/*/
+__pycache__/
+incident-response/.alert-token

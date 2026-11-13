@@ -4,8 +4,8 @@ Taken on 2026-10-18 before any optimization (#48-#54). Each of those issues shou
 
 ## How it is measured
 
-- Every request logs one line: `[slow: ]METHOD <route pattern> <status> <ms>ms stmts=<n>`, for example `GET /repos/{owner}/{repo}/tree/{ref}/{path...} 200 0.2ms stmts=7`. The pattern is logged, not the raw path; no body, cookie or query value is logged. Requests over 500 ms get the `slow: ` prefix. Code: `backend/timing.go`
-- `stmts` counts the statements the pgx pool ran for the request (a pgx tracer on the pool, counting every traced query and batch query; transaction control statements are counted only if pgx reports them as queries)
+- Every request logs one JSON line (slog) with `trace_id`, `span_id`, `method`, `route` (the pattern, e.g. `/repos/{owner}/{repo}/tree/{ref}/{path...}`, not the raw path), `status`, `duration_ms`, `db_statements` and `version`; requests over 500 ms also carry `"slow":true`. No body, cookie or query value is logged. Code: `backend/observe.go` (the pgx tracer that counts statements is in `backend/timing.go`)
+- `db_statements` counts the statements the pgx pool ran for the request (a pgx tracer on the pool, counting every traced query and batch query; transaction control statements are counted only if pgx reports them as queries)
 - To reproduce: `cd backend && BASELINE=1 TEST_DATABASE_URL=<url> go test -run TestBaseline -v .` (the test builds a repo with a 50-commit `main`, a file 3 levels deep, and prints the table; median of 7 runs after a warm-up)
 
 Fixture: `main` has 50 commits; the tree has `README.md`, `a/b/x.txt`, `a/b/c/deep.txt` and the commit files. Merge fast-forwards a branch sitting at the root commit to the 50th commit (merge only fast-forwards in this app).
