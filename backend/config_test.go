@@ -179,3 +179,37 @@ func TestOpenStoreMemory(t *testing.T) {
 		t.Errorf("store is %T, want *memStore", st)
 	}
 }
+
+func TestLoadConfigMetricsAddr(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		port, addr string
+		wantErr    bool
+	}{
+		{"", "", false},
+		{"", "127.0.0.1:9100", false},
+		{"", ":9100", false},
+		{"", "127.0.0.1:8080", true},
+		{"", ":8080", true},
+		{"9090", "127.0.0.1:9090", true},
+		{"", "9100", true},
+	} {
+		env := map[string]string{"DATABASE_URL": "x", "JWT_SECRET": goodSecret, "PORT": tc.port, "METRICS_ADDR": tc.addr}
+		cfg, err := LoadConfig(func(k string) string { return env[k] })
+		if (err != nil) != tc.wantErr {
+			t.Errorf("PORT=%q METRICS_ADDR=%q: err %v, wantErr %v", tc.port, tc.addr, err, tc.wantErr)
+		}
+		if err == nil && cfg.MetricsAddr != tc.addr {
+			t.Errorf("MetricsAddr = %q, want %q", cfg.MetricsAddr, tc.addr)
+		}
+	}
+}
+
+func TestLoadConfigCookieSecureOddValueWarns(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{"DATABASE_URL": "x", "JWT_SECRET": goodSecret, "COOKIE_SECURE": "yes"}
+	cfg, err := LoadConfig(func(k string) string { return env[k] })
+	if err != nil || cfg.CookieSecure || len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "COOKIE_SECURE") {
+		t.Errorf("COOKIE_SECURE=yes: cfg %+v err %v", cfg, err)
+	}
+}
