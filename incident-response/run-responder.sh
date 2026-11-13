@@ -33,7 +33,9 @@ fi
 audit "$INC" responder_start "responder=$R"
 
 RAW="$INC/responder-raw.txt"; : > "$RAW"
-CLEAN=(env -i PATH="$PATH" HOME="$HOME" TERM=dumb ${ANTHROPIC_API_KEY:+ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"} ${OPENAI_API_KEY:+OPENAI_API_KEY="$OPENAI_API_KEY"})
+# USER is kept (not a secret): on macOS the claude CLI finds its keychain login by user name; without it a
+# subscription login reads "Not logged in" (drill 2026-11-13, #176).
+CLEAN=(env -i PATH="$PATH" HOME="$HOME" TERM=dumb ${USER:+USER="$USER"} ${ANTHROPIC_API_KEY:+ANTHROPIC_API_KEY="$ANTHROPIC_API_KEY"} ${OPENAI_API_KEY:+OPENAI_API_KEY="$OPENAI_API_KEY"})
 TMO="${RESPONDER_TIMEOUT:-300}"
 export TMO
 CLEANREPO=""; cleanup() { [ -n "$CLEANREPO" ] && rm -rf "$CLEANREPO" "$INC/.cleanrepo"; return 0; }; trap cleanup EXIT; trap 'cleanup; exit 143' INT TERM

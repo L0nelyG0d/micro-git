@@ -65,7 +65,7 @@ if [ $DRY -eq 1 ]; then
   echo "== model path isolation (fake claude on PATH)"
   mkdir -p "$T/fakebin"; cat > "$T/fakebin/claude" <<FAKE
 #!/usr/bin/env bash
-{ printf '%s\\n' "\$@"; echo "CWD=\$PWD"; ls .incident .incident/evidence 2>&1; [ -t 0 ] && echo STDIN_TTY || echo STDIN_NOT_TTY; } > "$T/fake.out"
+{ printf '%s\\n' "\$@"; echo "CWD=\$PWD"; echo "ENV_USER=\${USER:-}"; env | cut -d= -f1 | sed 's/^/ENVNAME=/'; ls .incident .incident/evidence 2>&1; [ -t 0 ] && echo STDIN_TTY || echo STDIN_NOT_TTY; } > "$T/fake.out"
 echo '{"incident_id":"x"}'
 FAKE
   chmod +x "$T/fakebin/claude"
@@ -78,6 +78,7 @@ FAKE
   cp -R "$INCIDENTS_DIR/drill-fake" "$INCIDENTS_DIR/drill-nomk"
   PATH="$T/nomkbin:$T/fakebin:$PATH" RESPONDER=claude "$D/run-responder.sh" drill-nomk "$ROUTE" >/dev/null 2>&1; NOMK=$?
   check "mktemp failure -> exit 1 + escalation packet, no model run" "[ $NOMK = 1 ] && [ -f '$INCIDENTS_DIR/drill-nomk/escalation-packet.json' ] && grep -q 'mktemp' '$INCIDENTS_DIR/drill-nomk/audit.jsonl'"
+  check "scrubbed env keeps USER (macOS keychain login), drops other vars" "[ -z \"\${USER:-}\" ] || { grep -qx \"ENV_USER=\$USER\" '$T/fake.out' && ! grep -qE '^ENVNAME=(INCIDENTS_DIR|COMPOSE_FILES|ALERT_TOKEN_FILE)$' '$T/fake.out'; }"
   check "model stdin is not a tty (/dev/null)" "grep -q STDIN_NOT_TTY '$T/fake.out'"
   echo "== compose arg validation"
   for bad in ":a.yml" "a.yml:" "a.yml::b.yml" "-f:b.yml" "a.yml:-x"; do
