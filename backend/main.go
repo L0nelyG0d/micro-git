@@ -10,16 +10,18 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 )
 
 const (
-	readHeaderTimeout = 10 * time.Second  // a client that cannot send headers in 10s is stalled
-	readTimeout       = 90 * time.Second  // a commit body can be up to 64 MiB
-	writeTimeout      = 90 * time.Second  // large diffs and trees take a while to send on slow links
-	idleTimeout       = 120 * time.Second // keep-alive connections are dropped after 2 minutes of silence
-	shutdownTimeout   = 10 * time.Second  // time given to in-flight requests on SIGINT / SIGTERM
+	readHeaderTimeout    = 10 * time.Second  // a client that cannot send headers in 10s is stalled
+	readTimeout          = 90 * time.Second  // a commit body can be up to 64 MiB
+	writeTimeout         = 90 * time.Second  // large diffs and trees take a while to send on slow links
+	idleTimeout          = 120 * time.Second // keep-alive connections are dropped after 2 minutes of silence
+	shutdownTimeout      = 10 * time.Second  // time given to in-flight requests on SIGINT / SIGTERM
+	exporterFlushTimeout = 3 * time.Second   // separate budget for flushing queued spans after the drain
 )
 
 func main() {
@@ -104,15 +106,26 @@ func main() {
 	log.Printf("shutting down")
 	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	// Shut both listeners down in parallel so a slow API drain does not keep /metrics up.
+	var wg sync.WaitGroup
+	if metricsSrv != nil {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if err := metricsSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Printf("metrics shutdown: %v", err)
+			}
+		}()
+	}
 	if err := httpSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Printf("shutdown: %v", err)
 	}
-	if metricsSrv != nil {
-		if err := metricsSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			log.Printf("metrics shutdown: %v", err)
-		}
-	}
-	srv.obs.exp.Close(shutCtx) // flush queued spans (nil-safe)
+	wg.Wait()
+	// Flush after the drain so spans from requests that were still in flight are
+	// included, with its own budget so a slow drain cannot starve the flush.
+	flushCtx, flushCancel := context.WithTimeout(context.Background(), exporterFlushTimeout)
+	defer flushCancel()
+	srv.obs.exp.Close(flushCtx) // nil-safe when the exporter is disabled
 	closeStore()
 }
 

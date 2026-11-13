@@ -13,6 +13,10 @@ services:
       DATABASE_URL: "postgres://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}?sslmode=disable"
       JWT_SECRET: "${JWT_SECRET:?set JWT_SECRET in .env (at least 32 bytes)}"
       COOKIE_SECURE: "${COOKIE_SECURE:-}"
+      # Empty = /metrics on the public port (collector scrapes app:8080). With
+      # COOKIE_SECURE=true /metrics is off unless this is set (e.g. 0.0.0.0:9100)
+      # AND observability/collector.yaml targets app:9100; do not publish that port.
+      METRICS_ADDR: "${METRICS_ADDR:-}"
       # Test stacks only: raise the per-IP register limit (empty = default 10).
       REGISTER_MAX_PER_IP: "${REGISTER_MAX_PER_IP:-}"
     depends_on:

@@ -410,6 +410,7 @@ type logWriter struct{}
 func (logWriter) Write(p []byte) (int, error) { return accessLogOut.Write(p) }
 
 func newObserver() *observer {
+	secure, _ := parseCookieSecure(os.Getenv("COOKIE_SECURE")) // warning is emitted by LoadConfig
 	o := &observer{
 		log:         newJSONLogger(logWriter{}),
 		version:     envOr("APP_VERSION", "dev"),
@@ -417,20 +418,19 @@ func newObserver() *observer {
 		metricsAddr: os.Getenv("METRICS_ADDR"),
 	}
 	if o.faultRte != "" {
-		if os.Getenv("COOKIE_SECURE") == "true" {
+		if secure {
 			o.log.Error("FAULT_ENDPOINT_500 refused: COOKIE_SECURE=true marks a production-like deployment", "route", o.faultRte)
 			o.faultRte = ""
 		} else {
 			o.log.Warn("FAULT_ENDPOINT_500 is set: this route answers 500 on purpose (incident drill only)", "route", o.faultRte)
 		}
 	}
-	secure := os.Getenv("COOKIE_SECURE") == "true"
 	o.metricsPublic = o.metricsAddr == "" && !secure
 	if o.metricsAddr == "" && secure {
 		o.log.Warn("metrics are disabled: COOKIE_SECURE=true (production) and METRICS_ADDR is empty; set METRICS_ADDR to serve /metrics on a private listener")
 	}
 	if o.metricsAddr != "" && secure && hostUnspecified(o.metricsAddr) {
-		o.log.Warn("METRICS_ADDR listens on all interfaces in a production deployment; bind it to a private address", "addr", o.metricsAddr)
+		o.log.Warn("METRICS_ADDR listens on all interfaces; fine inside a container if the port is not published, otherwise bind it to a private address", "addr", o.metricsAddr)
 	}
 	o.metrics = newMetrics(o.version, buildID(os.Getenv))
 	if ep := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); ep != "" {

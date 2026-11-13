@@ -54,7 +54,7 @@ Routing uses `net/http` patterns. Errors are JSON `{"error": "..."}`.
 | endpoint | auth | notes |
 |---|---|---|
 | `GET /health` | none | `200 OK` (plain text); `HEAD` answers `200` without a body |
-| `GET /metrics` | none | Prometheus text format. Exists on the public port only when `METRICS_ADDR` is unset and `COOKIE_SECURE` is not `true`; otherwise it is served on that separate listener only (see "Configuration and limits") |
+| `GET /metrics` | none | Prometheus text format. Exists on the public port only when `METRICS_ADDR` is unset and `COOKIE_SECURE` is not exactly `true`; otherwise it is served on the `METRICS_ADDR` listener only (or is disabled when that is unset) (see "Configuration and limits") |
 | `POST /auth/register` | none | `201`; `409` username taken; `400` password not 8 to 72 bytes or bad username; `429` more than 10 attempts per IP per 15 min |
 | `POST /auth/login` | none | sets the `session` and `known_device` cookies; token never in the body; `429` while throttled (see "Rate limiting") |
 | `POST /auth/logout` | none | clears the `session` and `known_device` cookies; works without one (never `401`) |
@@ -302,13 +302,13 @@ In-memory, standard library only; constants and their meaning are at the top of 
 | `DB_MAX_CONNS` | no | Postgres pool size (not used by SQLite or memory), 1 to 1000, default `10` |
 | `DB_STATEMENT_TIMEOUT` | no | Postgres `statement_timeout` per pooled connection, duration from `1ms` to `1h`, default `15s` |
 | `JWT_SECRET` | yes | HMAC key for the session JWT; at least 32 bytes, otherwise the process refuses to start |
-| `COOKIE_SECURE` | no | exactly `true` adds `Secure` to the session cookie |
+| `COOKIE_SECURE` | no | exactly `true` adds `Secure` to the session cookie; any other value is false, and values other than `true`/`false` log a config warning |
 | `PORT` | no | 1 to 65535, default `8080` |
 | `APP_VERSION` | no | version label in access logs and `build_info`, default `dev` |
 | `RENDER_GIT_COMMIT`, `APP_COMMIT` | no | commit label in `build_info`; the same id as the `X-Build` header (`buildID`), default `dev` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | when set, one span per request is sent to `<endpoint>/v1/traces` (OTLP/HTTP JSON) |
 | `FAULT_ENDPOINT_500` | no | route pattern (e.g. `/repos/{owner}/{repo}`) that answers 500 for incident drills; logs a WARN at startup, and is refused (ERROR logged, no fault) when `COOKIE_SECURE=true` |
-| `METRICS_ADDR` | no | e.g. `127.0.0.1:9100`; serves `/metrics` only on that listener (graceful shutdown with the main one) and removes it from the public mux. Unset and `COOKIE_SECURE` not `true`: `/metrics` is public on the app port (needed by the compose scrape) and exposes routes, traffic and version. Unset with `COOKIE_SECURE=true`: `/metrics` is disabled and a WARN is logged. A WARN is also logged when `METRICS_ADDR` has no host (`:9100`, `0.0.0.0`) under `COOKIE_SECURE=true` |
+| `METRICS_ADDR` | no | e.g. `127.0.0.1:9100`; serves `/metrics` only on that listener (graceful shutdown in parallel with the main one); its port must differ from `PORT` or startup is refused and removes it from the public mux. Unset and `COOKIE_SECURE` not `true`: `/metrics` is public on the app port (needed by the compose scrape) and exposes routes, traffic and version. Unset with `COOKIE_SECURE=true`: `/metrics` is disabled and a WARN is logged. A WARN is also logged when `METRICS_ADDR` has no host (`:9100`, `0.0.0.0`) under `COOKIE_SECURE=true` |
 | `TEST_DATABASE_URL` | for Postgres tests | separate database; Postgres-only tests are skipped without it |
 | `TEST_STORE` | no | tests only: `postgres`, `memory` or `sqlite`, the store the API suite runs on (default `postgres` if `TEST_DATABASE_URL` is set, else `sqlite`) |
 
