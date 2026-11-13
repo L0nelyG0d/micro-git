@@ -4,12 +4,13 @@
 # the free web service sleeps when idle and the free Postgres expires after 30 days.
 services:
   - type: web
-    name: mg
+    name: micro-git
     runtime: docker
     plan: free
     dockerContext: .
     dockerfilePath: ./Dockerfile
-    autoDeploy: true
+    # Off on purpose: the CI/E2E-gated deploy hook is the only deploy trigger.
+    autoDeploy: false
     healthCheckPath: /health
     envVars:
       - key: STORE
@@ -20,6 +21,8 @@ services:
         fromDatabase:
           name: mg-db
           property: connectionString
+      - key: APPLY_SCHEMA
+        value: "true"
       - key: JWT_SECRET
         generateValue: true
       - key: COOKIE_SECURE

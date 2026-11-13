@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"net"
 	"strconv"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -75,4 +77,39 @@ func isUniqueViolation(err error) bool {
 func isForeignKeyViolation(err error) bool {
 	var pgErr *pgconn.PgError
 	return errors.As(err, &pgErr) && pgErr.Code == "23503"
+}
+
+//go:embed db/schema.sql
+var schemaSQL string
+
+// schemaLockID is the advisory-lock key that serialises concurrent schema
+// applies (two instances starting at once).
+const schemaLockID = 7203001
+
+// ApplySchema runs the embedded db/schema.sql. The script is idempotent
+// (IF NOT EXISTS everywhere), so applying it to a ready database is a no-op.
+// It is one multi-statement simple-protocol query, so it runs in a single
+// implicit transaction: the transaction-scoped advisory lock and lock_timeout
+// cover all of it, so schema.sql must never contain BEGIN or COMMIT. The
+// advisory lock is taken first so waiting for another instance's apply is not
+// capped by lock_timeout (only the 60 second context cap applies); lock_timeout
+// then bounds waits for table locks.
+func ApplySchema(ctx context.Context, pool *pgxpool.Pool) error {
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	conn, err := pool.Acquire(ctx)
+	if err != nil {
+		return fmt.Errorf("apply schema: %s", dbErrorClass(err))
+	}
+	defer conn.Release()
+	script := fmt.Sprintf("SELECT pg_advisory_xact_lock(%d); SET LOCAL lock_timeout = '3s';\n", schemaLockID) + schemaSQL
+	if _, err := conn.Conn().PgConn().Exec(ctx, script).ReadAll(); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) {
+			// The server message names SQL objects, never the connection string.
+			return fmt.Errorf("apply schema: %s: %s", dbErrorClass(err), pgErr.Message)
+		}
+		return fmt.Errorf("apply schema: %s", dbErrorClass(err))
+	}
+	return nil
 }
