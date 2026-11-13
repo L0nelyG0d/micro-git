@@ -32,180 +32,39 @@ Schema is applied by the deploy step rather than in user data so there is a sing
 | Variable | `AWS_REGION` | no | Default `us-east-1` (the hand-made stack is in `ap-southeast-2`) |
 | Variable | `AWS_STACK_NAME` | no | Default `mg` |
 
-## One-time bootstrap checklist (you, in the AWS account)
+## One-time bootstrap (you, in the AWS account)
 
-Two roles keep privileges apart: a GitHub deploy role (small, assumed through OIDC) and a CloudFormation service role (holds the EC2/IAM/ECR rights and is only usable by CloudFormation). Neither is named `mg-*`, because the policies below let the service role manage only `mg-*` IAM roles and the stack's own roles must not be able to touch the deployers. Replace `<account-id>`; examples assume stack `mg` (adjust the names and ARNs if you change `AWS_STACK_NAME`).
+Honesty label: `bootstrap.sh` and `preflight.sh` are tested only offline (shellcheck, `bash -n`, a stubbed `aws`); they have never been run against a real AWS account. Read the dry-run output before using `--apply`, and never point them at an account you do not own.
 
-1. Pick the region (match `AWS_REGION`) and the stack name. Use a NEW stack name if you already have a hand-made stack (see Gotchas).
-2. IAM > Identity providers > Add provider: OpenID Connect, URL `https://token.actions.githubusercontent.com`, audience `sts.amazonaws.com`. (Skip if it already exists.)
-3. Create the permissions boundary policy `mg-instance-boundary` (once; the template attaches it to the instance role so the CloudFormation service role cannot use that role to escalate privileges). Save as `mg-instance-boundary.json` (replace `<account-id>`; `parameter/mg/jwt-secret` follows the stack name `mg`, change it with the stack name):
+Two roles keep privileges apart: a GitHub deploy role (small, assumed through OIDC) and a CloudFormation service role (holds the EC2/IAM/ECR rights and is only usable by CloudFormation, trust pinned with `aws:SourceAccount`). The role names are `cfn-deploy-<stack>` and `github-deploy-<stack>` (default stack `mg`). Neither is named `<stack>-*`, because the service role may manage only `<stack>-*` IAM roles, and the stack's own roles must not be able to touch the deployers.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {"Effect": "Allow",
-     "Action": ["ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability",
-                "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
-     "Resource": "*"},
-    {"Effect": "Allow",
-     "Action": ["ssm:UpdateInstanceInformation", "ssm:ListAssociations", "ssm:ListInstanceAssociations",
-                "ssm:UpdateInstanceAssociationStatus", "ssm:GetDocument", "ssm:DescribeDocument",
-                "ssm:GetManifest", "ssm:PutInventory", "ssm:PutComplianceItems",
-                "ssm:PutConfigurePackageResult", "ssmmessages:*", "ec2messages:*"],
-     "Resource": "*"},
-    {"Effect": "Allow", "Action": "ssm:GetParameter",
-     "Resource": "arn:aws:ssm:*:<account-id>:parameter/mg/jwt-secret",
-     "Condition": {"Null": {"ec2:SourceInstanceARN": "false"}}}
-  ]
-}
-```
+The exact JSON is in `deploy/aws/policies/` (single source of truth; `bootstrap.sh` substitutes `<ACCOUNT_ID>`, `<STACK_NAME>` and `<REPO>` into a temp dir):
 
-   The `Null` condition limits the secret read to credentials used from an EC2 instance. Create it:
+| File | What |
+| --- | --- |
+| `policies/mg-instance-boundary.json` | Customer-managed policy `mg-instance-boundary`: permissions boundary the template puts on the instance role (ECR pull, SSM agent, and `GetParameter` of `/<stack>/jwt-secret` only from EC2 credentials via `ec2:SourceInstanceARN`). The name is fixed because `main.yaml` references it. If it already exists the script leaves it unchanged. Never grant anyone `iam:CreatePolicyVersion` or `iam:SetDefaultPolicyVersion` on it. |
+| `policies/cfn-deploy-trust.json`, `policies/cfn-deploy-policy.json` | CloudFormation service role. IAM rights only for `<stack>-*` roles carrying the boundary (create, inline policy, delete, tag, attach/detach of the two AWS managed policies the template uses); EC2 limited to `t2.micro`/`t3.micro` and, for existing resources, to resources tagged with this stack. |
+| `policies/github-deploy-trust.json`, `policies/github-deploy-policy.json` | GitHub OIDC role: trust pinned to `repo:<REPO>:ref:refs/heads/main` with audience `sts.amazonaws.com`; policy is a starting point (tighten after the first successful run). |
 
-        aws iam create-policy --policy-name mg-instance-boundary --policy-document file://mg-instance-boundary.json
+Steps:
 
-   Never grant anyone (including `cfn-deploy-mg`) `iam:CreatePolicyVersion` or `iam:SetDefaultPolicyVersion` on it.
-4. Create the CloudFormation service role `cfn-deploy-mg`. Trust policy:
+1. Log in with your own credentials: `aws login` (or `aws sso login --profile NAME`).
+2. Check first (read-only, changes nothing): `deploy/aws/preflight.sh --region <region> --stack-name <stack>`. It verifies the identity, default VPC, `t3.micro`/`t2.micro` offering, whether a stack with that name exists (use a NEW stack name if the hand-made `mg` exists, see Gotchas), whether the roles and policies already exist, and which GitHub variables and secrets are set (names only).
+3. Review the plan: `deploy/aws/bootstrap.sh --region <region> --stack-name <stack>` (dry-run is the default; it prints the aws commands and runs no mutating call).
+4. Apply: `deploy/aws/bootstrap.sh --apply --region <region> --stack-name <stack>` (add `--profile NAME` if needed). It prints the account id and asks you to type it. It creates, in order and idempotently: the GitHub OIDC provider (if missing), `mg-instance-boundary` (if missing), `cfn-deploy-<stack>` with its policy, `github-deploy-<stack>` with its policy (existing roles get their trust and policy refreshed).
+5. Run the `gh` commands the script prints at the end (it does not run them):
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": {"Service": "cloudformation.amazonaws.com"},
-    "Action": "sts:AssumeRole"
-  }]
-}
-```
+        gh variable set AWS_ROLE_ARN --repo L0nelyG0d/micro-git --body <github-deploy ARN>
+        gh variable set AWS_CFN_ROLE_ARN --repo L0nelyG0d/micro-git --body <cfn-deploy ARN>
+        openssl rand -hex 32 | gh secret set AWS_JWT_SECRET --repo L0nelyG0d/micro-git
+        # only if not the defaults:
+        gh variable set AWS_STACK_NAME --repo L0nelyG0d/micro-git --body <stack>
+        gh variable set AWS_REGION --repo L0nelyG0d/micro-git --body <region>
 
-   Permissions policy (what the template creates: EC2 instance and security group, ECR repository, IAM role and instance profile). IAM rights are limited to `mg-*` roles that carry the `mg-instance-boundary` permissions boundary: create, inline policy, delete, tag, and attach/detach (attach/detach also only of the two AWS managed policies the template uses) all require the boundary condition. The role cannot create unbounded roles, change or remove the boundary, or create policy versions. EC2 changes are limited to `t2.micro`/`t3.micro` instances and, for existing resources, to those tagged with this stack's `aws:cloudformation:stack-name`:
+   Use a NEW random `AWS_JWT_SECRET`; do not reuse any value that was ever in the old template parameters, user data, chat or logs.
+6. Push to `main` (or re-run the Deploy workflow after CI and E2E pass). Watch the `deploy-aws` job; the first run takes several minutes (instance boot, image pull). If it fails, read the job log (the SSM step prints the instance command output); the job is safe to re-run.
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {"Effect": "Allow", "Action": "ec2:Describe*", "Resource": "*"},
-    {"Effect": "Allow", "Action": "ec2:RunInstances",
-     "Resource": "arn:aws:ec2:*:<account-id>:instance/*",
-     "Condition": {"StringEquals": {"ec2:InstanceType": ["t2.micro", "t3.micro"]}}},
-    {"Effect": "Allow", "Action": "ec2:RunInstances",
-     "Resource": ["arn:aws:ec2:*::image/*", "arn:aws:ec2:*:<account-id>:subnet/*",
-                  "arn:aws:ec2:*:<account-id>:security-group/*", "arn:aws:ec2:*:<account-id>:volume/*",
-                  "arn:aws:ec2:*:<account-id>:network-interface/*", "arn:aws:ec2:*:<account-id>:key-pair/*"]},
-    {"Effect": "Allow", "Action": ["ec2:CreateSecurityGroup"], "Resource": "*"},
-    {"Effect": "Allow", "Action": "ec2:CreateTags", "Resource": "*",
-     "Condition": {"StringEquals": {"ec2:CreateAction": ["RunInstances", "CreateSecurityGroup"]}}},
-    {"Effect": "Allow",
-     "Action": ["ec2:StopInstances", "ec2:StartInstances", "ec2:TerminateInstances",
-                "ec2:ModifyInstanceAttribute", "ec2:ModifyInstanceMetadataOptions",
-                "ec2:AssociateIamInstanceProfile", "ec2:CreateTags", "ec2:DeleteTags"],
-     "Resource": "arn:aws:ec2:*:<account-id>:instance/*",
-     "Condition": {"StringEquals": {"aws:ResourceTag/aws:cloudformation:stack-name": "mg"}}},
-    {"Effect": "Allow",
-     "Action": ["ec2:DeleteSecurityGroup", "ec2:AuthorizeSecurityGroupIngress", "ec2:RevokeSecurityGroupIngress",
-                "ec2:AuthorizeSecurityGroupEgress", "ec2:RevokeSecurityGroupEgress",
-                "ec2:CreateTags", "ec2:DeleteTags"],
-     "Resource": "arn:aws:ec2:*:<account-id>:security-group/*",
-     "Condition": {"StringEquals": {"aws:ResourceTag/aws:cloudformation:stack-name": "mg"}}},
-    {"Effect": "Allow",
-     "Action": ["ecr:CreateRepository", "ecr:DeleteRepository", "ecr:DescribeRepositories",
-                "ecr:PutLifecyclePolicy", "ecr:GetLifecyclePolicy", "ecr:DeleteLifecyclePolicy",
-                "ecr:PutImageScanningConfiguration", "ecr:PutImageTagMutability",
-                "ecr:ListTagsForResource", "ecr:TagResource", "ecr:ListImages", "ecr:BatchDeleteImage"],
-     "Resource": "arn:aws:ecr:*:<account-id>:repository/mg-*"},
-    {"Effect": "Allow",
-     "Action": ["iam:CreateRole", "iam:PutRolePolicy", "iam:PutRolePermissionsBoundary",
-                "iam:DeleteRole", "iam:DeleteRolePolicy", "iam:TagRole", "iam:UntagRole"],
-     "Resource": "arn:aws:iam::<account-id>:role/mg-*",
-     "Condition": {"StringEquals": {"iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/mg-instance-boundary"}}},
-    {"Effect": "Allow",
-     "Action": ["iam:AttachRolePolicy", "iam:DetachRolePolicy"],
-     "Resource": "arn:aws:iam::<account-id>:role/mg-*",
-     "Condition": {
-       "StringEquals": {"iam:PermissionsBoundary": "arn:aws:iam::<account-id>:policy/mg-instance-boundary"},
-       "ArnEquals": {"iam:PolicyARN": [
-         "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly",
-         "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"]}}},
-    {"Effect": "Allow",
-     "Action": ["iam:GetRole", "iam:GetRolePolicy", "iam:ListAttachedRolePolicies", "iam:ListRolePolicies",
-                "iam:ListInstanceProfilesForRole"],
-     "Resource": "arn:aws:iam::<account-id>:role/mg-*"},
-    {"Effect": "Allow",
-     "Action": ["iam:CreateInstanceProfile", "iam:DeleteInstanceProfile", "iam:GetInstanceProfile",
-                "iam:AddRoleToInstanceProfile", "iam:RemoveRoleFromInstanceProfile"],
-     "Resource": "arn:aws:iam::<account-id>:instance-profile/mg-*"},
-    {"Effect": "Allow", "Action": "iam:PassRole",
-     "Resource": "arn:aws:iam::<account-id>:role/mg-*",
-     "Condition": {"StringEquals": {"iam:PassedToService": "ec2.amazonaws.com"}}}
-  ]
-}
-```
-
-5. Create the GitHub deploy role `github-deploy-mg`. Trust policy (restricted to this repository and `main`):
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [{
-    "Effect": "Allow",
-    "Principal": {"Federated": "arn:aws:iam::<account-id>:oidc-provider/token.actions.githubusercontent.com"},
-    "Action": "sts:AssumeRoleWithWebIdentity",
-    "Condition": {
-      "StringEquals": {
-        "token.actions.githubusercontent.com:aud": "sts.amazonaws.com",
-        "token.actions.githubusercontent.com:sub": "repo:L0nelyG0d/micro-git:ref:refs/heads/main"
-      }
-    }
-  }]
-}
-```
-
-   Permissions policy (a starting point; tighten after the first successful run):
-
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {"Effect": "Allow",
-     "Action": ["cloudformation:CreateChangeSet", "cloudformation:DescribeChangeSet",
-                "cloudformation:ExecuteChangeSet", "cloudformation:DeleteChangeSet",
-                "cloudformation:ListChangeSets", "cloudformation:DescribeStacks",
-                "cloudformation:DescribeStackEvents", "cloudformation:DescribeStackResource",
-                "cloudformation:GetTemplate"],
-     "Resource": "arn:aws:cloudformation:*:<account-id>:stack/mg/*"},
-    {"Effect": "Allow", "Action": "cloudformation:GetTemplateSummary", "Resource": "*"},
-    {"Effect": "Allow", "Action": "iam:PassRole",
-     "Resource": "arn:aws:iam::<account-id>:role/cfn-deploy-mg",
-     "Condition": {"StringEquals": {"iam:PassedToService": "cloudformation.amazonaws.com"}}},
-    {"Effect": "Allow", "Action": "ecr:GetAuthorizationToken", "Resource": "*"},
-    {"Effect": "Allow",
-     "Action": ["ecr:BatchCheckLayerAvailability", "ecr:InitiateLayerUpload", "ecr:UploadLayerPart",
-                "ecr:CompleteLayerUpload", "ecr:PutImage", "ecr:BatchGetImage"],
-     "Resource": "arn:aws:ecr:*:<account-id>:repository/mg-app"},
-    {"Effect": "Allow", "Action": "ssm:PutParameter",
-     "Resource": "arn:aws:ssm:*:<account-id>:parameter/mg/jwt-secret"},
-    {"Effect": "Allow", "Action": "ssm:GetParameter",
-     "Resource": "arn:aws:ssm:*::parameter/aws/service/ami-amazon-linux-latest/*"},
-    {"Effect": "Allow", "Action": "ec2:DescribeInstances", "Resource": "*"},
-    {"Effect": "Allow", "Action": "ssm:SendCommand",
-     "Resource": "arn:aws:ssm:*::document/AWS-RunShellScript"},
-    {"Effect": "Allow", "Action": "ssm:SendCommand",
-     "Resource": "arn:aws:ec2:*:<account-id>:instance/*",
-     "Condition": {"StringEquals": {"ssm:resourceTag/aws:cloudformation:stack-name": "mg"}}},
-    {"Effect": "Allow",
-     "Action": ["ssm:GetCommandInvocation", "ssm:ListCommandInvocations", "ssm:DescribeInstanceInformation"],
-     "Resource": "*"},
-    {"Effect": "Deny", "Action": "cloudformation:CreateChangeSet", "Resource": "*",
-     "Condition": {"Null": {"cloudformation:ImportResourceTypes": "false"}}}
-  ]
-}
-```
-
-6. GitHub > repository Settings > Secrets and variables > Actions: add variables `AWS_ROLE_ARN` (`github-deploy-mg` ARN) and `AWS_CFN_ROLE_ARN` (`cfn-deploy-mg` ARN), secret `AWS_JWT_SECRET`, and optionally variables `AWS_REGION`, `AWS_STACK_NAME`. Generate a NEW `AWS_JWT_SECRET` with `openssl rand -hex 32`; do not reuse any value that was ever in the old template parameters, user data, chat or logs.
-7. Make sure the account has a default VPC in that region (the template relies on it) and has EC2 capacity/quotas for a `t3.micro`.
-8. Push to `main` (or re-run the Deploy workflow after CI and E2E pass). Watch the `deploy-aws` job; the first run takes several minutes (instance boot, image pull).
-9. If it fails, read the job log (the SSM step prints the instance command output) and fix; the job is safe to re-run.
+Manual equivalent: the same IAM objects can be created in the console from the JSON files (replace the placeholders by hand). The account also needs a default VPC in the region and EC2 capacity for a `t3.micro`.
 
 `DomainName` is not passed by CI, and `aws cloudformation deploy` keeps the previous value of parameters it is not given, so a domain set by a manual deploy is not dropped by later CI runs. The AMI is passed on every run (see step 4 above).
 
@@ -277,7 +136,7 @@ Deferred review findings (no backups, hardening, and other follow-ups) are track
 Also deferred to #166:
 
 - Stale DNS after a stop/start when `DomainName` is used (no Elastic IP).
-- `aws:SourceAccount` / `aws:SourceArn` condition on the CloudFormation service role trust policy.
+- `aws:SourceArn` on the CloudFormation service role trust policy (`aws:SourceAccount` is now set).
 - Scoping the IAM roles by `Path`.
 - Restricting the OIDC trust further (GitHub environment or `job_workflow_ref` condition).
 - Remaining EC2 rights are account-wide where AWS does not support tag conditions (for example `ec2:CreateSecurityGroup`, `ec2:Describe*`, `ec2:RunInstances` on non-instance resources). The account must not host other, more privileged instances or roles that the service role could pass or affect.
