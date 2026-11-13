@@ -310,3 +310,9 @@ Description: Issue #170, created 2026-11-13. `backend/config.go` (compare `net.L
 ## 171. Incident responder: notes from the #160 review
 Goal: The responder's timeout fallback cannot orphan a child, and the cooldown fails closed on unreadable state.
 Description: Issue #171, created 2026-11-13. `incident-response/lib.sh` (forward SIGTERM/SIGHUP), `policy-check.py` (only a missing `.last_action` counts as free; future timestamps), `make-token.sh` ownership on Linux, README wording, credentials in the probe audit line, test gaps, and the `ApiService.metrics()` decision. Depends on #160.
+
+## Structure round (issues #174-#175)
+
+## 174. Remove unused deployment targets (Railway, GCP, Vercel); keep Render and AWS
+Goal: Only the deployments in use remain: Render (deploy hook pinned with `ref=<sha>`, `smoke` on `X-Build`) and AWS (`deploy-aws-keys`, `deploy/aws/`). Railway, GCP and Vercel are gone from the workflow, `deploy/` and the docs.
+Description: Issue #174, created 2026-11-13. Deleted `deploy/railway.json`, `deploy/gcp/`, `deploy/vercel/` and the drafts `_docs/issues/07`, `08`, `10`. `.github/workflows/deploy.yml` loses the `deploy-railway`, `deploy-gcp` and `deploy-vercel-frontend` jobs and the gate's `railway`, `gcp`, `vercel` outputs and env; `gate`, `deploy-render`, `deploy-aws`, `deploy-aws-keys` and `smoke` are unchanged except a comment marking `deploy-aws` (OIDC) optional, since the org SCP blocks the OIDC provider in this account. `deploy/aws/` scripts and `deploy/render.yaml` are untouched. Docs rewritten to Render + AWS: `deploy/README.md`, `docs/deployment.md` (new), `_docs/deploy-runbook.md`, `_docs/README.md`, `_docs/plan.md`, `_docs/questions.md`. No GitHub secrets or variables existed for the removed targets. Out of scope: repo layout and doc consolidation (#175), any AWS change.
