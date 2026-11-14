@@ -114,17 +114,23 @@ def last_action_path(inc):
 
 
 def cooldown_left(inc, policy):
-    """Seconds left of the global cooldown (0 = free). A missing/garbled file is 'free'; a timestamp in the future counts as now."""
+    """Seconds left of the global cooldown (0 = free). Only a missing file (FileNotFoundError) or garbled content is 'free';
+    any other read error (permissions, I/O) fails closed with the full cooldown. A timestamp in the future keeps the cooldown
+    running until ts + cooldown, and the reported seconds are exactly that."""
     cd = cooldown_seconds(policy)
     if cd <= 0:
         return 0
     try:
         ts = float(open(last_action_path(inc)).read().split()[0])
-    except (OSError, ValueError, IndexError):
+    except FileNotFoundError:
+        return 0
+    except OSError:
+        return cd   # unreadable state: cannot prove the cooldown is over -> fail closed
+    except (ValueError, IndexError):
         return 0
     if not math.isfinite(ts):
         return 0   # nan/inf: treat like garbage, "no previous action"
-    return max(0, int(cd - (time.time() - min(ts, time.time())) + 0.999))
+    return max(0, int(cd - (time.time() - ts) + 0.999))
 
 
 def claim_cooldown(inc, policy):

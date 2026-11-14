@@ -107,6 +107,15 @@ print(listener.run('$T/tmo', ['$T/slow.sh', '$T/tmo'], timeout=2))")
   check "fallback times out with rc 124 (no timeout binary)" "[ '$RL' = rc=124 ]"
   RL=$( PATH="$T/minbin" bash -c ". '$D/lib.sh'; echo piped | TMO=5 run_limited cat" 2>&1 )
   check "fallback passes stdin through" "[ '$RL' = piped ]"
+  for SIG in TERM HUP; do   # a signal to the wrapper must reach the child (own session) and exit 128+N
+    rm -f "$T/sig.pid" "$T/sig.rc"
+    printf 'echo "$$ $PPID" > "%s/sig.pid"\nexec sleep 60\n' "$T" > "$T/sigchild.sh"   # child records its pid and the wrapper's pid
+    ( PATH="$T/minbin" bash -c ". '$D/lib.sh'; TMO=60 run_limited bash '$T/sigchild.sh'" >/dev/null 2>&1; echo $? > "$T/sig.rc" ) &
+    BG=$!; for _ in $(seq 1 20); do [ -s "$T/sig.pid" ] && break; sleep 0.3; done
+    read -r CP WP < "$T/sig.pid"; kill -$SIG "$WP" 2>/dev/null; wait "$BG" 2>/dev/null; sleep 0.5
+    check "fallback: SIG$SIG kills the child" "! kill -0 $CP 2>/dev/null"
+    check "fallback: SIG$SIG exits 128+N" "[ \"\$(cat '$T/sig.rc')\" = $([ $SIG = TERM ] && echo 143 || echo 129) ]"
+  done
   echo "== probe audit line + token perms (N6, N5)"
   mkdir -p "$T/vinc"; ( DRY_RUN=0 INCIDENTS_DIR="$T/vinc" PROBE_URL='http://127.0.0.1:1/x?token=SECRETQ' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc >/dev/null 2>&1 )
   check "probe enabled is audited" "grep -q 'probe enabled' '$T/vinc/vinc/audit.jsonl'"

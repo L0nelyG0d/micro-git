@@ -56,6 +56,15 @@ for bad in nan inf -inf NaN; do   # non-finite timestamp = no previous action (n
   echo "$bad x" > "$CD/.last_action"; rm -f "$CD/c/action.lock" "$CD/c/decision.json"
   [ "$(cdrun c 300 --no-claim)" = 0 ] && { pass=$((pass+1)); echo "ok   cooldown: .last_action '$bad' treated as free"; } || { fail=$((fail+1)); echo "FAIL cooldown non-finite $bad"; }
 done
+# unreadable .last_action fails closed (only "not found" is free); skipped as root, which can read mode 000
+if [ "$(id -u)" != 0 ]; then
+  rm -f "$CD/c/action.lock" "$CD/c/decision.json"; echo "$(date +%s) x" > "$CD/.last_action"; chmod 000 "$CD/.last_action"
+  [ "$(cdrun c 300)" = 3 ] && [ ! -f "$CD/c/action.lock" ] && grep -q 'global action cooldown' "$CD/c/decision.json" && { pass=$((pass+1)); echo "ok   cooldown: unreadable .last_action fails closed"; } || { fail=$((fail+1)); echo "FAIL cooldown unreadable"; }
+  chmod 600 "$CD/.last_action"
+fi
+# future-dated stamp: the reported wait equals the enforced wait (ts - now + cooldown), not the bare cooldown
+rm -f "$CD/c/action.lock" "$CD/c/decision.json"; echo "$(( $(date +%s) + 3600 )) x" > "$CD/.last_action"
+[ "$(cdrun c 300 --no-claim)" = 3 ] && W="$(jq -r '.reasons[0]' "$CD/c/decision.json" | sed -n 's/.*(\([0-9]*\)s left).*/\1/p')" && [ "${W:-0}" -ge 3890 ] && [ "$W" -le 3900 ] && { pass=$((pass+1)); echo "ok   cooldown: future stamp reports the real wait ($W s)"; } || { fail=$((fail+1)); echo "FAIL cooldown future stamp (W=${W:-})"; }
 # a crash inside policy-check must exit 1 (not 0/3) and leave an audit line
 mkdir -p "$T/crash"; echo '{}' > "$T/crash/response.json"; echo '{broken' > "$T/crash/bad-policy.json"
 python3 -I "$D/policy-check.py" "$T/crash" --policy "$T/crash/bad-policy.json" >/dev/null 2>&1; rc=$?
