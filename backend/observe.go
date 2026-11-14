@@ -409,13 +409,25 @@ type logWriter struct{}
 
 func (logWriter) Write(p []byte) (int, error) { return accessLogOut.Write(p) }
 
-func newObserver() *observer {
-	secure, _ := parseCookieSecure(os.Getenv("COOKIE_SECURE")) // warning is emitted by LoadConfig
+// observerConfig carries the two Config values the observer needs, so
+// METRICS_ADDR and COOKIE_SECURE are read once (in LoadConfig).
+type observerConfig struct {
+	MetricsAddr  string
+	CookieSecure bool
+}
+
+// observerConfig returns the observer's share of the loaded config.
+func (c Config) observerConfig() observerConfig {
+	return observerConfig{MetricsAddr: c.MetricsAddr, CookieSecure: c.CookieSecure}
+}
+
+func newObserver(oc observerConfig) *observer {
+	secure := oc.CookieSecure
 	o := &observer{
 		log:         newJSONLogger(logWriter{}),
 		version:     envOr("APP_VERSION", "dev"),
 		faultRte:    os.Getenv("FAULT_ENDPOINT_500"),
-		metricsAddr: os.Getenv("METRICS_ADDR"),
+		metricsAddr: oc.MetricsAddr,
 	}
 	if o.faultRte != "" {
 		if secure {

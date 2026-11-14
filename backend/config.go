@@ -103,7 +103,8 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if port == "" {
 		port = "8080"
 	}
-	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
 		return Config{}, fmt.Errorf("PORT must be a number from 1 to 65535, got %q", port)
 	}
 	store := getenv("STORE")
@@ -152,7 +153,14 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("METRICS_ADDR must be host:port such as \"127.0.0.1:9100\", got %q", metricsAddr)
 		}
-		if mport == port {
+		// Compare resolved numbers, not strings: "08080", "+8080" and named
+		// ports such as "http" all name a port that may equal PORT.
+		mnum, err := net.LookupPort("tcp", mport)
+		if err != nil || mnum < 1 || mnum > 65535 {
+			// Port 0 or an empty port would bind a random port silently.
+			return Config{}, fmt.Errorf("METRICS_ADDR port must be a service name or a number from 1 to 65535, got %q", mport)
+		}
+		if mnum == portNum {
 			// BSD/macOS accepts a loopback bind on the public port and would shadow the API.
 			return Config{}, fmt.Errorf("METRICS_ADDR port %s must differ from PORT", mport)
 		}
@@ -171,7 +179,7 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		SQLitePath:   sqlitePath,
 		Warnings:     warnings,
 		Pool:         pool,
-		Addr:         ":" + port,
+		Addr:         ":" + strconv.Itoa(portNum),
 		DatabaseURL:  dbURL,
 		JWTSecret:    secret,
 		CookieSecure: secure,

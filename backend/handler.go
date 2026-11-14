@@ -29,9 +29,16 @@ func (s *Server) testHook(point string) {
 	}
 }
 
-// NewServer builds a Server with the real clock.
-func NewServer(store Store) *Server {
-	s := &Server{Store: store, Now: time.Now, obs: newObserver()}
+// NewServer builds a Server with the real clock. The observer settings come
+// from LoadConfig (main passes cfg.observerConfig()); without an argument they
+// are zero (METRICS_ADDR unset, COOKIE_SECURE off), so no environment read of
+// those two variables happens here.
+func NewServer(store Store, oc ...observerConfig) *Server {
+	var c observerConfig
+	if len(oc) > 0 {
+		c = oc[0]
+	}
+	s := &Server{Store: store, Now: time.Now, obs: newObserver(c)}
 	// The limiter reads s.Now at call time so a test can swap the clock.
 	s.limiter = newLimiter(func() time.Time { return s.Now() })
 	return s
