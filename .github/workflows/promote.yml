@@ -1,0 +1,250 @@
+# Promote to production (AWS). Manual only: Actions > Promote to production > Run workflow
+# on main, or: gh workflow run promote.yml --ref main -f sha=<sha>
+#
+# Dev (Render) deploys automatically on every green push to main (deploy.yml). Production
+# changes only here. Jobs run in this order:
+#   resolve  no environment, no secrets: pick the commit and check it (main only, ancestor of
+#            origin/main, CI and E2E green, equals what dev serves unless a sha was typed)
+#   approve  environment "production": a required reviewer approves the exact sha
+#   deploy   environment "aws-prod" (holds the IAM-user key, main only): deploy/aws/deploy.sh --ci
+#   verify   re-reads dev; checks prod X-Build when the repository variable PROD_URL is set
+# Anything that fails in resolve or a rejected approval stops before AWS is touched.
+name: Promote to production
+
+on:
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: "Commit to promote (40 hex). Empty = the commit dev serves now"
+        type: string
+        required: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: promote-production
+  cancel-in-progress: false
+
+jobs:
+  resolve:
+    name: Resolve and check the commit to promote
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      sha: ${{ steps.choose.outputs.sha }}
+      typed: ${{ steps.choose.outputs.typed }}
+      dev_build: ${{ steps.dev.outputs.build }}
+    env:
+      DEV_URL: ${{ vars.APP_URL || 'https://micro-git.onrender.com' }}
+    steps:
+      - name: Run only from main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::Run this workflow from main (started from $REF)."
+            exit 1
+          fi
+
+      - name: Read the build dev serves (X-Build)
+        id: dev
+        run: |
+          # Render free sleeps; allow about 3 minutes for a cold start.
+          base="${DEV_URL%/}"
+          build=""
+          for i in $(seq 1 12); do
+            hdrs="$(curl -sS -D - -o /dev/null --connect-timeout 10 --max-time 60 "$base/health" || true)"
+            code="$(printf '%s' "$hdrs" | head -n1 | tr -d '\r' | awk '{print $2}')"
+            build="$(printf '%s' "$hdrs" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-build"{print $2}')"
+            echo "dev health: HTTP ${code:-none}, X-Build ${build:-none} (attempt $i)"
+            if [ "$code" = "200" ] && [ -n "$build" ]; then break; fi
+            build=""
+            sleep 15
+          done
+          echo "build=$build" >> "$GITHUB_OUTPUT"
+
+      - name: Choose the commit
+        id: choose
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
+          DEV_BUILD: ${{ steps.dev.outputs.build }}
+        run: |
+          if [ -n "$INPUT_SHA" ]; then
+            sha="$INPUT_SHA"; typed=true
+          else
+            sha="$DEV_BUILD"; typed=false
+            if [ -z "$sha" ]; then
+              echo "::error::No sha given and dev did not report a build. Pass the sha input."
+              exit 1
+            fi
+          fi
+          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+            echo "::error::The commit must be 40 lowercase hex characters (got a different format)."
+            exit 1
+          fi
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "typed=$typed" >> "$GITHUB_OUTPUT"
+          echo "promoting $sha (typed=$typed)"
+
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: The commit exists and is an ancestor of origin/main
+        env:
+          SHA: ${{ steps.choose.outputs.sha }}
+        run: |
+          git cat-file -e "$SHA^{commit}" || { echo "::error::Commit $SHA does not exist in this repository."; exit 1; }
+          git merge-base --is-ancestor "$SHA" origin/main \
+            || { echo "::error::Commit $SHA is not on main."; exit 1; }
+          echo "ok: $SHA is on main"
+
+      - name: Both CI and E2E succeeded for this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SHA: ${{ steps.choose.outputs.sha }}
+        run: |
+          ready=true
+          for wf in ci.yml e2e.yml; do
+            c="$(gh run list --repo "$GITHUB_REPOSITORY" --workflow "$wf" --commit "$SHA" \
+                 --event push --limit 5 --json conclusion,status \
+                 --jq 'map(select(.status == "completed")) | .[0].conclusion // "none"')"
+            echo "$wf: $c"
+            [ "$c" = "success" ] || ready=false
+          done
+          if [ "$ready" != "true" ]; then
+            echo "::error::CI and E2E must both be green for $SHA."
+            exit 1
+          fi
+
+      - name: Compare with what dev serves
+        env:
+          SHA: ${{ steps.choose.outputs.sha }}
+          TYPED: ${{ steps.choose.outputs.typed }}
+          DEV_BUILD: ${{ steps.dev.outputs.build }}
+        run: |
+          if [ "$TYPED" = "false" ]; then
+            # The default is the commit dev serves, so this holds by construction; assert anyway.
+            [ "$DEV_BUILD" = "$SHA" ] || { echo "::error::Dev serves ${DEV_BUILD:-nothing}, not $SHA."; exit 1; }
+            echo "ok: dev serves $SHA"
+          elif [ "$DEV_BUILD" = "$SHA" ]; then
+            echo "ok: dev serves $SHA"
+          else
+            echo "::notice::Dev serves ${DEV_BUILD:-nothing (not reachable)}; promoting $SHA (rollback or skip-ahead)."
+          fi
+
+      - name: Summary
+        env:
+          SHA: ${{ steps.choose.outputs.sha }}
+          DEV_BUILD: ${{ steps.dev.outputs.build }}
+        run: |
+          {
+            echo "### Promote to production"
+            echo
+            echo "- sha: \`$SHA\`"
+            echo "- subject: $(git log -1 --format=%s "$SHA")"
+            echo "- dev build: \`${DEV_BUILD:-unreachable}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  approve:
+    name: Approve (required reviewer on environment production)
+    needs: resolve
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # The required reviewer is configured on this environment by the repository owner.
+    # This job has no secrets and changes nothing; the run pauses here until approval.
+    environment: production
+    permissions:
+      contents: read
+    steps:
+      - name: Approved commit
+        env:
+          SHA: ${{ needs.resolve.outputs.sha }}
+        run: |
+          echo "approved for production: $SHA"
+
+  deploy:
+    # Same deploy as deploy/aws/deploy.sh run locally, with the dedicated IAM user
+    # github-deploy-micro-git-prod-user (created by deploy/aws/bootstrap.sh --ci-user; its key is
+    # piped straight into these two secrets).
+    # deploy.sh --ci skips preflight/bootstrap (the user has no IAM rights), creates and executes
+    # the guarded change set through role cfn-deploy-micro-git-prod, builds and pushes the image of
+    # this exact commit, rolls it out through SSM with APP_COMMIT (and APP_ENV=prod), then checks
+    # X-Build == this sha, / 200, /api/repos 200 and /api/auth/me 401 on prod. Region and stack are
+    # fixed in the script. It stops at the first failing step; automatic container rollback is #182.
+    name: Deploy to AWS (deploy.sh, IAM user keys)
+    needs: [resolve, approve]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    # The key is an environment secret: environment aws-prod only accepts deployments from main,
+    # so workflows on other branches cannot read it.
+    environment: aws-prod
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ needs.resolve.outputs.sha }}
+          persist-credentials: false
+      # The static key goes only into this step's environment (no third-party action handles it).
+      - name: deploy/aws/deploy.sh --apply --ci
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: ap-southeast-2
+          MG_AWS_ACCOUNT: ${{ vars.AWS_ACCOUNT_ID }}
+          HEAD_SHA: ${{ needs.resolve.outputs.sha }}
+        run: deploy/aws/deploy.sh --apply --ci --ref "$HEAD_SHA"
+
+  verify:
+    # The prod URL is the stack output AppUrl, which needs AWS credentials to read, so this job
+    # (no environment, no secrets) does not look it up. deploy.sh has already checked prod
+    # (X-Build == sha, /, /api/repos, /api/auth/me) inside the deploy job. If the repository
+    # variable PROD_URL is set, this job also requires X-Build == sha on $PROD_URL/health.
+    name: Verify (X-Build on dev and prod)
+    needs: [resolve, deploy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      SHA: ${{ needs.resolve.outputs.sha }}
+      DEV_URL: ${{ vars.APP_URL || 'https://micro-git.onrender.com' }}
+      PROD_URL: ${{ vars.PROD_URL }}
+    steps:
+      - name: Read X-Build on dev and, when PROD_URL is set, on prod
+        run: |
+          xbuild() {
+            curl -sS -D - -o /dev/null --connect-timeout 10 --max-time 60 "${1%/}/health" 2>/dev/null \
+              | tr -d '\r' | awk -F': ' 'tolower($1)=="x-build"{print $2}' || true
+          }
+          dev="$(xbuild "$DEV_URL")"
+          echo "dev X-Build: ${dev:-none}"
+          if [ -n "$PROD_URL" ]; then
+            prod=""
+            for i in 1 2 3 4 5 6; do
+              prod="$(xbuild "$PROD_URL")"
+              echo "prod X-Build: ${prod:-none} (want $SHA, attempt $i)"
+              [ "$prod" = "$SHA" ] && break
+              sleep 10
+            done
+            if [ "$prod" != "$SHA" ]; then
+              echo "::error::Prod reports X-Build ${prod:-none}, expected $SHA."
+              exit 1
+            fi
+            prodnote="prod = $SHA (checked here and by deploy.sh)"
+          else
+            prodnote="prod = $SHA (checked by deploy.sh; set the variable PROD_URL to check it here as well)"
+          fi
+          {
+            echo "### Promotion verified"
+            echo
+            echo "- $prodnote"
+            echo "- dev = ${dev:-unreachable}"
+          } >> "$GITHUB_STEP_SUMMARY"
