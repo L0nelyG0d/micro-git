@@ -31,8 +31,8 @@ Dockerfile            3 stages: Node builds frontend/dist, Go builds mg-server, 
 docker-compose.yml    app + Postgres 16 (local stack and the E2E stack)
 Makefile              setup, run, test, lint, build targets (`make help`)
 .github/workflows/    ci.yml (gates), e2e.yml (Playwright + SQLite smoke),
-                      deploy.yml (gate, deploy-render, smoke, deploy-aws-keys = production AWS,
-                      deploy-aws = optional OIDC variant, dormant)
+                      deploy.yml (gate, deploy-render, smoke: dev = Render, every green push),
+                      promote.yml (resolve, approve, deploy, verify: prod = AWS, manual)
 
 backend/              Go API, one `package main`, stdlib router (net/http patterns); module in go.mod
   main.go, config.go, build.go                      startup, env config, X-Build header
@@ -61,7 +61,7 @@ scripts/              test-matrix.sh, pgurl.sh, test-pgurl.sh, smoke-sqlite.sh
 
 deploy/               README.md (CD overview), render.yaml (Blueprint; its path is set in the Render
                       dashboard), render/README.md, aws/ (main.yaml, deploy.sh = production path run
-                      by CI, destroy.sh, bootstrap.sh, preflight.sh, remote-deploy.sh, policies/)
+                      by promote.yml, destroy.sh, bootstrap.sh, preflight.sh, remote-deploy.sh, policies/)
 observability/        collector, Prometheus, Loki, Tempo, Grafana, Alertmanager: a local compose overlay,
                       not deployed
 incident-response/    alert listener, evidence collection, autonomy policy, responder, runbooks/, tests;
@@ -113,13 +113,13 @@ Index with status: [`_docs/decisions/README.md`](../decisions/README.md). All ei
 - ADR 0001 backend package split (#191): no split now
 - ADR 0002 Go module path (#192): keep
 - ADR 0003 ops and deploy directory moves (#195): no moves
-- ADR 0004 production topology and data (#196): Render = dev, AWS = prod; applied in #201, backups in #182
-- ADR 0005 AWS OIDC job (#197): the job goes with the automatic AWS deploy in #201; OIDC stays in `bootstrap.sh`
+- ADR 0004 production topology and data (#196): Render = dev, AWS = prod; applied in #201 (promotion workflow), backups in #182
+- ADR 0005 AWS OIDC job (#197): the job was removed with the automatic AWS deploy in #201; OIDC stays in `bootstrap.sh`
 - ADR 0006 frontend helpers and the manual e2e journey (#193): being applied
 - ADR 0007 CI uses the repo scripts (#198): being applied
 - ADR 0008 docs moves (#199): applied after #175
 
-Issue #201 will change the deploy topology described above: dev = Render on every green push, prod = AWS only through a manual promotion workflow. Update the map in that change.
+Since issue #201 the deploy topology is: dev = Render on every green push (`deploy.yml`), prod = AWS only through the manual workflow `promote.yml` (resolve checks, approval in environment `production`, deploy with the key in environment `aws-prod`, verify). Data flow: merge to `main` -> CI and E2E -> dev; promotion of the sha dev serves -> prod. `APP_ENV` (`config.go`, `observe.go`) labels logs, `build_info` and spans with `env`.
 
 ## Roles and test scale
 

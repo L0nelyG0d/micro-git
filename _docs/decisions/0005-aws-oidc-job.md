@@ -20,7 +20,7 @@ A until the user confirms the account stays under the SCP, then B.
 
 ## Decision
 
-First accepted as option A (2026-11-14). Changed by #201 (2026-11-15): the OIDC job `deploy-aws` will be removed in #201 together with the automatic AWS deploy (option B); OIDC support stays in `bootstrap.sh`. Until #201 merges, `deploy.yml` still has both `deploy-aws-keys` and `deploy-aws`.
+First accepted as option A (2026-11-14). Changed by #201 (2026-11-15): Applied in #201: the OIDC job `deploy-aws` was removed from `deploy.yml` together with the automatic AWS deploy (option B); OIDC support stays in `bootstrap.sh`. Production deploys through job `deploy` of `promote.yml`.
 
 ## Consequences
 

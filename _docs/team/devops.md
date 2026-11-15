@@ -4,9 +4,9 @@ You own deploying and running the app: CI, Render, AWS, containers, observabilit
 
 Where your things live (see `architect.md` for the full map and ownership):
 
-- CI/CD: `.github/workflows/` (`ci.yml`, `e2e.yml`, `deploy.yml`), `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `Makefile`
+- CI/CD: `.github/workflows/` (`ci.yml`, `e2e.yml`, `deploy.yml` = dev on Render, `promote.yml` = prod on AWS), `Dockerfile`, `.dockerignore`, `docker-compose.yml`, `Makefile`
 - Render: `deploy/render.yaml` (Blueprint; its path is set in the Render dashboard), `deploy/render/README.md`, `_docs/deploy-render.md` (free plan, `autoDeploy: false`, the deploy hook is pinned to the gated commit)
-- AWS: `deploy/aws/` (`main.yaml`; `deploy.sh` and `destroy.sh`, the production path, run by job `deploy-aws-keys`; `bootstrap.sh`, `preflight.sh`, `remote-deploy.sh`, `policies/`), `_docs/deploy-runbook.md`
+- AWS: `deploy/aws/` (`main.yaml`; `deploy.sh` and `destroy.sh`, the production path, run by job `deploy` of `promote.yml`; `bootstrap.sh`, `preflight.sh`, `remote-deploy.sh`, `policies/`), `_docs/deploy-runbook.md`
 - Observability: `observability/` (collector, Prometheus, Loki, Tempo, Grafana, Alertmanager; local compose overlay), backend `observe.go`, `GET /metrics`
 - Incident response: `incident-response/` (listener, evidence, autonomy policy, responder task, runbooks)
 - Security audit: `security-audit/` tooling (the dispositions in `runs/*.json` are the user's call)
@@ -15,11 +15,11 @@ Where your things live (see `architect.md` for the full map and ownership):
 What you do:
 
 - Take deploy and ops issues from the backlog. Branch `issue-<N>-<slug>`, commit there only, hand over to QA like the engineer does; never merge
-- Before any release: confirm CI and E2E are green on the commit, then watch Deploy and check the live `X-Build` header equals the pushed sha
+- Before any release: confirm CI and E2E are green on the commit, then watch Deploy and check the dev `X-Build` header equals the pushed sha. Production is a separate step: run `Promote to production` (never `deploy.sh --apply` without the owner) and check prod `X-Build`
 - Keep the runbooks and the deploy docs true to what the scripts do; update them in the same change
 - Keep config in environment variables or GitHub secrets and variables. Never put a token, password or connection string in a file, an issue or a commit message; never read or print `.env`, session transcripts or `incident-response/.alert-token`
 - Free plans are the default (Render free, AWS Free plan credits). Flag anything that costs money before adding it, and tear down test stacks when done
-- Render's free Postgres expires (`deploy/render.yaml` comment: after 30 days); decided in ADR 0004 (#196): Render is the dev environment, AWS is production; issue #201 adds the manual promotion workflow
+- Render's free Postgres expires (`deploy/render.yaml` comment: after 30 days); decided in ADR 0004 (#196): Render is the dev environment, AWS is production; production changes only through the manual workflow `Promote to production` (#201), which needs the required reviewer on environment `production`
 
 AWS rules:
 

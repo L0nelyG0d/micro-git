@@ -322,10 +322,10 @@ Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid
 
 ## Deployment
 
-One Docker image (root `Dockerfile`) serves the API and the SPA; the server strips `/api` in front of the API routes (`backend/static.go`). Two targets, both deployed by `.github/workflows/deploy.yml` only after CI and E2E are green for the commit on `main`:
+One Docker image (root `Dockerfile`) serves the API and the SPA; the server strips `/api` in front of the API routes (`backend/static.go`). Two environments (#201): dev on Render, deployed by `.github/workflows/deploy.yml` on every green `main` commit (CI and E2E green); prod on AWS, deployed only by the manual workflow `.github/workflows/promote.yml` ("Promote to production": checks, approval in environment `production`, deploy with the key in `aws-prod`). `APP_ENV` (`dev`, `prod`, default `local`) labels logs (`env`), `build_info` and spans (`deployment.environment`).
 
-- Render (free plan): Blueprint `deploy/render.yaml`, service `micro-git` with managed Postgres `mg-db`, `autoDeploy: false`, deploy hook pinned with `ref=<sha>`, then the `smoke` job waits for `X-Build` == sha.
-- AWS (Free plan account, `ap-southeast-2`): stack `micro-git-prod` (one EC2 instance with Docker Postgres, the app and Caddy) through `deploy/aws/deploy.sh`, run by job `deploy-aws-keys` with an IAM-user key in environment `aws-prod`. The OIDC job `deploy-aws` is optional and unused (the org SCP denies the OIDC provider).
+- dev, Render (free plan): Blueprint `deploy/render.yaml`, service `micro-git` with managed Postgres `mg-db`, `autoDeploy: false`, deploy hook pinned with `ref=<sha>`, then the `smoke` job waits for `X-Build` == sha.
+- prod, AWS (Free plan account, `ap-southeast-2`): stack `micro-git-prod` (one EC2 instance with Docker Postgres, the app and Caddy) through `deploy/aws/deploy.sh`, run by job `deploy` of the promote workflow with an IAM-user key in environment `aws-prod`. No workflow uses OIDC (the org SCP denies the OIDC provider; `bootstrap.sh` still supports it).
 
 Decision (user, 2026-11-13, #174): Railway, GCP and Vercel were removed; only Render and AWS are kept. Details: `deploy/README.md`, `docs/deployment.md`, `_docs/deploy-runbook.md`.
 
