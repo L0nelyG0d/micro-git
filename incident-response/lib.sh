@@ -37,8 +37,20 @@ run_limited() {
 import os, signal, subprocess, sys
 t = float(sys.argv[1])
 p = subprocess.Popen(sys.argv[2:], start_new_session=True)
+def fwd(signum, _frame):
+    # the child lives in its own session: forward the signal to its group, then exit 128+N like a shell would
+    try: os.killpg(p.pid, signal.SIGTERM)
+    except ProcessLookupError: pass
+    try: p.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try: os.killpg(p.pid, signal.SIGKILL)
+        except ProcessLookupError: pass
+    sys.exit(128 + signum)
+for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+    signal.signal(s, fwd)
 try:
-    sys.exit(p.wait(timeout=t))
+    rc = p.wait(timeout=t)
+    sys.exit(128 - rc if rc < 0 else rc)   # killed by signal N: popen reports -N, shells report 128+N
 except subprocess.TimeoutExpired:
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try: os.killpg(p.pid, sig)
@@ -46,10 +58,6 @@ except subprocess.TimeoutExpired:
         try: p.wait(timeout=5); break
         except subprocess.TimeoutExpired: continue
     sys.exit(124)
-except KeyboardInterrupt:
-    try: os.killpg(p.pid, signal.SIGTERM)
-    except ProcessLookupError: pass
-    sys.exit(130)
 ' "$t" "$@"
   fi
 }

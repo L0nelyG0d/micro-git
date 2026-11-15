@@ -107,12 +107,40 @@ print(listener.run('$T/tmo', ['$T/slow.sh', '$T/tmo'], timeout=2))")
   check "fallback times out with rc 124 (no timeout binary)" "[ '$RL' = rc=124 ]"
   RL=$( PATH="$T/minbin" bash -c ". '$D/lib.sh'; echo piped | TMO=5 run_limited cat" 2>&1 )
   check "fallback passes stdin through" "[ '$RL' = piped ]"
+  for SIG in TERM HUP; do   # a signal to the wrapper must reach the child (own session) and exit 128+N
+    rm -f "$T/sig.pid" "$T/sig.rc"
+    printf 'echo "$$ $PPID" > "%s/sig.pid"\nexec sleep 60\n' "$T" > "$T/sigchild.sh"   # child records its pid and the wrapper's pid
+    ( PATH="$T/minbin" bash -c ". '$D/lib.sh'; TMO=60 run_limited bash '$T/sigchild.sh'" >/dev/null 2>&1; echo $? > "$T/sig.rc" ) &
+    BG=$!; for _ in $(seq 1 20); do [ -s "$T/sig.pid" ] && break; sleep 0.3; done
+    read -r CP WP < "$T/sig.pid"; kill -$SIG "$WP" 2>/dev/null; wait "$BG" 2>/dev/null; sleep 0.5
+    check "fallback: SIG$SIG kills the child" "! kill -0 $CP 2>/dev/null"
+    check "fallback: SIG$SIG exits 128+N" "[ \"\$(cat '$T/sig.rc')\" = $([ $SIG = TERM ] && echo 143 || echo 129) ]"
+  done
   echo "== probe audit line + token perms (N6, N5)"
   mkdir -p "$T/vinc"; ( DRY_RUN=0 INCIDENTS_DIR="$T/vinc" PROBE_URL='http://127.0.0.1:1/x?token=SECRETQ' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc >/dev/null 2>&1 )
   check "probe enabled is audited" "grep -q 'probe enabled' '$T/vinc/vinc/audit.jsonl'"
   check "probe audit drops the query string" "! grep -q SECRETQ '$T/vinc/vinc/audit.jsonl'"
   "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -f %Lp "$T/tok-new" 2>/dev/null || stat -c %a "$T/tok-new")"
   check "make-token creates mode 600" "[ '$TM' = 600 ]"
+  PU_OUT="$T/vinc2"; mkdir -p "$PU_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$PU_OUT" PROBE_URL='http://bob:SEC?RETPW@127.0.0.1:1/x?token=Q#f' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc2 >/dev/null 2>&1 )
+  check "probe audit drops user:pass@" "grep -q 'http://127.0.0.1:1/x' '$PU_OUT/vinc2/audit.jsonl' && ! grep -q 'SEC\|RETPW\|bob' '$PU_OUT/vinc2/audit.jsonl'"
+  # make-token re-run repairs mode and (Linux root path, stubbed uname/id/chown) ownership
+  chmod 644 "$T/tok-new"; "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -f %Lp "$T/tok-new" 2>/dev/null || stat -c %a "$T/tok-new")"
+  check "make-token re-run repairs mode to 600" "[ '$TM' = 600 ]"
+  mkdir -p "$T/lnx"; printf '#!/bin/sh\necho Linux\n' > "$T/lnx/uname"; printf '#!/bin/sh\necho 0\n' > "$T/lnx/id"; printf '#!/bin/sh\necho "$@" > "%s/chown.args"\n' "$T" > "$T/lnx/chown"; chmod +x "$T/lnx/"*
+  H1="$(cat "$T/tok-new")"; PATH="$T/lnx:$PATH" "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1
+  check "make-token re-run on Linux root chowns to 65534" "grep -q '65534:65534' '$T/chown.args'"
+  check "make-token re-run keeps the token content" "[ \"\$(cat '$T/tok-new')\" = '$H1' ]"
+  echo "== listener: unreadable token is a config error"
+  if [ "$(id -u)" != 0 ]; then
+    mkdir -p "$T/utok"; echo dummy-not-a-secret > "$T/utok/tok"; chmod 000 "$T/utok/tok"
+    UP=$((20000 + RANDOM % 20000)); ALERT_TOKEN_FILE="$T/utok/tok" INCIDENTS_DIR="$T/utok/inc" LISTEN_PORT=$UP python3 -I "$D/listener.py" >/dev/null 2>&1 & UPID=$!
+    for _ in $(seq 1 30); do curl -s "http://127.0.0.1:$UP/healthz" >/dev/null && break; sleep 0.2; done
+    ucode=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Authorization: Bearer x' -H 'Content-Type: application/json' -d '{}' "http://127.0.0.1:$UP/alert"); kill $UPID 2>/dev/null
+    check "unreadable token -> 401" "[ '$ucode' = 401 ]"
+    check "unreadable token audited as config error" "grep -q 'not readable by the listener' '$T/utok/inc/listener-audit.jsonl' && ! grep -q 'invalid bearer' '$T/utok/inc/listener-audit.jsonl'"
+    chmod 600 "$T/utok/tok"
+  fi
   echo "== listener audit with group-readable token (N5 regression)"
   mkdir -p "$T/ltok"; echo dummy-not-a-secret > "$T/ltok/tok"; chmod 644 "$T/ltok/tok"
   LW=$( ALERT_TOKEN_FILE="$T/ltok/tok" INCIDENTS_DIR="$T/ltok/inc" python3 -I -c "
