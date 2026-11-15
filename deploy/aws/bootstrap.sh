@@ -19,7 +19,7 @@ set -euo pipefail
 usage() {
   cat <<USAGE
 Usage: $0 [--dry-run | --apply] [--profile NAME] [--region REGION] [--stack-name NAME] [--repo OWNER/REPO]
-          [--no-oidc] [--ci-user [--rotate-ci-key]] [--confirm-account ID]
+          [--no-oidc] [--ci-user [--rotate-ci-key]] [--confirm-account ID] [--force]
   --dry-run          print the planned aws commands, change nothing (default)
   --apply            create/update the resources (asks to type the account id unless --confirm-account matches)
   --profile          AWS CLI profile
@@ -29,6 +29,7 @@ Usage: $0 [--dry-run | --apply] [--profile NAME] [--region REGION] [--stack-name
   --no-oidc          skip the GitHub OIDC provider and the github-deploy-<stack> role
   --ci-user          create/refresh IAM user github-deploy-<stack>-user and its GitHub secrets
   --rotate-ci-key    with --ci-user: new key -> GitHub secrets -> delete the old key
+  --force            overwrite an existing role trust policy that differs from the repo file (otherwise --apply aborts)
   --confirm-account  expected account id; --apply aborts if the session is another account
 USAGE
 }
@@ -42,6 +43,7 @@ NO_OIDC=""
 CI_USER=""
 ROTATE=""
 CONFIRM=""
+FORCE=""
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -54,6 +56,7 @@ while [ $# -gt 0 ]; do
     --no-oidc) NO_OIDC=1 ;;
     --ci-user) CI_USER=1 ;;
     --rotate-ci-key) ROTATE=1 ;;
+    --force) FORCE=1 ;;
     --confirm-account) CONFIRM="${2:?--confirm-account needs a value}"; shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
@@ -67,6 +70,7 @@ fi
 if ! [[ "$STACK" =~ ^[a-z][a-z0-9-]{0,19}$ ]]; then
   echo "error: --stack-name must be lowercase letters, digits and '-' (max 20, start with a letter)" >&2; exit 2
 fi
+_clash=
 for _role in cfn-deploy github-deploy; do
   # The stack role pattern role/<stack>-* matches a deploy role <role>-<stack2> when "<stack>-" is a prefix of "<role>-"
   # (stack names cfn, github) or when the stack name itself starts with the deploy role prefix.
@@ -198,22 +202,41 @@ else
 fi
 
 ensure_role() { # name trust-file policy-file
-  local name="$1" trust="$2" pol="$3" rc=0
-  exists iam get-role --role-name "$name" || rc=$?
+  local name="$1" trust="$2" pol="$3" rc=0 role_json err cur="" want=""
+  # One get-role call: its result decides exists / missing / error and feeds the trust comparison.
+  if role_json="$(ro iam get-role --role-name "$name" --output json 2>"$TMP/get-role.err")"; then
+    rc=0
+  elif grep -q NoSuchEntity "$TMP/get-role.err"; then
+    rc=1
+  else
+    err="$(head -n1 "$TMP/get-role.err")"
+    echo "  lookup failed: $err" >&2
+    exit 1
+  fi
   if [ "$rc" -eq 0 ]; then
     echo "  role $name exists: refreshing trust policy"
-    local cur want
-    cur="$(ro iam get-role --role-name "$name" --query 'Role.AssumeRolePolicyDocument' --output json 2>/dev/null | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin),sort_keys=True))' 2>/dev/null || echo)"
-    want="$(python3 -c 'import sys,json;print(json.dumps(json.load(open(sys.argv[1])),sort_keys=True))' "$TMP/$trust.json" 2>/dev/null || echo)"
-    if [ -n "$cur" ] && [ -n "$want" ] && [ "$cur" != "$want" ]; then
-      echo "  WARNING: current trust policy of $name differs from deploy/aws/policies/$trust.json; the refresh overwrites any hand edits" >&2
+    if ! command -v python3 >/dev/null 2>&1; then
+      echo "  NOTE: python3 not found, so the current trust policy of $name cannot be compared with deploy/aws/policies/$trust.json; --force is not needed but any hand edits will be overwritten" >&2
+    else
+      cur="$(printf '%s' "$role_json" | python3 -c 'import sys,json;print(json.dumps(json.load(sys.stdin)["Role"]["AssumeRolePolicyDocument"],sort_keys=True))' 2>/dev/null || true)"
+      want="$(python3 -c 'import sys,json;print(json.dumps(json.load(open(sys.argv[1])),sort_keys=True))' "$TMP/$trust.json" 2>/dev/null || true)"
+      if [ -z "$cur" ] || [ -z "$want" ]; then
+        echo "  NOTE: could not compare the trust policy of $name with deploy/aws/policies/$trust.json; any hand edits will be overwritten" >&2
+      elif [ "$cur" != "$want" ]; then
+        if [ "$MODE" != apply ]; then
+          echo "  WARNING: current trust policy of $name differs from deploy/aws/policies/$trust.json; --apply would overwrite it (needs --force)" >&2
+        elif [ -n "$FORCE" ]; then
+          echo "  WARNING: current trust policy of $name differs from deploy/aws/policies/$trust.json; overwriting (--force)" >&2
+        else
+          echo "error: current trust policy of $name differs from deploy/aws/policies/$trust.json; refusing to overwrite hand edits. Review it, then re-run with --force to overwrite." >&2
+          exit 1
+        fi
+      fi
     fi
     mut iam update-assume-role-policy --role-name "$name" --policy-document "file://$TMP/$trust.json"
-  elif [ "$rc" -eq 1 ]; then
+  else
     mut iam create-role --role-name "$name" --assume-role-policy-document "file://$TMP/$trust.json" \
       --tags Key=Project,Value=micro-git
-  else
-    exit 1
   fi
   mut iam put-role-policy --role-name "$name" --policy-name "$name" --policy-document "file://$TMP/$pol.json"
 }
