@@ -248,13 +248,15 @@ type span struct {
 
 // exporter batches spans in a goroutine and posts them as OTLP/HTTP JSON.
 // enqueue never blocks; a full queue, a failed POST or a non-2xx answer drops
-// the spans and counts them in dropped. Close flushes what is still queued.
+// the spans and counts them in dropped, as does enqueue after Close. Close flushes what is still queued.
 type exporter struct {
 	url     string
 	ch      chan span
 	client  *http.Client
 	dropped atomic.Uint64
 	stop    chan struct{} // closed by Close
+	mu      sync.RWMutex  // guards closed: once set, enqueue no longer feeds ch
+	closed  bool
 	done    chan struct{} // closed when the loop has flushed and exited
 	once    sync.Once
 }
@@ -272,6 +274,12 @@ func newExporter(endpoint string) *exporter {
 }
 
 func (e *exporter) enqueue(s span) {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.closed { // after Close nothing would send it: count it as dropped
+		e.dropped.Add(1)
+		return
+	}
 	select {
 	case e.ch <- s:
 	default: // queue full: drop
@@ -285,7 +293,14 @@ func (e *exporter) Close(ctx context.Context) {
 	if e == nil || e.stop == nil {
 		return
 	}
-	e.once.Do(func() { close(e.stop) })
+	e.once.Do(func() {
+		// Taking the write lock waits for enqueues in flight, so every span
+		// accepted before closed is set is already in ch when the loop drains.
+		e.mu.Lock()
+		e.closed = true
+		e.mu.Unlock()
+		close(e.stop)
+	})
 	select {
 	case <-e.done:
 	case <-ctx.Done():

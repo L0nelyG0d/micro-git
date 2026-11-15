@@ -405,3 +405,52 @@ func TestExporterCloseDrainsMoreThanOneBatch(t *testing.T) {
 		t.Fatalf("dropped = %d", e.dropped.Load())
 	}
 }
+
+func TestExporterEnqueueAfterCloseCountsDropped(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer ts.Close()
+	e := newExporter(ts.URL)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	e.Close(ctx)
+	e.enqueue(span{name: "late"})
+	e.enqueue(span{name: "late"})
+	if got := e.dropped.Load(); got != 2 {
+		t.Fatalf("dropped = %d, want 2 for spans enqueued after Close", got)
+	}
+}
+
+func TestExporterConcurrentEnqueueAndCloseLosesNothing(t *testing.T) {
+	var posted atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p struct {
+			ResourceSpans []struct {
+				ScopeSpans []struct {
+					Spans []json.RawMessage `json:"spans"`
+				} `json:"scopeSpans"`
+			} `json:"resourceSpans"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		for _, rs := range p.ResourceSpans {
+			for _, ss := range rs.ScopeSpans {
+				posted.Add(int64(len(ss.Spans)))
+			}
+		}
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+	e := newExporter(ts.URL)
+	const n = 500
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); e.enqueue(span{name: "x"}) }()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	e.Close(ctx)
+	wg.Wait()
+	if sent, dropped := posted.Load(), int64(e.dropped.Load()); sent+dropped != n {
+		t.Fatalf("sent %d + dropped %d != %d: spans neither sent nor counted", sent, dropped, n)
+	}
+}
