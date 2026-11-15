@@ -1,6 +1,6 @@
 # Design system
 
-> **Superseded for visual values.** The source of truth for colors, radius, density and surfaces is `DESIGN.md` plus `frontend/src/index.css` (GitHub Primer palette: blue `#0969da` links/focus, green `#1f883d` action, hairline borders, no surface shadows, `--radius` 0.375rem, 14px base text). Token values and density rules below are historical (indigo `#4F46E5`, `p-3` cards, `shadow-xs`) and kept only for the non-visual rules (components, accessibility, tone, oids and diffs). Where they disagree, `DESIGN.md` and `index.css` win.
+> **Superseded for visual values.** The source of truth for colors, radius, density and surfaces is [`DESIGN.md`](DESIGN.md) plus `frontend/src/index.css` (GitHub Primer palette: blue `#0969da` links/focus, green `#1f883d` action, hairline borders, no surface shadows, `--radius` 0.375rem, 14px base text). Token values and density rules below are historical (indigo `#4F46E5`, `p-3` cards, `shadow-xs`) and kept only for the non-visual rules (components, accessibility, tone, oids and diffs). Where they disagree, `DESIGN.md` and `index.css` win.
 
 Read this before touching any UI. Use the tokens and components below; never hardcode colors, spacing, or font sizes in components.
 

@@ -1,6 +1,6 @@
 # Deployment
 
-One Docker image serves the API and the built SPA. It is deployed to two targets, Render and AWS, by `.github/workflows/deploy.yml` after CI and E2E are green on `main`. CD details (jobs, secrets and variables): [`deploy/README.md`](../deploy/README.md). Per-target details: [`deploy/render/README.md`](../deploy/render/README.md), [`deploy/aws/README.md`](../deploy/aws/README.md). Operations (live check, rollback, key rotation): [`_docs/deploy-runbook.md`](../_docs/deploy-runbook.md). App configuration reference: [`_docs/README.md`](../_docs/README.md).
+One Docker image serves the API and the built SPA. It is deployed to two targets, Render and AWS, by `.github/workflows/deploy.yml` after CI and E2E are green on `main`. CD details (jobs, secrets and variables): [`deploy/README.md`](../deploy/README.md). Per-target details: [`deploy/render/README.md`](../deploy/render/README.md), [`deploy/aws/README.md`](../deploy/aws/README.md). Operations (live check, rollback, key rotation): [`_docs/deploy-runbook.md`](../_docs/deploy-runbook.md). App configuration reference: [`_docs/README.md`](../_docs/README.md). Merge flow, smoke checks and rollback: [release-process.md](release-process.md). What CI and E2E check before a deploy: [testing.md](testing.md).
 
 ## Docker image
 
