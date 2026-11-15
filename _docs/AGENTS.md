@@ -9,7 +9,7 @@
 - `go test ./path/to/pkg` - one package
 - `go test -run TestName ./...` - one test by name
 - `npm test` (in `frontend/`) - frontend tests
-- `make run-sqlite` - backend on SQLite (`data/mg.db`, git-ignored), no Postgres; `make dev-sqlite` adds the frontend; `make run-memory` for the in-memory store; `make clean-data` deletes the SQLite files; `make smoke-sqlite` is the integration smoke (README "Quick start")
+- `make run-sqlite` - backend on SQLite (`data/mg.db`, git-ignored), no Postgres; `make dev-sqlite` adds the frontend; `make run-memory` for the in-memory store; `make clean-data` deletes the SQLite files; `make smoke-sqlite` is the integration smoke (`_docs/README.md` "Quick start")
 
 Rules
 
@@ -31,9 +31,11 @@ Documents - look these up when relevant, don't load them all up front
 - `_docs/process.md` - how work is organized: roles and the task lifecycle. Read before starting or closing any task
 - `_docs/plan.md` - what the app does: features, endpoints, tables, rules
 - `_docs/tasks.md` - the backlog, one task per GitHub issue
-- `_docs/testing-guidelines.md` - read before writing tests
+- `_docs/testing-guidelines.md` - read before writing tests; `docs/testing.md` - how the suites run locally and in CI
+- `_docs/team/architect.md` - the structure map and who owns which area; `_docs/decisions/` - ADRs (architecture decisions and their status)
+- `_docs/team/devops.md`, `docs/deployment.md`, `docs/release-process.md`, `_docs/deploy-runbook.md` - deploy and operations
 - `_docs/process.md` sections "Testing-phase issues" (which skills the `ui` issues use: `web-design-guidelines`, `design-taste-frontend`, `image-to-code`) and "Dogfooding with mg" (committing our work with `bin/mg` and storing the hash) - read when QA files an issue or an issue is about to merge
-- `DESIGN.md` and `frontend/src/index.css` - the source of truth for colors, radius, density; read before anything touching the UI. `_docs/design-system.md` is superseded for visual values (it still holds the non-visual rules and the approved packages)
+- `_docs/DESIGN.md` and `frontend/src/index.css` - the source of truth for colors, radius, density; read before anything touching the UI. `_docs/design-system.md` is superseded for visual values (it still holds the non-visual rules and the approved packages)
 
 Fast local test database (use this instead of Neon when time matters)
 

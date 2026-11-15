@@ -40,7 +40,7 @@ func main() {
 		log.Fatalf("database: %v", err)
 	}
 
-	srv := NewServer(store)
+	srv := NewServer(store, cfg.observerConfig())
 	srv.JWTSecret = []byte(cfg.JWTSecret)
 	srv.CookieSecure = cfg.CookieSecure
 
@@ -72,7 +72,7 @@ func main() {
 	// METRICS_ADDR: /metrics on its own listener, not on the public one.
 	var metricsSrv *http.Server
 	var mln net.Listener
-	if addr := srv.obs.metricsAddr; addr != "" {
+	if addr := cfg.MetricsAddr; addr != "" {
 		mln, err = net.Listen("tcp", addr)
 		if err != nil {
 			_ = ln.Close()
@@ -93,7 +93,7 @@ func main() {
 	log.Printf("listening on %s", cfg.Addr)
 	if metricsSrv != nil {
 		go func() { errc <- fmt.Errorf("metrics: %w", metricsSrv.Serve(mln)) }()
-		log.Printf("metrics listening on %s", srv.obs.metricsAddr)
+		log.Printf("metrics listening on %s", cfg.MetricsAddr)
 	}
 
 	select {

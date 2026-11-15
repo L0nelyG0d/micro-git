@@ -1,7 +1,7 @@
 # Observability stack. It has NO network of its own: run it merged with the
 # root compose file so every service lands on the same default network as `app`:
 #
-#   docker compose -f docker-compose.yml -f observability/compose.yaml up -d --build
+#   docker compose -f docker-compose.yml -f observability/compose.yaml -f observability/app-telemetry.yaml up -d --build
 #
 # (run from the repo root; bind-mount paths below are relative to the root,
 # because compose resolves them against the first -f file.)

@@ -81,8 +81,8 @@ jobs:
 
   # The same suite on the two stores that need no service container. Runs in
   # parallel with `backend` (Postgres). A failing store fails the workflow.
-  # Calls go test directly; when scripts/test-matrix.sh (#97) is on main this can
-  # call `scripts/test-matrix.sh ${{ matrix.store }}` to share its skip accounting.
+  # Calls go test directly; switching it to `scripts/test-matrix.sh ${{ matrix.store }}`
+  # (to share its skip accounting) is tracked in #198.
   backend-store:
     name: Backend tests (${{ matrix.store }})
     runs-on: ubuntu-latest

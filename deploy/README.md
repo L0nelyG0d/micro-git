@@ -47,7 +47,7 @@ Never put these values in the repository, an issue or a commit message.
 - AWS: `deploy-aws-keys` on every green `main` commit, stack `micro-git-prod` in `ap-southeast-2` (URL: stack output `AppUrl`, printed by `deploy.sh`; the current address is in the runbook). First verified in Deploy run 43480095153.
 - `deploy-aws` (OIDC): skipped, `AWS_ROLE_ARN` is not set.
 
-The hand-made stack `mg` is separate; `deploy.sh` refuses to touch it.
+`micro-git-prod` is the only stack: the owner deleted the earlier hand-made stack `mg` (2026-11). `deploy.sh` and `destroy.sh` fix the stack name and refuse `mg`.
 
 ## Which commit is live
 

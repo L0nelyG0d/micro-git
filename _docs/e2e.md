@@ -1,6 +1,6 @@
 # End-to-end browser check of the main user journey (issue #107)
 
-A real browser (Playwright MCP browser tools, no repo dependency; adding Playwright to the repo is out of scope for #107) drives the real stack through the whole journey. The script is [`_docs/e2e/journey.js`](e2e/journey.js): paste it into `browser_run_code_unsafe`, set `BASE`, `STACK`, `SHOTS`, `LAYOUT` at its top. Screenshots go to a folder outside git; they are named below, not committed.
+This first part is the manual journey from #107; the Playwright suite in `e2e/` came later and is described under "Playwright suite layout" below. A real browser (Playwright MCP browser tools, no repo dependency; adding Playwright to the repo was out of scope for #107) drives the real stack through the whole journey. The script is [`_docs/e2e/journey.js`](e2e/journey.js): paste it into `browser_run_code_unsafe`, set `BASE`, `STACK`, `SHOTS`, `LAYOUT` at its top. Screenshots go to a folder outside git; they are named below, not committed.
 
 ## Start the stacks
 
@@ -113,6 +113,6 @@ Rules the specs follow:
 
 Gotchas:
 
-- The backend limits `POST /auth/register` to 10 attempts per client IP per 15 minutes (`backend/ratelimit.go`). The suite registers one user per test (about 28 in one run), so a full run against a local backend hits `429` after the tenth sign-up and the rest fail until the window passes. Options: run against a backend started with a higher limit, or share users across tests (this gives up the per-test independence). Not decided here; the user owns that choice.
+- The backend limits `POST /auth/register` to 10 attempts per client IP per 15 minutes (`backend/ratelimit.go`). The suite registers one user per test (about 28 in one run), so a full run against a local backend hits `429` after the tenth sign-up and the rest fail until the window passes. Options: run against a backend started with a higher limit (`REGISTER_MAX_PER_IP`, as `docker-compose.yml` passes through and `e2e.yml` sets), or share users across tests (this gives up the per-test independence). Not decided here; the user owns that choice.
 - `retries` is 1 only when `CI` is set; `workers` defaults to Playwright's choice, set `E2E_WORKERS` to limit parallel users.
 - Reports go to `e2e/playwright-report/` and failures keep traces (`test-results/`); both are git-ignored.

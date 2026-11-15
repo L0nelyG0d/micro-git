@@ -11,7 +11,7 @@ Stack: OTel Collector (contrib 0.111.0) -> Prometheus (metrics), Tempo (traces),
 
 Merging puts everything on the root compose default network, so the collector reaches `app:8080`.
 Grafana http://localhost:3000 (admin / `$GRAFANA_ADMIN_PASSWORD`, required), Prometheus http://localhost:9090.
-App should set `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318` for traces.
+For traces the app needs `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318`; the override `observability/app-telemetry.yaml` sets it.
 
 ## Data flow
 - Metrics: collector `prometheus` receiver scrapes `app:8080/metrics` (job `micro-git`) -> Prometheus remote write.

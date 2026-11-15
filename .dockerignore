@@ -18,7 +18,11 @@ data/
 # Docs, tests and tooling that the image does not need
 _docs
 _docs.zip
+docs
 e2e
+observability
+incident-response
+security-audit
 graphify-out
 scratch_bin
 .claude

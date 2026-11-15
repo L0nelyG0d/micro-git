@@ -85,8 +85,6 @@ func TestAccessLogJSON(t *testing.T) {
 }
 
 func TestMetricsEndpoint(t *testing.T) {
-	t.Setenv("COOKIE_SECURE", "")
-	t.Setenv("METRICS_ADDR", "")
 	t.Setenv("APP_VERSION", "1.2.3")
 	t.Setenv("RENDER_GIT_COMMIT", "")
 	t.Setenv("APP_COMMIT", "")
@@ -249,16 +247,14 @@ func TestMiddlewarePanicSafe(t *testing.T) {
 
 func TestFaultRefusedWhenCookieSecure(t *testing.T) {
 	t.Setenv("FAULT_ENDPOINT_500", "/repos/{owner}/{repo}")
-	t.Setenv("COOKIE_SECURE", "true")
 	buf := captureTimingLog(t)
-	s := NewServer(newMemStore())
+	s := NewServer(newMemStore(), observerConfig{CookieSecure: true})
 	if rec := obsDo(s.Handler(), "GET", "/repos/a/b", nil); rec.Code == 500 {
 		t.Error("fault applied despite COOKIE_SECURE=true")
 	}
 	if !strings.Contains(buf.String(), `"level":"ERROR"`) || !strings.Contains(buf.String(), "refused") {
 		t.Errorf("no refusal error logged: %s", buf)
 	}
-	t.Setenv("COOKIE_SECURE", "")
 	buf.Reset()
 	NewServer(newMemStore())
 	if !strings.Contains(buf.String(), `"level":"WARN"`) {
@@ -267,10 +263,8 @@ func TestFaultRefusedWhenCookieSecure(t *testing.T) {
 }
 
 func TestMetricsDisabledInProduction(t *testing.T) {
-	t.Setenv("METRICS_ADDR", "")
-	t.Setenv("COOKIE_SECURE", "true")
 	buf := captureTimingLog(t)
-	s := NewServer(newMemStore())
+	s := NewServer(newMemStore(), observerConfig{CookieSecure: true})
 	if rec := obsDo(s.Handler(), "GET", "/metrics", nil); rec.Code != 404 {
 		t.Errorf("/metrics with COOKIE_SECURE=true and no METRICS_ADDR = %d, want 404", rec.Code)
 	}
@@ -278,9 +272,8 @@ func TestMetricsDisabledInProduction(t *testing.T) {
 		t.Errorf("no disabled warning: %s", buf)
 	}
 	// with METRICS_ADDR set the private handler still serves, and unspecified hosts warn
-	t.Setenv("METRICS_ADDR", ":9100")
 	buf.Reset()
-	s = NewServer(newMemStore())
+	s = NewServer(newMemStore(), observerConfig{CookieSecure: true, MetricsAddr: ":9100"})
 	if !strings.Contains(buf.String(), "all interfaces") {
 		t.Errorf("no unspecified-host warning: %s", buf)
 	}
@@ -295,8 +288,7 @@ func TestMetricsDisabledInProduction(t *testing.T) {
 }
 
 func TestMetricsAddrRemovesPublicRoute(t *testing.T) {
-	t.Setenv("METRICS_ADDR", "127.0.0.1:0")
-	s, _ := obsServer(t)
+	s := NewServer(newMemStore(), observerConfig{MetricsAddr: "127.0.0.1:9100"})
 	if rec := obsDo(s.Handler(), "GET", "/metrics", nil); rec.Code != 404 {
 		t.Errorf("public /metrics = %d, want 404", rec.Code)
 	}

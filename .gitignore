@@ -11,7 +11,6 @@ backend/backend
 bin/
 .playwright-mcp/
 graphify-out/
-resolving the issues.txt
 !frontend/.env.example
 !.env.example
 
@@ -20,7 +19,6 @@ data/
 *.db
 *.db-wal
 *.db-shm
-2026-10-19-*-local-command-caveat*.txt
 
 # Session exports, local scratch binary, archives (may contain credentials)
 resolving the issues.txt
@@ -31,6 +29,8 @@ resolving the issues.txt
 # Session transcripts (may contain credentials)
 2026-*-this-session-*.txt
 _docs/2026-*.txt
+# Stray text exports in _docs/ (tracked docs there are .md, .yaml, .js)
+_docs/*.txt
 
 # security audit raw outputs (may contain code excerpts) and caches
 security-audit/runs/*/
