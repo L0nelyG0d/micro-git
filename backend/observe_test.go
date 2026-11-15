@@ -464,7 +464,7 @@ func TestExporterCloseDrainsMoreThanOneBatch(t *testing.T) {
 func TestExporterEnqueueAfterCloseCountsDropped(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
 	defer ts.Close()
-	e := newExporter(ts.URL)
+	e := newExporter(ts.URL, "local")
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	e.Close(ctx)
@@ -494,7 +494,7 @@ func TestExporterConcurrentEnqueueAndCloseLosesNothing(t *testing.T) {
 		w.WriteHeader(200)
 	}))
 	defer ts.Close()
-	e := newExporter(ts.URL)
+	e := newExporter(ts.URL, "local")
 	const n = 500
 	var wg sync.WaitGroup
 	for i := 0; i < n; i++ {
