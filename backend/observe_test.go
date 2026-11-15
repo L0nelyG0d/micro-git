@@ -18,7 +18,7 @@ func obsServer(t *testing.T) (*Server, *bytes.Buffer) {
 	t.Helper()
 	s := NewServer(newMemStore())
 	buf := &bytes.Buffer{}
-	s.obs.log = newJSONLogger(buf)
+	s.obs.log = newJSONLogger(buf, defaultAppEnv)
 	return s, buf
 }
 
@@ -46,7 +46,7 @@ func TestRedact(t *testing.T) {
 		t.Errorf("url credentials leaked: %q", got)
 	}
 	var buf bytes.Buffer
-	newJSONLogger(&buf).Info("x", "password", "p1", "Authorization", "Bearer abc", "ok", "fine")
+	newJSONLogger(&buf, defaultAppEnv).Info("x", "password", "p1", "Authorization", "Bearer abc", "ok", "fine")
 	if strings.Contains(buf.String(), "p1") || strings.Contains(buf.String(), "abc") || !strings.Contains(buf.String(), "fine") {
 		t.Errorf("logger redaction wrong: %s", buf.String())
 	}
@@ -103,7 +103,7 @@ func TestMetricsEndpoint(t *testing.T) {
 		`http_request_duration_seconds_bucket{method="GET",route="/health",le="+Inf"} 2`,
 		`http_request_duration_seconds_count{method="GET",route="/health"} 2`,
 		`http_requests_in_flight 1`,
-		`build_info{version="1.2.3",commit="dev"} 1`,
+		`build_info{version="1.2.3",commit="dev",env="local"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("metrics missing %q in:\n%s", want, body)
@@ -335,7 +335,7 @@ func TestExporterNon2xxCountsDropped(t *testing.T) {
 	if got := e.dropped.Load(); got != 3 {
 		t.Fatalf("dropped after full queue = %d, want 3", got)
 	}
-	m := newMetrics("v", "c")
+	m := newMetrics("v", "c", "local")
 	m.spansDropped = e.dropped.Load
 	var sb strings.Builder
 	m.write(&sb)
@@ -348,7 +348,7 @@ func TestExporterCloseFlushes(t *testing.T) {
 	var n atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { n.Add(1); w.WriteHeader(200) }))
 	defer ts.Close()
-	e := newExporter(ts.URL)
+	e := newExporter(ts.URL, "local")
 	e.enqueue(span{name: "x"})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -361,4 +361,59 @@ func TestExporterCloseFlushes(t *testing.T) {
 		t.Fatalf("dropped = %d", e.dropped.Load())
 	}
 	(*exporter)(nil).Close(ctx)
+}
+
+// TestEnvLabelFlows checks that the validated APP_ENV value reaches the log
+// line, the build_info series and the span resource, for each case.
+func TestEnvLabelFlows(t *testing.T) {
+	t.Setenv("APP_VERSION", "1.2.3")
+	t.Setenv("RENDER_GIT_COMMIT", "")
+	t.Setenv("APP_COMMIT", "")
+	for _, tc := range []struct{ name, env, want string }{
+		{"default", "", "local"},
+		{"dev", "dev", "dev"},
+		{"prod", "prod", "prod"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := make(chan map[string]any, 4)
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var m map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&m)
+				got <- m
+			}))
+			defer ts.Close()
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", ts.URL)
+			buf := &bytes.Buffer{}
+			old := accessLogOut
+			accessLogOut = buf
+			defer func() { accessLogOut = old }()
+			s := NewServer(newMemStore(), observerConfig{Env: tc.env})
+			h := s.Handler()
+			obsDo(h, "GET", "/health", nil)
+			var line map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(bytes.SplitN(buf.Bytes(), []byte("\n"), 2)[0]), &line); err != nil {
+				t.Fatalf("log line: %v: %s", err, buf.String())
+			}
+			if line["env"] != tc.want {
+				t.Errorf("log env = %v, want %q", line["env"], tc.want)
+			}
+			body := obsDo(h, "GET", "/metrics", nil).Body.String()
+			if want := `build_info{version="1.2.3",commit="dev",env="` + tc.want + `"} 1`; !strings.Contains(body, want) {
+				t.Errorf("metrics missing %q", want)
+			}
+			if strings.Count(body, `env="`) != 1 {
+				t.Errorf("env label must be only on build_info:\n%s", body)
+			}
+			select {
+			case m := <-got:
+				b, _ := json.Marshal(m)
+				want := `{"key":"deployment.environment","value":{"stringValue":"` + tc.want + `"}}`
+				if !strings.Contains(string(b), want) {
+					t.Errorf("span resource missing %s in %s", want, b)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("no span exported")
+			}
+		})
+	}
 }
