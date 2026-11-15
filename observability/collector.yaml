@@ -9,8 +9,13 @@ receivers:
         - job_name: micro-git
           scrape_interval: 15s
           metrics_path: /metrics
+          # Every scraped series (including `up`) gets env. The app already sets env on
+          # build_info; honor_labels keeps that value instead of renaming it to exported_env.
+          honor_labels: true
           static_configs:
             - targets: ["app:8080"]
+              labels:
+                env: local
   otlp:
     protocols:
       http:
