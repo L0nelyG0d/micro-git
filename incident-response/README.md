@@ -20,7 +20,7 @@ Principle (Zoomcamp module 4): **the model may reason; the system must observe, 
 - Global action cooldown: `policy-check.py` stamps `incidents/.last_action` (under flock) when an automatic action is claimed; any other incident is escalated until `global_cooldown_seconds` (policy, default 300; env `GLOBAL_COOLDOWN_SECONDS`, 0 = off) has passed, so flapping alerts or a listener restart cannot loop restarts.
 - Timeouts: `run_limited` uses `timeout`, else `gtimeout`, else a python3 process-group fallback (exit 124), so stock macOS is limited too.
 - Token file: `make-token.sh` keeps mode 600; on Linux as root it chowns the file to 65534 (Alertmanager runs as nobody), otherwise it prints the `sudo chown 65534` hint. The listener warns at start if the file is group/other accessible.
-- Claude deny-rule grammar (`Read(//**/.env)`, `Read(//**/.env.*)`, `Read(//**/*.pem)`, `Read(~/**)`) was checked against Claude Code 2.1.323: with these `--disallowedTools` a real run was denied for `.env` and `sub/.env.local` and allowed for a normal file. Re-check after a CLI upgrade.
+- Claude deny-rule grammar (`Read(//**/.env)`, `Read(//**/.env.*)`, `Read(//**/*.pem)`, `Read(~/**)`) was checked against Claude Code 2.1.323: with these `--disallowedTools` a real run was denied for `.env` and `sub/.env.local` and allowed for a normal file. Re-checked on 2026-11-15 on the current CLI, still 2.1.323 (same result: `.env` and `sub/.env.local` DENIED, a plain file READ). Re-check after every CLI upgrade and update this line with the version.
 - `verify-recovery.sh`: ratio is `(5xx rate or 0)/total rate`, only polls after a 75 s warm-up count, and `PROBE_URL` (+ optional `PROBE_COOKIE_JAR`) sends probe requests to the route during verification.
 
 ## Files
