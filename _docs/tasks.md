@@ -257,29 +257,29 @@ Description: The script only collected console errors (status-only 401/404 filte
 
 ## Zoomcamp module 4 round (issues #161-#165 (proposed as #149-#153; those numbers were already taken by PRs))
 
-Groomed by the PM on 2026-11-12 from the module 4 brief. Status of all five: built on 2026-11-12, awaiting QA and review, not yet issues. The numbers #161-#165 are proposed and no GitHub issues exist yet.
+Groomed by the PM on 2026-11-12 from the module 4 brief. Status of all five: built on 2026-11-12, QA confirmed it on main 751ef5a (merge 3411242) and closed the issue on 2026-11-13. The numbers #161-#165 are proposed and no GitHub issues exist yet.
 
 Dependencies: #162 needs #161; #163 needs #161 and #162; #164 needs #163; #165 needs #163 and #164.
 
 ## 161. Backend observability: JSON logs, metrics, traces, fault injection
 Goal: The backend writes structured JSON logs with secrets redacted, serves Prometheus-format metrics at `GET /metrics`, emits OTLP/HTTP JSON trace spans with W3C `traceparent` propagation, and can return a 500 on demand through `FAULT_ENDPOINT_500`. Standard library only.
-Description: Files: `backend/observe.go` (new), `backend/handler.go`, `backend/static.go`, `_docs/openapi.yaml` (document `/metrics`), frontend `ApiService` gets a `metrics()` method. Keep the existing handler/middleware pattern; no new Go modules. Redaction covers passwords, tokens, cookies and Authorization headers. `FAULT_ENDPOINT_500` is off by default and names the endpoint it breaks. Status: built on 2026-11-12, awaiting QA and review, not yet issues.
+Description: Files: `backend/observe.go` (new), `backend/handler.go`, `backend/static.go`, `_docs/openapi.yaml` (document `/metrics`), frontend `ApiService` gets a `metrics()` method. Keep the existing handler/middleware pattern; no new Go modules. Redaction covers passwords, tokens, cookies and Authorization headers. `FAULT_ENDPOINT_500` is off by default and names the endpoint it breaks. Status: built on 2026-11-12, QA confirmed it on main 751ef5a (merge 3411242) and closed the issue on 2026-11-13.
 
 ## 162. Observability stack under observability/
 Goal: `observability/` runs an OpenTelemetry collector, Prometheus, Loki, Tempo, Grafana and Alertmanager, so the logs, metrics and traces from #161 appear in Grafana after one compose command.
-Description: Files: `observability/` (`compose.yaml`, `collector.yaml`, `prometheus.yml`, `alerts.yaml`, `alertmanager.yml`, `loki.yaml`, `tempo.yaml`, `grafana/`, `dashboard.json`, `app-telemetry.yaml` as a compose override that points the backend at the collector, `README.md`). Depends on #161. Status: built on 2026-11-12, awaiting QA and review, not yet issues.
+Description: Files: `observability/` (`compose.yaml`, `collector.yaml`, `prometheus.yml`, `alerts.yaml`, `alertmanager.yml`, `loki.yaml`, `tempo.yaml`, `grafana/`, `dashboard.json`, `app-telemetry.yaml` as a compose override that points the backend at the collector, `README.md`). Depends on #161. Status: built on 2026-11-12, QA confirmed it on main 751ef5a (merge 3411242) and closed the issue on 2026-11-13.
 
 ## 163. Incident responder under incident-response/
 Goal: A listener receives an alert, collects an evidence packet, validates it against the response schema and the autonomy policy gate, runs the matching runbook action, verifies recovery, and writes an audit log. It runs as dry-run by default and has a recorded live drill.
-Description: Files: `incident-response/` (`listener.py`, `collect-evidence.sh`, `lib.sh`, `run-responder.sh`, `policy-check.py`, `autonomy-policy.yaml`, `response.schema.json`, `responder-task.md`, `runbooks/`, `incidents/`, `fixtures/`, `test-policy.sh`, `test-incident.sh`). Depends on #161 and #162. Any live action must pass the policy gate; dry-run is the default. Out of scope: remediation beyond the listed runbooks, which goes to a follow-up issue if wanted (not yet filed). Status: built on 2026-11-12, awaiting QA and review, not yet issues.
+Description: Files: `incident-response/` (`listener.py`, `collect-evidence.sh`, `lib.sh`, `run-responder.sh`, `policy-check.py`, `autonomy-policy.yaml`, `response.schema.json`, `responder-task.md`, `runbooks/`, `incidents/`, `fixtures/`, `test-policy.sh`, `test-incident.sh`). Depends on #161 and #162. Any live action must pass the policy gate; dry-run is the default. Out of scope: remediation beyond the listed runbooks, which goes to a follow-up issue if wanted (not yet filed). Status: built on 2026-11-12, QA confirmed it on main 751ef5a (merge 3411242) and closed the issue on 2026-11-13.
 
 ## 164. Security audit under security-audit/
 Goal: A reproducible Semgrep run over backend and frontend writes findings that match `findings.schema.json`, and a capability table states what each component can reach.
-Description: Files: `security-audit/` (`run-audit.sh`, `audit-brief.md`, `findings.schema.json`, `capability-table.md`, `runs/`, `README.md`). Depends on #163, since the capability table covers the responder. Each finding is marked fixed, accepted (with reason) or false positive. No application code changes in this task; fixes go to follow-up issues (not yet filed). Status: built on 2026-11-12, awaiting QA and review, not yet issues.
+Description: Files: `security-audit/` (`run-audit.sh`, `audit-brief.md`, `findings.schema.json`, `capability-table.md`, `runs/`, `README.md`). Depends on #163, since the capability table covers the responder. Each finding is marked fixed, accepted (with reason) or false positive. No application code changes in this task; fixes go to follow-up issues (not yet filed). Status: built on 2026-11-12, QA confirmed it on main 751ef5a (merge 3411242) and closed the issue on 2026-11-13.
 
 ## 165. Operations and security report
 Goal: `docs/operations-and-security-report.md` lets a reviewer see how the system is observed, how incidents are handled, and what the security audit found and accepted.
-Description: File: `docs/operations-and-security-report.md` only. Links to `observability/README.md`, `incident-response/README.md`, `security-audit/README.md` and the audit runs. Depends on #163 and #164. Status: built on 2026-11-12, awaiting QA and review, not yet issues.
+Description: File: `docs/operations-and-security-report.md` only. Links to `observability/README.md`, `incident-response/README.md`, `security-audit/README.md` and the audit runs. Depends on #163 and #164. Status: built on 2026-11-12, QA confirmed it on main 751ef5a (merge 3411242) and closed the issue on 2026-11-13.
 
 ## 160. Module 4 hardening follow-ups (from the Opus review of #161-#163)
 Goal: Close the non-blocking review findings deferred from #161-#163 so the responder and exporter are safe to leave running.
@@ -311,8 +311,117 @@ Description: Issue #170, created 2026-11-13. `backend/config.go` (compare `net.L
 Goal: The responder's timeout fallback cannot orphan a child, and the cooldown fails closed on unreadable state.
 Description: Issue #171, created 2026-11-13. `incident-response/lib.sh` (forward SIGTERM/SIGHUP), `policy-check.py` (only a missing `.last_action` counts as free; future timestamps), `make-token.sh` ownership on Linux, README wording, credentials in the probe audit line, test gaps, and the `ApiService.metrics()` decision. Depends on #160.
 
-## Structure round (issues #174-#175)
+## Structure round and follow-ups (issues #174-#201)
 
 ## 174. Remove unused deployment targets (Railway, GCP, Vercel); keep Render and AWS
 Goal: Only the deployments in use remain: Render (deploy hook pinned with `ref=<sha>`, `smoke` on `X-Build`) and AWS (`deploy-aws-keys`, `deploy/aws/`). Railway, GCP and Vercel are gone from the workflow, `deploy/` and the docs.
 Description: Issue #174, created 2026-11-13. Deleted `deploy/railway.json`, `deploy/gcp/`, `deploy/vercel/` and the drafts `_docs/issues/07`, `08`, `10`. `.github/workflows/deploy.yml` loses the `deploy-railway`, `deploy-gcp` and `deploy-vercel-frontend` jobs and the gate's `railway`, `gcp`, `vercel` outputs and env; `gate`, `deploy-render`, `deploy-aws`, `deploy-aws-keys` and `smoke` are unchanged except a comment marking `deploy-aws` (OIDC) optional, since the org SCP blocks the OIDC provider in this account. `deploy/aws/` scripts and `deploy/render.yaml` are untouched. Docs rewritten to Render + AWS: `deploy/README.md`, `docs/deployment.md` (new), `_docs/deploy-runbook.md`, `_docs/README.md`, `_docs/plan.md`, `_docs/questions.md`. No GitHub secrets or variables existed for the removed targets. Out of scope: repo layout and doc consolidation (#175), any AWS change.
+Status: merged as 04b3b02 on 2026-11-13, closed.
+
+## 175. Project structure: one docs layout, root README, ownership map, ADRs
+Goal: Every top-level directory has a stated purpose and an owning role, docs live in one predictable place, and risky moves are written as ADRs.
+Description: Issue #175. Root `README.md` is the entry point; `_docs/` holds process and project docs, `docs/` the reader-facing guides (`deployment.md`, `testing.md`, `release-process.md`, the operations report); `_docs/team/architect.md` (structure map, layering rules, ownership) and `_docs/team/devops.md` are tracked; `_docs/decisions/` holds ADRs 0001-0008; the drafts in `_docs/issues/` and `deploy/render/LIVE.md` are deleted. No code behaviour change.
+
+## 176. Module 4: one real-model responder drill
+Goal: The operations report includes one drill run by the real model, not a stub.
+Description: Issue #176. Paused until the other work is merged (user decision 2026-11-15). Related fix: #200.
+
+## 177. Render: dashboard auto-deploy off
+Goal: Only the CI/E2E-gated deploy hook puts a commit live on Render.
+Description: Issue #177. The user switched Auto-Deploy off in the Render dashboard; closed after a merge shows the live `X-Build` staying on the old commit until CI and E2E finish.
+
+## 178. AWS: cost watch, hand-made stack `mg`, HTTPS and a domain
+Goal: The account holds only what the project needs.
+Description: Issue #178, closed. The owner deleted the hand-made stack `mg`; `micro-git-prod` is the only stack.
+
+## 179. Decision: `ApiService.metrics()`
+Goal: Decided.
+Description: Issue #179, closed. Decision (user): keep the method.
+
+## 180. Bootstrap and preflight guard polish
+Goal: `bootstrap.sh` aborts on a trust-policy overwrite unless `--force` is given.
+Description: Issue #180, child of #169. `deploy/aws/bootstrap.sh`, `preflight.sh`. Status: merged as 07ed1a1 on 2026-11-15.
+
+## 181. IAM scoping
+Goal: Roles are scoped by IAM Path and the trust policies are narrowed.
+Description: Issue #181, child of #169. Policy and script changes only; nothing is applied to AWS by an agent.
+
+## 182. Remote deploy robustness
+Goal: A failed rollout returns to the previous container, and Postgres data on the instance is backed up.
+Description: Issue #182, child of #169. `deploy/aws/remote-deploy.sh`: rollback, `APP_COMMIT`, `pg_dump` backups (also required by ADR 0004).
+
+## 183. Secrets and supply chain
+Goal: Every action is pinned by commit SHA; the JWT secret handling is documented.
+Description: Issue #183, child of #169. `.github/workflows/deploy.yml`, `e2e.yml`, `deploy/aws/README.md`.
+
+## 184. AWS docs claims that need a real account
+Goal: Each claim in the AWS docs is either checked or marked unverified.
+Description: Issue #184, child of #169. Docs only.
+
+## 185. Config port-clash validation and single config read
+Goal: The metrics port check compares resolved port numbers and config values are read once.
+Description: Issue #185, child of #170. `backend/config.go`, `observe.go`, `main.go`, `handler.go`.
+
+## 186. Shutdown helper and exporter close ordering
+Goal: The shutdown path has a test and no span is enqueued after the exporter closes.
+Description: Issue #186, child of #170. `backend/main.go`, `observe.go`.
+
+## 187. plan.md: METRICS_ADDR sentence
+Goal: The sentence reads correctly.
+Description: Issue #187, child of #170. `_docs/plan.md` only.
+
+## 188. Responder timeout fallback and fail-closed policy checks
+Goal: The timeout fallback cannot orphan a child and the cooldown fails closed on unreadable state.
+Description: Issue #188, child of #171. `incident-response/lib.sh`, `policy-check.py`, tests.
+
+## 189. Responder: token handling, README accuracy, probe URL redaction
+Goal: The token file is owned correctly and the README matches the scripts.
+Description: Issue #189, child of #171. `incident-response/make-token.sh`, `README.md`, the probe audit line. Includes the README fixes found in #175 (tracked folder, three compose files for the fault trigger).
+
+## 190. Responder: test gaps and deny-rule grammar
+Goal: The policy tests cover the gaps named in the #160 review.
+Description: Issue #190, child of #171. `incident-response/test-*.sh`, `autonomy-policy.yaml`.
+
+## 191. ADR 0001: backend package split
+Goal: Decided.
+Description: Issue #191, ADR `_docs/decisions/0001-backend-package-split.md`. Accepted 2026-11-14: no split now; the layers are documented in `_docs/team/architect.md`. Nothing to apply.
+
+## 192. ADR 0002: Go module path
+Goal: Decided.
+Description: Issue #192, ADR `_docs/decisions/0002-go-module-path.md`. Accepted 2026-11-14: keep. Nothing to apply.
+
+## 193. ADR 0006: frontend class helper, manual e2e journey
+Goal: The ui components use the local `cn` helper and the unapproved `cn` package is gone.
+Description: Issue #193, ADR `_docs/decisions/0006-frontend-helpers-and-e2e-journey.md`. Accepted 2026-11-14: option C. Branch `issue-193-frontend-cn-helper`; the change is applied only if the rendered classes stay the same.
+
+## 194. Rate limiter behind a proxy
+Goal: The limits are per client on Render and AWS, not per proxy.
+Description: Issue #194. `backend/ratelimit.go` keys on `RemoteAddr`; behind Render's proxy and Caddy that may be the proxy address. Record what the server sees, then trust a forwarded address only from a known proxy. Standard library only.
+
+## 195. ADR 0003: ops and deploy directory moves
+Goal: Decided.
+Description: Issue #195, ADR `_docs/decisions/0003-ops-and-deploy-directory-moves.md`. Accepted 2026-11-14: no moves. Nothing to apply.
+
+## 196. ADR 0004: production topology and data
+Goal: Decided.
+Description: Issue #196, ADR `_docs/decisions/0004-production-topology-and-data.md`. Accepted 2026-11-15: Render = dev, AWS = prod, separate databases. Applied in #201; backups in #182.
+
+## 197. ADR 0005: OIDC deploy job
+Goal: Decided.
+Description: Issue #197, ADR `_docs/decisions/0005-aws-oidc-job.md`. The `deploy-aws` job is removed together with the automatic AWS deploy in #201; OIDC stays in `bootstrap.sh`.
+
+## 198. ADR 0007: CI calls the repo scripts
+Goal: CI runs `scripts/test-matrix.sh`, `scripts/test-pgurl.sh` and a no-stack `ops-tests` job; unused `e2e.yml` steps are gone.
+Description: Issue #198, ADR `_docs/decisions/0007-ci-uses-repo-scripts.md`. Accepted 2026-11-14: option C. Branch `issue-198-ci-repo-scripts`.
+
+## 199. ADR 0008: docs moves and role models
+Goal: `_docs/README.md` becomes `docs/developer-guide.md` and `_docs/design-refs/` is deleted.
+Description: Issue #199, ADR `_docs/decisions/0008-docs-moves.md`. Accepted 2026-11-14. Applied in its own change after #175; the models line is in `_docs/process.md`.
+
+## 200. Incident responder: model run under `env -i` on macOS
+Goal: The responder's model run keeps `USER` in its scrubbed environment so it is logged in.
+Description: Issue #200. `incident-response/run-responder.sh`, `test-incident.sh`. Branch `issue-176-real-model-drill`.
+
+## 201. Dev and prod environments, manual promotion
+Goal: Every green push to `main` deploys to dev (Render); production (AWS) changes only through the workflow "Promote to production".
+Description: Issue #201 (user decision 2026-11-15: Render = dev, AWS = prod). Design in the issue comment: `deploy.yml` loses the AWS jobs; new `.github/workflows/promote.yml` (`workflow_dispatch`, sha defaulting to the one live on dev, approval in environment `production`, deploy with the key in `aws-prod`); `APP_ENV` labels logs, metrics and traces; dashboard and alerts filter by `env`. The owner adds the required reviewer to `production`.

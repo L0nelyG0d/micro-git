@@ -331,7 +331,7 @@ Decision (user, 2026-11-13, #174): Railway, GCP and Vercel were removed; only Re
 
 ## Frontend
 
-Styling follows `DESIGN.md` and `frontend/src/index.css` (colors, radius, density); `_docs/design-system.md` is superseded for visual values and still holds the non-visual rules and the approved packages.
+Styling follows `_docs/DESIGN.md` and `frontend/src/index.css` (colors, radius, density); `_docs/design-system.md` is superseded for visual values and still holds the non-visual rules and the approved packages.
 
 | route | page |
 |---|---|

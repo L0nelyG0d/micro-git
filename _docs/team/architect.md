@@ -106,18 +106,24 @@ There is no separate domain layer: the endpoint files (`auth.go` ... `compare.go
 | `_docs/questions.md` | Orchestrator |
 | Root `README.md`, `_docs/team/architect.md`, `_docs/decisions/`, `.gitignore`, `skills-lock.json`, the layout of `_docs/` and `docs/` | Architect |
 
-## Open proposals
+## Decisions
 
-All `Proposed`, none applied (index: [`_docs/decisions/README.md`](../decisions/README.md)):
+Index with status: [`_docs/decisions/README.md`](../decisions/README.md). All eight were approved by the user on 2026-11-14 (0004 and 0005 settled by #201 on 2026-11-15).
 
-- ADR 0001 backend package split (#191)
-- ADR 0002 Go module path (#192)
-- ADR 0003 ops and deploy directory moves (#195)
-- ADR 0004 production topology and data (#196)
-- ADR 0005 AWS OIDC job (#197)
-- ADR 0006 frontend helpers and the manual e2e journey (#193)
-- ADR 0007 CI uses the repo scripts (#198)
-- ADR 0008 docs moves (#199)
+- ADR 0001 backend package split (#191): no split now
+- ADR 0002 Go module path (#192): keep
+- ADR 0003 ops and deploy directory moves (#195): no moves
+- ADR 0004 production topology and data (#196): Render = dev, AWS = prod; applied in #201, backups in #182
+- ADR 0005 AWS OIDC job (#197): the job goes with the automatic AWS deploy in #201; OIDC stays in `bootstrap.sh`
+- ADR 0006 frontend helpers and the manual e2e journey (#193): being applied
+- ADR 0007 CI uses the repo scripts (#198): being applied
+- ADR 0008 docs moves (#199): applied after #175
+
+Issue #201 will change the deploy topology described above: dev = Render on every green push, prod = AWS only through a manual promotion workflow. Update the map in that change.
+
+## Roles and test scale
+
+Roles and models are listed in `_docs/process.md`: the architect on Fable; sub-architects (design and approval of one area) and the reviewer of risky changes on Opus; implementers and QA on Sonnet. QA tests at the smallest scale that proves the change (`_docs/team/qa-engineer.md`, "Test scale"): local suites for everything that is not about deploying; CI, E2E, the full Deploy run and the live `X-Build` on both targets only for deploy changes (`.github/workflows/`, `deploy/`, `Dockerfile`, `docker-compose.yml`).
 
 ## Definition of done
 

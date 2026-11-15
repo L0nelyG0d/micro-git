@@ -201,5 +201,5 @@ clean-data: ## Delete the SQLite files in data/ (mg.db, -wal, -shm) and nothing 
 	done; \
 	rmdir "$$d" 2>/dev/null || true
 
-clean: ## Remove backend/backend and frontend/dist (keeps .env and node_modules)
+clean: ## Remove backend/backend, bin/ and frontend/dist (keeps .env and node_modules)
 	rm -rf backend/backend bin frontend/dist

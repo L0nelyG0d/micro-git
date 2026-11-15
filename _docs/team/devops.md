@@ -19,7 +19,7 @@ What you do:
 - Keep the runbooks and the deploy docs true to what the scripts do; update them in the same change
 - Keep config in environment variables or GitHub secrets and variables. Never put a token, password or connection string in a file, an issue or a commit message; never read or print `.env`, session transcripts or `incident-response/.alert-token`
 - Free plans are the default (Render free, AWS Free plan credits). Flag anything that costs money before adding it, and tear down test stacks when done
-- Render's free Postgres expires (`deploy/render.yaml` comment: after 30 days); what to do about it is open in ADR 0004 (#196)
+- Render's free Postgres expires (`deploy/render.yaml` comment: after 30 days); decided in ADR 0004 (#196): Render is the dev environment, AWS is production; issue #201 adds the manual promotion workflow
 
 AWS rules:
 
