@@ -9,7 +9,7 @@ Production AWS uses the IAM-user key path (job `deploy-aws-keys`, `deploy/aws/de
 | Target | Status |
 | --- | --- |
 | Render | Live at https://micro-git.onrender.com, deployed by the Deploy workflow through `RENDER_DEPLOY_HOOK`. The server sets `X-Build` (`backend/build.go`: `RENDER_GIT_COMMIT`, else `APP_COMMIT`, else `dev`); last reported build `5acd89e...`. `autoDeploy` is `false`, so only the CI/E2E-gated deploy hook deploys. The `smoke` job in `deploy.yml` runs after `deploy-render`, waits until `X-Build` equals the deployed commit (the hook is pinned with `ref=<sha>`), then checks `/`. |
-| AWS | Stack `micro-git-prod` in `ap-southeast-2`, deployed by `deploy/aws/deploy.sh --apply --account 228619515667` (one command, no OIDC: an org SCP denies `oidc-provider/*`). URL: stack output `AppUrl` (printed by `deploy.sh`). Live at http://3.26.221.66. GitHub deploys it automatically: job `deploy-aws-keys` (IAM user `github-deploy-micro-git-prod-user`, key in environment `aws-prod`, main only) ran `deploy.sh --apply --ci` in Deploy run 43480095153 for `39e71e0` (2026-11-13): no stack change, new image, smoke passed, X-Build == `39e71e0b02189935aaf321db7b0b4d6ba5a5aa7a`. The hand-made stack `mg` is separate and never touched. The OIDC job `deploy-aws` is optional and skipped (`AWS_ROLE_ARN` unset, see above). |
+| AWS | Stack `micro-git-prod` in `ap-southeast-2`, deployed by `deploy/aws/deploy.sh --apply --account 228619515667` (one command, no OIDC: an org SCP denies `oidc-provider/*`). URL: stack output `AppUrl` (printed by `deploy.sh`). Live at http://3.26.221.66. GitHub deploys it automatically: job `deploy-aws-keys` (IAM user `github-deploy-micro-git-prod-user`, key in environment `aws-prod`, main only) ran `deploy.sh --apply --ci` in Deploy run 43480095153 for `39e71e0` (2026-11-13): no stack change, new image, smoke passed, X-Build == `39e71e0b02189935aaf321db7b0b4d6ba5a5aa7a`. It is the only stack: the earlier hand-made stack `mg` was deleted by the owner in 2026-11. The OIDC job `deploy-aws` is optional and skipped (`AWS_ROLE_ARN` unset, see above). |
 
 ## Check which build is live
 
@@ -69,4 +69,4 @@ OPTIONAL, OIDC path only (job `deploy-aws`). It cannot be completed in account 2
 4. `deploy/aws/bootstrap.sh --apply --region <region> --stack-name <new-stack>`, type the account id.
 5. Run the printed `gh variable set AWS_ROLE_ARN ...`, `gh variable set AWS_CFN_ROLE_ARN ...`, `openssl rand -hex 32 | gh secret set AWS_JWT_SECRET`, plus `AWS_STACK_NAME` / `AWS_REGION` if not the defaults.
 6. Push to `main` (the Deploy workflow runs after CI and E2E are green), watch `deploy-aws`, then check `<AppUrl>/health`.
-7. After a successful run: delete the old hand-made stack (back up Postgres first, see `deploy/aws/README.md`) and tighten `github-deploy` policy.
+7. After a successful run: tighten the `github-deploy` policy. (The old hand-made stack `mg` no longer exists; the owner deleted it in 2026-11.)

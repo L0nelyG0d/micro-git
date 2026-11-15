@@ -298,6 +298,13 @@ backend/                 package main: HTTP server (net/http patterns, no router
                            sqliteDSNParams (pragmas) and InTx are in gormrefs.go
   models.go, sqlite.go     GORM models + idempotent Migrate; OpenSQLite (pure-Go driver)
   memstore.go              in-memory store (STORE=memory)
+  ratelimit.go, httpcache.go
+                           login/register limits; ETag and conditional GET helpers
+  observe.go, timing.go    JSON logs, /metrics, trace spans; per-request timing and statement tracer
+  build.go, static.go      X-Build id; SPA and /api prefix handling in the Docker image
+  cmd/mg, cmd/migrate-sqlite-to-pg
+                           the mg command-line client; the SQLite-to-Postgres migration tool
+  testdata/golden/         expected API responses for the golden tests
   db/schema.sql            users, repos, objects, refs (the Postgres reference)
   known_skips.txt          test skips the matrix accepts, per store
   *_test.go                tests next to the code, including concurrency_test.go and
