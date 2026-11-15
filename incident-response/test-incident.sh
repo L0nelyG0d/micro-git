@@ -122,8 +122,8 @@ print(listener.run('$T/tmo', ['$T/slow.sh', '$T/tmo'], timeout=2))")
   check "probe audit drops the query string" "! grep -q SECRETQ '$T/vinc/vinc/audit.jsonl'"
   "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -f %Lp "$T/tok-new" 2>/dev/null || stat -c %a "$T/tok-new")"
   check "make-token creates mode 600" "[ '$TM' = 600 ]"
-  PU_OUT="$T/vinc2"; mkdir -p "$PU_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$PU_OUT" PROBE_URL='http://bob:SECRETPW@127.0.0.1:1/x?token=Q#f' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc2 >/dev/null 2>&1 )
-  check "probe audit drops user:pass@" "grep -q 'http://127.0.0.1:1/x' '$PU_OUT/vinc2/audit.jsonl' && ! grep -q 'SECRETPW\|bob' '$PU_OUT/vinc2/audit.jsonl'"
+  PU_OUT="$T/vinc2"; mkdir -p "$PU_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$PU_OUT" PROBE_URL='http://bob:SEC?RETPW@127.0.0.1:1/x?token=Q#f' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc2 >/dev/null 2>&1 )
+  check "probe audit drops user:pass@" "grep -q 'http://127.0.0.1:1/x' '$PU_OUT/vinc2/audit.jsonl' && ! grep -q 'SEC\|RETPW\|bob' '$PU_OUT/vinc2/audit.jsonl'"
   # make-token re-run repairs mode and (Linux root path, stubbed uname/id/chown) ownership
   chmod 644 "$T/tok-new"; "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -f %Lp "$T/tok-new" 2>/dev/null || stat -c %a "$T/tok-new")"
   check "make-token re-run repairs mode to 600" "[ '$TM' = 600 ]"
