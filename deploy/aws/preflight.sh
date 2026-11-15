@@ -22,6 +22,7 @@ while [ $# -gt 0 ]; do
   shift
 done
 
+_clash=
 for _role in cfn-deploy github-deploy; do
   case "$_role-" in "$STACK-"*) _clash=1 ;; esac
   case "$STACK" in "$_role"*) _clash=1 ;; esac

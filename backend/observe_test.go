@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -369,4 +370,46 @@ func TestExporterCloseFlushes(t *testing.T) {
 		t.Fatalf("dropped = %d", e.dropped.Load())
 	}
 	(*exporter)(nil).Close(ctx)
+}
+
+// Close must return at its context deadline even when the collector hangs.
+func TestExporterCloseReturnsAtDeadlineWithSlowCollector(t *testing.T) {
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	defer ts.Close()
+	defer close(release)
+	e := newExporter(ts.URL)
+	e.enqueue(span{name: "x"})
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	e.Close(ctx)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Close took %v, want about the 300ms deadline (client timeout is 3s)", d)
+	}
+}
+
+// A drain larger than one batch (100) must be sent completely, in several posts.
+func TestExporterCloseDrainsMoreThanOneBatch(t *testing.T) {
+	var posts, spans atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		posts.Add(1)
+		spans.Add(int32(strings.Count(string(b), `"spanId"`)))
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+	e := newExporter(ts.URL)
+	for i := 0; i < 250; i++ {
+		e.enqueue(span{method: "GET", route: "/x"})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	e.Close(ctx)
+	if spans.Load() != 250 || posts.Load() < 3 {
+		t.Fatalf("spans = %d in %d posts, want 250 in >= 3", spans.Load(), posts.Load())
+	}
+	if e.dropped.Load() != 0 {
+		t.Fatalf("dropped = %d", e.dropped.Load())
+	}
 }

@@ -69,6 +69,12 @@ rm -f "$CD/c/action.lock" "$CD/c/decision.json"; echo "$(( $(date +%s) + 3600 ))
 mkdir -p "$T/crash"; echo '{}' > "$T/crash/response.json"; echo '{broken' > "$T/crash/bad-policy.json"
 python3 -I "$D/policy-check.py" "$T/crash" --policy "$T/crash/bad-policy.json" >/dev/null 2>&1; rc=$?
 [ $rc -eq 1 ] && grep -q policy_error "$T/crash/audit.jsonl" && { pass=$((pass+1)); echo "ok   policy crash exits 1 + audited"; } || { fail=$((fail+1)); echo "FAIL policy crash (rc=$rc)"; }
+# concurrent claims: 8 incidents race for the global cooldown; exactly one may win (flock), the rest escalate
+CC="$T/cc"; mkdir -p "$CC"
+for i in 1 2 3 4 5 6 7 8; do mkdir -p "$CC/i$i"; jq -n --arg id "i$i" --arg c "docker compose $CA restart app" '{incident_id:$id,summary:"s",root_cause_hypothesis:"h",confidence:0.9,evidence_refs:["x"],proposed_action:{type:"restart",command:$c,files:[]},risk:"low",needs_human:false}' > "$CC/i$i/response.json"; done
+for i in 1 2 3 4 5 6 7 8; do ( GLOBAL_COOLDOWN_SECONDS=300 python3 -I "$D/policy-check.py" "$CC/i$i" >/dev/null 2>&1; echo $? > "$CC/i$i.rc" ) & done; wait
+WON=$(cat "$CC"/i?.rc | grep -c '^0$'); ESC=$(cat "$CC"/i?.rc | grep -c '^3$'); LOCKS=$(ls "$CC"/i*/action.lock 2>/dev/null | wc -l | tr -d ' ')
+[ "$WON" = 1 ] && [ "$ESC" = 7 ] && [ "$LOCKS" = 1 ] && { pass=$((pass+1)); echo "ok   cooldown: 8 concurrent claims -> 1 allowed, 7 escalated, 1 lock"; } || { fail=$((fail+1)); echo "FAIL concurrent claims (won=$WON esc=$ESC locks=$LOCKS)"; }
 # escalation emits a packet and audit lines with the required fields
 [ -f "$T/low-confidence/escalation-packet.json" ] && { pass=$((pass+1)); echo "ok   escalation packet written"; } || { fail=$((fail+1)); echo "FAIL no escalation packet"; }
 jq -e 'select(.ts and .kind and .detail and .decision)' "$T/low-confidence/audit.jsonl" >/dev/null && { pass=$((pass+1)); echo "ok   audit.jsonl fields"; } || { fail=$((fail+1)); echo "FAIL audit fields"; }
