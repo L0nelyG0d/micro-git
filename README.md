@@ -19,7 +19,7 @@ Other ways to run it (memory store, Postgres, Docker Compose, mock frontend) and
 | `frontend/` | React + Vite single-page app (`src/pages`, `src/components`, `src/services`, `src/lib`, `src/auth`) | Software engineer |
 | `e2e/` | Playwright end-to-end suite | QA engineer |
 | `scripts/` | Test matrix across the three stores, SQLite smoke test, Postgres URL helper | QA engineer |
-| `.github/workflows/` | `ci.yml` (gates), `e2e.yml` (Playwright), `deploy.yml` (Render and AWS after CI and E2E are green) | DevOps |
+| `.github/workflows/` | `ci.yml` (gates), `e2e.yml` (Playwright), `deploy.yml` (dev on Render after CI and E2E are green), `promote.yml` (manual "Promote to production" to AWS) | DevOps |
 | `Dockerfile`, `docker-compose.yml`, `.dockerignore`, `Makefile` | One image for API and SPA, local stack with Postgres, developer commands | DevOps |
 | `deploy/` | `render.yaml` (Render Blueprint), `render/`, `aws/` (CloudFormation template, `deploy.sh`, `destroy.sh`, `bootstrap.sh`, policies) | DevOps |
 | `observability/` | Local compose overlay: OpenTelemetry collector, Prometheus, Loki, Tempo, Grafana, Alertmanager | DevOps |

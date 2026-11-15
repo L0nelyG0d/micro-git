@@ -20,12 +20,12 @@ B. Hosting and data decisions belong to the user.
 
 ## Decision
 
-Option B. Render is the dev environment and AWS (`micro-git-prod`) is production; each keeps its own database. Backups on AWS are tracked in #182. A manual "Promote to production" workflow is being built in #201; until it merges, `deploy.yml` still deploys every green `main` commit to both targets.
+Option B. Render is the dev environment and AWS (`micro-git-prod`) is production; each keeps its own database. Backups on AWS are tracked in #182. Applied in #201: `deploy.yml` deploys every green `main` commit to dev (Render) only; the manual workflow "Promote to production" (`promote.yml`) deploys to prod (AWS).
 
 ## Consequences
 
-Once #201 merges: dev = Render on every green push, prod = AWS by manual promotion. Related: #178 (HTTPS, domain), #182.
+Dev = Render on every green push, prod = AWS by manual promotion (#201). Related: #178 (HTTPS, domain), #182.
 
 ## Preconditions
 
-#182 backups in place and a restore tested; #201 merged before the docs describe promotion as existing.
+#182 backups in place and a restore tested; #201 merged before the docs describe promotion as existing (the #201 branch describes it; do not merge it before the owner has set the required reviewer on `production`).

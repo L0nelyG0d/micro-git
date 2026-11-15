@@ -19,6 +19,9 @@ For traces the app needs `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318`; th
 - Logs: collector `filelog` tails Docker json-file logs (`/var/lib/docker/containers`, mounted read-only, collector runs as root), keeps only lines containing `"route"` (the app's request logs), labels `service.name=micro-git`, sends to Loki OTLP. Chosen because it needs no app change or log driver plugin. Works on Docker Desktop and Linux; not on rootless Docker/podman.
 - Grafana Loki datasource has a derived field: `trace_id` in a log line becomes a "View trace" link to Tempo.
 
+## Environments
+This stack is local. The dev (Render) and prod (AWS) instances label their own telemetry with `APP_ENV` (`dev`, `prod`; `local` by default): field `env` in the JSON logs, label `env` on `build_info`, resource attribute `deployment.environment` on spans. In this stack the collector adds `env=local` to every scraped series (`honor_labels: true` keeps the app's own value on `build_info`), the dashboard has an `env` variable used by every panel query, and the alert rules aggregate `by (env)` so an alert says which environment fired. Logs are not indexed by `env`; filter with `| json | env="prod"`. To observe a hosted environment, point a collector at it (scrape target and OTLP endpoint); nothing here reaches Render or AWS.
+
 ## Alerts (alerts.yaml)
 HighErrorRatioOnRoute (5xx > 5% for 2m, min ~3 req/min), P95LatencyHigh (p95 > 1s for 5m, same min traffic), AppDown (`up==0` for 1m). Alertmanager POSTs to `http://host.docker.internal:9099/alert` (the local responder) with a Bearer token from `/etc/alertmanager/alert-token`. `extra_hosts: host-gateway` maps the name on Linux, but the responder must listen on an address reachable from the Docker bridge, not only 127.0.0.1.
 

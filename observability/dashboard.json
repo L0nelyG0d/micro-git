@@ -39,7 +39,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (route) (rate(http_requests_total[$__rate_interval]))",
+          "expr": "sum by (route) (rate(http_requests_total{env=~\"$env\"}[$__rate_interval]))",
           "legendFormat": "{{route}}"
         }
       ]
@@ -71,7 +71,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (route) (rate(http_requests_total{status=~\"5..\"}[$__rate_interval])) / sum by (route) (rate(http_requests_total[$__rate_interval]))",
+          "expr": "sum by (route) (rate(http_requests_total{env=~\"$env\",status=~\"5..\"}[$__rate_interval])) / sum by (route) (rate(http_requests_total{env=~\"$env\"}[$__rate_interval]))",
           "legendFormat": "{{route}}"
         }
       ]
@@ -103,7 +103,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket[$__rate_interval])))",
+          "expr": "histogram_quantile(0.95, sum by (le, route) (rate(http_request_duration_seconds_bucket{env=~\"$env\"}[$__rate_interval])))",
           "legendFormat": "{{route}}"
         }
       ]
@@ -129,7 +129,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(http_requests_in_flight)"
+          "expr": "sum(http_requests_in_flight{env=~\"$env\"})"
         }
       ]
     },
@@ -163,7 +163,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "build_info",
+          "expr": "build_info{env=~\"$env\"}",
           "legendFormat": "{{version}} ({{commit}})",
           "instant": true
         }
@@ -196,7 +196,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "{service_name=\"micro-git\"} | json | route=~\"$route\" | trace_id=~\"$trace_id\""
+          "expr": "{service_name=\"micro-git\"} | json | env=~\"$env\" | route=~\"$route\" | trace_id=~\"$trace_id\""
         }
       ]
     },
@@ -229,6 +229,28 @@
   ],
   "templating": {
     "list": [
+      {
+        "name": "env",
+        "type": "query",
+        "label": "env",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "prometheus"
+        },
+        "query": {
+          "query": "label_values(build_info, env)",
+          "refId": "env"
+        },
+        "refresh": 2,
+        "includeAll": true,
+        "allValue": ".*",
+        "multi": false,
+        "current": {
+          "text": "All",
+          "value": "$__all"
+        },
+        "description": "environment (APP_ENV); a local stack shows local"
+      },
       {
         "name": "route",
         "type": "custom",

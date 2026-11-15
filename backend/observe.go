@@ -28,6 +28,8 @@ import (
 // Environment:
 //
 //	APP_VERSION                  version label in logs and build_info (default "dev")
+//	APP_ENV                      environment label (dev, prod, ...; default "local"): field env in every log line,
+//	                             label env on build_info, resource attribute deployment.environment on spans
 //	RENDER_GIT_COMMIT, APP_COMMIT  commit label in build_info, same id as the X-Build header (default "dev")
 //	OTEL_EXPORTER_OTLP_ENDPOINT  if set, one span per request goes to <endpoint>/v1/traces
 //	FAULT_ENDPOINT_500           route pattern (e.g. /repos/{owner}/{repo}) that answers 500; for incident drills, off by default
@@ -74,8 +76,9 @@ func redactAttr(_ []string, a slog.Attr) slog.Attr {
 	return a
 }
 
-func newJSONLogger(w io.Writer) *slog.Logger {
-	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{ReplaceAttr: redactAttr}))
+// newJSONLogger returns a JSON logger that stamps every line with env.
+func newJSONLogger(w io.Writer, env string) *slog.Logger {
+	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{ReplaceAttr: redactAttr})).With("env", env)
 }
 
 // ---- metrics ----
@@ -95,12 +98,13 @@ type metrics struct {
 	inFlight int64
 	version  string
 	commit   string
+	env      string
 	// spansDropped reports the exporter's drop counter; nil when OTLP is off (exported as 0).
 	spansDropped func() uint64
 }
 
-func newMetrics(version, commit string) *metrics {
-	return &metrics{requests: map[reqKey]uint64{}, dur: map[durKey]*hist{}, version: version, commit: commit}
+func newMetrics(version, commit, env string) *metrics {
+	return &metrics{requests: map[reqKey]uint64{}, dur: map[durKey]*hist{}, version: version, commit: commit, env: env}
 }
 
 func (m *metrics) begin() { m.mu.Lock(); m.inFlight++; m.mu.Unlock() }
@@ -198,7 +202,7 @@ func (m *metrics) write(w io.Writer) {
 	fmt.Fprintf(w, "otel_spans_dropped_total %d\n", dropped)
 	fmt.Fprintln(w, "# HELP build_info Build information.")
 	fmt.Fprintln(w, "# TYPE build_info gauge")
-	fmt.Fprintf(w, "build_info{version=\"%s\",commit=\"%s\"} 1\n", promEscape(m.version), promEscape(m.commit))
+	fmt.Fprintf(w, "build_info{version=\"%s\",commit=\"%s\",env=\"%s\"} 1\n", promEscape(m.version), promEscape(m.commit), promEscape(m.env))
 }
 
 // ---- trace context ----
@@ -251,6 +255,7 @@ type span struct {
 // the spans and counts them in dropped, as does enqueue after Close. Close flushes what is still queued.
 type exporter struct {
 	url     string
+	env     string // deployment.environment resource attribute
 	ch      chan span
 	client  *http.Client
 	dropped atomic.Uint64
@@ -261,8 +266,9 @@ type exporter struct {
 	once    sync.Once
 }
 
-func newExporter(endpoint string) *exporter {
+func newExporter(endpoint, env string) *exporter {
 	e := &exporter{
+		env:    env,
 		url:    strings.TrimRight(endpoint, "/") + "/v1/traces",
 		ch:     make(chan span, 1024),
 		client: &http.Client{Timeout: 3 * time.Second},
@@ -345,7 +351,7 @@ func (e *exporter) loop(maxBatch int, every time.Duration) {
 }
 
 func (e *exporter) send(batch []span) {
-	body, err := json.Marshal(otlpPayload(batch))
+	body, err := json.Marshal(otlpPayload(batch, e.env))
 	if err != nil {
 		e.dropped.Add(uint64(len(batch)))
 		return
@@ -366,7 +372,7 @@ type kv map[string]any
 
 func strAttr(k, v string) kv { return kv{"key": k, "value": kv{"stringValue": v}} }
 
-func otlpPayload(batch []span) kv {
+func otlpPayload(batch []span, env string) kv {
 	spans := make([]kv, 0, len(batch))
 	for _, s := range batch {
 		sp := kv{
@@ -391,7 +397,7 @@ func otlpPayload(batch []span) kv {
 		spans = append(spans, sp)
 	}
 	return kv{"resourceSpans": []kv{{
-		"resource":   kv{"attributes": []kv{strAttr("service.name", serviceName)}},
+		"resource":   kv{"attributes": []kv{strAttr("service.name", serviceName), strAttr("deployment.environment", env)}},
 		"scopeSpans": []kv{{"scope": kv{"name": serviceName}, "spans": spans}},
 	}}}
 }
@@ -404,6 +410,7 @@ type observer struct {
 	metrics     *metrics
 	exp         *exporter // nil when OTLP is off
 	version     string
+	env         string // APP_ENV, validated in LoadConfig
 	faultRte    string // FAULT_ENDPOINT_500, "" when off or refused
 	metricsAddr string // METRICS_ADDR; when set /metrics is not on the public mux
 	// metricsPublic: /metrics is registered on the public mux (METRICS_ADDR unset and COOKIE_SECURE != "true").
@@ -424,22 +431,29 @@ type logWriter struct{}
 
 func (logWriter) Write(p []byte) (int, error) { return accessLogOut.Write(p) }
 
-// observerConfig carries the two Config values the observer needs, so
-// METRICS_ADDR and COOKIE_SECURE are read once (in LoadConfig).
+// observerConfig carries the Config values the observer needs, so
+// METRICS_ADDR, COOKIE_SECURE and APP_ENV are read once (in LoadConfig).
+// An empty Env (zero value, tests) means defaultAppEnv.
 type observerConfig struct {
 	MetricsAddr  string
 	CookieSecure bool
+	Env          string
 }
 
 // observerConfig returns the observer's share of the loaded config.
 func (c Config) observerConfig() observerConfig {
-	return observerConfig{MetricsAddr: c.MetricsAddr, CookieSecure: c.CookieSecure}
+	return observerConfig{MetricsAddr: c.MetricsAddr, CookieSecure: c.CookieSecure, Env: c.AppEnv}
 }
 
 func newObserver(oc observerConfig) *observer {
 	secure := oc.CookieSecure
+	env := oc.Env
+	if env == "" {
+		env = defaultAppEnv
+	}
 	o := &observer{
-		log:         newJSONLogger(logWriter{}),
+		log:         newJSONLogger(logWriter{}, env),
+		env:         env,
 		version:     envOr("APP_VERSION", "dev"),
 		faultRte:    os.Getenv("FAULT_ENDPOINT_500"),
 		metricsAddr: oc.MetricsAddr,
@@ -459,9 +473,9 @@ func newObserver(oc observerConfig) *observer {
 	if o.metricsAddr != "" && secure && hostUnspecified(o.metricsAddr) {
 		o.log.Warn("METRICS_ADDR listens on all interfaces; fine inside a container if the port is not published, otherwise bind it to a private address", "addr", o.metricsAddr)
 	}
-	o.metrics = newMetrics(o.version, buildID(os.Getenv))
+	o.metrics = newMetrics(o.version, buildID(os.Getenv), env)
 	if ep := os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT"); ep != "" {
-		o.exp = newExporter(ep)
+		o.exp = newExporter(ep, env)
 		o.metrics.spansDropped = o.exp.dropped.Load
 	}
 	return o
