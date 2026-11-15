@@ -82,7 +82,9 @@ jobs:
               exit 1
             fi
           fi
-          if ! printf '%s' "$sha" | grep -Eq '^[0-9a-f]{40}$'; then
+          # Whole-string match (bash regex): a value with a newline or any other byte fails,
+          # so nothing but 40 hex characters can reach GITHUB_OUTPUT.
+          if ! [[ "$sha" =~ ^[0-9a-f]{40}$ ]]; then
             echo "::error::The commit must be 40 lowercase hex characters (got a different format)."
             exit 1
           fi
