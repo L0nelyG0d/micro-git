@@ -11,9 +11,13 @@ Global cooldown: after an automatic action is claimed, no other incident may cla
 global_cooldown_seconds (policy, default 300; env GLOBAL_COOLDOWN_SECONDS overrides, 0 = off), stamped in
 <incidents dir>/.last_action under flock, so flapping alerts or a listener restart cannot loop restarts.
 Env: COMPOSE_FILES (colon list; COMPOSE_FILE fallback) and COMPOSE_PROJECT_NAME expand the {{COMPOSE_ARGS}}
-placeholder of command templates.
+placeholder of action templates.
+The model never supplies a command: it proposes proposed_action.action_id (+ params). build_action() validates both
+against autonomy-policy.yaml and builds argv/env itself; decision.json carries action_id, params, command (display
+string), argv and env, and the executor (run-responder.sh) runs only that argv/env. A legacy `command` field in the
+response is refused (escalate).
 """
-import json, math, os, re, sys, time, datetime
+import json, math, os, re, shlex, sys, time, datetime
 try:
     import fcntl
 except ImportError:  # non-POSIX: cooldown still works, without the cross-process lock
@@ -80,8 +84,8 @@ def audit(inc, kind, detail, decision="n/a"):
                             "actor": "policy-check.py", "kind": kind, "detail": detail, "decision": decision}) + "\n")
 
 
-def compose_args():
-    """'-p NAME -f a -f b' from env, or None (fail closed) when no compose file list is configured."""
+def compose_argv():
+    """['-p', NAME, '-f', a, '-f', b] from env, or None (fail closed) when no compose file list is configured."""
     lst = os.environ.get("COMPOSE_FILES") or os.environ.get("COMPOSE_FILE") or ""
     if not lst or not re.fullmatch(r"[A-Za-z0-9_./:-]+", lst) or ".." in lst:
         return None
@@ -90,15 +94,65 @@ def compose_args():
     proj = os.environ.get("COMPOSE_PROJECT_NAME", "")
     if proj and not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", proj):
         return None
-    parts = (["-p", proj] if proj else []) + [x for f in lst.split(":") if f for x in ("-f", f)]
-    return " ".join(parts)
+    return (["-p", proj] if proj else []) + [x for f in lst.split(":") if f for x in ("-f", f)]
 
 
-def expand(template):
-    if "{{COMPOSE_ARGS}}" not in template:
-        return template
-    ca = compose_args()
-    return None if ca is None else template.replace("{{COMPOSE_ARGS}}", re.escape(ca).replace("\\ ", " "))
+# Param values: strict allowlist of characters on top of the per-param rule; no whitespace, no shell syntax, no leading "-".
+SAFE_PARAM = re.compile(r"[A-Za-z0-9_./:=@%+][A-Za-z0-9_./:=@%+-]{0,119}")
+ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
+
+
+def build_action(act, policy):
+    """Validate action_id/params and build the command. Returns (spec, built, reasons); built = {action_id, params,
+    argv, env, command} or None. Never raises on model input; every problem is a reason (fail closed)."""
+    aid, typ, params = act.get("action_id"), act.get("type"), act.get("params", {})
+    allowed = policy["allowed_actions"]
+    if not isinstance(aid, str) or aid not in allowed:
+        return None, None, ["unknown action_id %s: not in the policy allowlist (%s)" % (json.dumps(str(aid)[:60]), ", ".join(sorted(allowed)))]
+    spec = allowed[aid]
+    if typ not in spec["types"]:
+        return spec, None, ["action_id %s is not allowed for incident type %s (allowed: %s)" % (aid, typ, ", ".join(spec["types"]))]
+    if not isinstance(params, dict):
+        return spec, None, ["params must be an object"]
+    rules, reasons = spec.get("params", {}), []
+    for k in params:
+        if k not in rules:
+            reasons.append("unknown param %s for action_id %s" % (json.dumps(str(k)[:40]), aid))
+    for k, rule in rules.items():
+        if k not in params:
+            reasons.append("missing param %s for action_id %s" % (k, aid)); continue
+        v = params[k]
+        if not isinstance(v, str):
+            reasons.append("param %s must be a string" % k)
+        elif not SAFE_PARAM.fullmatch(v) or v.startswith("-"):
+            reasons.append("param %s has a forbidden value (whitespace/shell metacharacters/leading dash are never allowed)" % k)
+        elif "enum" in rule and v not in rule["enum"]:
+            reasons.append("param %s not in its allowed values" % k)
+        elif "regex" in rule and not re.fullmatch(rule["regex"], v):
+            reasons.append("param %s does not match its rule" % k)
+        elif any(re.search(d["regex"], v) for d in policy["denied_patterns"]):
+            reasons.append("param %s hit a denied pattern" % k)
+    if reasons:
+        return spec, None, reasons
+    ca = None
+    argv = []
+    for el in spec["argv"]:
+        if el == "{{COMPOSE_ARGS}}":
+            ca = compose_argv()
+            if ca is None:
+                return spec, None, ["COMPOSE_FILES not set or invalid: cannot build the command (fail closed)"]
+            argv += ca
+        elif re.fullmatch(r"\{\{param:([A-Za-z0-9_]+)\}\}", el):
+            argv.append(params[el[8:-2]])
+        elif "{{" in el:
+            return spec, None, ["policy template element not understood: " + el]
+        else:
+            argv.append(el)
+    env = dict(spec.get("env", {}))
+    if not all(ENV_NAME.fullmatch(k) and isinstance(v, str) and SAFE_PARAM.fullmatch(v or "x") for k, v in env.items()):
+        return spec, None, ["policy env entry invalid"]
+    command = " ".join(["%s=%s" % (k, shlex.quote(v) if v else "") for k, v in env.items()] + [shlex.quote(x) for x in argv])
+    return spec, {"action_id": aid, "params": params, "argv": argv, "env": env, "command": command}, []
 
 
 def cooldown_seconds(policy):
@@ -166,37 +220,44 @@ def claim_cooldown(inc, policy):
 
 
 def decide(resp, policy, schema, inc):
+    """Returns (verdict, reasons, built). built is the command built by the policy (only when verdict is allow)."""
     reasons = []
+    act0 = resp.get("proposed_action") if isinstance(resp, dict) else None
+    if isinstance(act0, dict):   # clear reasons for the new contract before the generic schema errors
+        if "command" in act0:
+            return "escalate", ["legacy command field refused: the responder must propose action_id (and params), never a shell command"], None
+        if "action_id" not in act0:
+            return "escalate", ["missing action_id in proposed_action (use \"none\" for code_fix_pr/escalate)"], None
+        aid = act0["action_id"]
+        if aid != "none" and (not isinstance(aid, str) or aid not in policy["allowed_actions"]):
+            return "escalate", ["unknown action_id %s: not in the policy allowlist (%s)" % (json.dumps(str(aid)[:60]), ", ".join(sorted(policy["allowed_actions"])))], None
+    schema = json.loads(json.dumps(schema))   # the policy is authoritative: its allowlist (+ "none") is the action_id enum
+    schema["properties"]["proposed_action"]["properties"]["action_id"]["enum"] = sorted(policy["allowed_actions"]) + ["none"]
     errs = validate(resp, schema) if isinstance(resp, dict) else ["response is not an object"]
     if errs:
-        return "escalate", ["schema: " + e for e in errs]
+        return "escalate", ["schema: " + e for e in errs], None
     act = resp["proposed_action"]
-    cmd, typ = act["command"], act["type"]
-    if cmd != cmd.strip():
-        reasons.append("command has leading/trailing whitespace")
+    typ, aid = act["type"], act["action_id"]
+    built = None
     if resp["needs_human"]:
         reasons.append("responder set needs_human")
     if resp["confidence"] < policy["confidence_threshold"]:
         reasons.append("confidence %.2f < threshold %.2f" % (resp["confidence"], policy["confidence_threshold"]))
     if typ in policy["propose_only_types"]:
         reasons.append("action type %s is propose-only" % typ)
+        if aid != "none" or act.get("params"):
+            reasons.append("propose-only type %s must use action_id none and no params" % typ)
+    elif aid == "none":
+        reasons.append("action_id none is not executable for type %s" % typ)
     else:
-        for d in policy["denied_patterns"]:
-            if re.search(d["regex"], cmd):
-                reasons.append("denied pattern: " + d["id"])
-        match = []
-        for a in policy["allowed_actions"]:
-            rx = expand(a["command_regex"])
-            if rx is not None and a["type"] == typ and re.fullmatch(rx, cmd):
-                match.append(a)
-        if not match:
-            reasons.append("command not in allowlist for type %s%s" % (typ, "" if compose_args() else " (COMPOSE_FILES not set: fail closed)"))
+        _spec, built, r = build_action(act, policy)
+        reasons += r
     if os.path.exists(os.path.join(inc, "action.lock")):
         reasons.append("an automatic action was already taken for this incident")
     left, unreadable = cooldown_state(inc, policy)
     if left:
         reasons.append(cooldown_reason(policy, left, unreadable))
-    return ("escalate" if reasons else "allow"), reasons
+    return ("escalate" if reasons else "allow"), reasons, (None if reasons else built)
 
 
 def main():
@@ -214,20 +275,25 @@ def main():
     except Exception as e:
         resp = None
         audit(inc, "policy_input_error", str(e))
-    verdict, reasons = decide(resp, policy, schema, inc)
+    verdict, reasons, built = decide(resp, policy, schema, inc)
     if verdict == "allow" and "--no-claim" not in a and policy["max_automatic_actions_per_incident"] >= 1:
         try:  # atomic claim: at most one automatic action
             fd = os.open(os.path.join(inc, "action.lock"), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, resp["proposed_action"]["command"].encode()); os.close(fd)
+            os.write(fd, json.dumps(built).encode()); os.close(fd)   # the claimed action; the executor runs exactly this
         except FileExistsError:
-            verdict, reasons = "escalate", ["an automatic action was already taken for this incident"]
+            verdict, reasons, built = "escalate", ["an automatic action was already taken for this incident"], None
         else:
             left, unreadable = claim_cooldown(inc, policy)   # global, across incidents; release the per-incident claim if refused
             if left:
                 os.unlink(os.path.join(inc, "action.lock"))
-                verdict, reasons = "escalate", [cooldown_reason(policy, left, unreadable)]
+                verdict, reasons, built = "escalate", [cooldown_reason(policy, left, unreadable)], None
+    pa = resp.get("proposed_action") if isinstance(resp, dict) else None
+    pa = pa if isinstance(pa, dict) else {}
+    b = built or {}
     decision = {"incident_id": os.path.basename(os.path.abspath(inc)), "decision": verdict, "reasons": reasons,
-                "command": (resp or {}).get("proposed_action", {}).get("command") if isinstance(resp, dict) else None,
+                "action_id": b.get("action_id", pa.get("action_id") if isinstance(pa.get("action_id"), str) else None),
+                "params": b.get("params", pa.get("params") if isinstance(pa.get("params"), dict) else None),
+                "command": b.get("command"), "argv": b.get("argv"), "env": b.get("env"),
                 "policy_version": policy["version"]}
     json.dump(decision, open(os.path.join(inc, "decision.json"), "w"), indent=2)
     audit(inc, "policy_decision", json.dumps(decision), verdict)

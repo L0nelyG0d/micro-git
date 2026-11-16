@@ -4,7 +4,7 @@
 # Env: RESPONDER=auto|claude|codex|stub (auto: claude, else codex, else stub)
 #      AUTO_EXECUTE=1 run an allowed action (default 0 = dry-run: decision + planned action logged only)   DRY_RUN=1 never executes
 #      COMPOSE_FILES (colon separated; COMPOSE_FILE accepted) / COMPOSE_PROJECT_NAME become the -f / -p flags inside the
-#      allowlisted command templates. Unset COMPOSE_FILES = fail closed (no action can be allowed or run).
+#      policy's action templates (the model proposes an action_id, policy-check.py builds the argv; no model text is executed). Unset COMPOSE_FILES = fail closed (no action can be allowed or run).
 #      ACTION_ENV_PASSTHROUGH: names (not values) of extra env vars forwarded to the allowlisted command, default
 #      lists the docker-compose.yml interpolation vars (POSTGRES_*, JWT_SECRET, APP_PORT, APP_VERSION, ...).
 #      RESPONDER_TIMEOUT=300  INCIDENTS_DIR
@@ -67,7 +67,7 @@ case "$R" in
   codex)  audit "$INC" exec "codex exec --sandbox read-only"
           (cd "$CLEANREPO" && run_limited "${CLEAN[@]}" codex exec --sandbox read-only "$PROMPT" < /dev/null) > "$RAW" 2>"$INC/responder-stderr.txt" ;;
   stub)   audit "$INC" exec "deterministic stub responder"
-          CSTR="$CSTR" python3 -I - "$INC" "$ID" > "$RAW" <<'PY'
+          python3 -I - "$INC" "$ID" > "$RAW" <<'PY'
 import json, sys, glob, os
 inc, iid = sys.argv[1:3]
 def load(n):
@@ -77,15 +77,14 @@ def load(n):
 flag = load("app_runtime.json").get("fault_endpoint_500", "")
 try: ratio = float(load("prom_error_ratio.json")["data"]["result"][0]["value"][1])
 except Exception: ratio = 0.0
-cstr = os.environ.get("CSTR", "")
-fault = bool(flag) and ratio >= 0.05 and bool(cstr)
+fault = bool(flag) and ratio >= 0.05
 out = {"incident_id": iid,
   "summary": "Elevated 5xx ratio on the alerted route.",
   "root_cause_hypothesis": ("Fault-injection flag FAULT_ENDPOINT_500=%s is set on the running app container and the error ratio is %.2f." % (flag, ratio)) if fault else "Unknown; no active fault flag with a high error ratio in evidence.",
   "confidence": 0.9 if fault else 0.3,
   "evidence_refs": ["app_runtime.json", "prom_error_ratio.json", "loki_errors.json"],
-  "proposed_action": ({"type": "config_change", "command": "FAULT_ENDPOINT_500= docker compose %s up -d --no-deps app" % cstr, "files": []} if fault
-                      else {"type": "escalate", "command": "", "files": []}),
+  "proposed_action": ({"type": "config_change", "action_id": "fault_off", "params": {}, "files": []} if fault
+                      else {"type": "escalate", "action_id": "none", "params": {}, "files": []}),
   "risk": "Low: recreates only the app container with the fault flag cleared.",
   "needs_human": not fault}
 print(json.dumps(out))
@@ -126,18 +125,24 @@ case "$PRC" in
      jq -n --arg id "$ID" '{incident_id:$id,why_escalated:["policy check failed internally; no action taken"]}' > "$INC/escalation-packet.json"
      echo "policy error rc=$PRC: escalated"; exit 1 ;;
 esac
-CMD="$(jq -r .command "$INC/decision.json")"
+# Only what policy-check.py built is executed: action_id/params/argv/env from decision.json (never any model text).
+CMD="$(jq -r .command "$INC/decision.json")"; AID="$(jq -r .action_id "$INC/decision.json")"; APARAMS="$(jq -c .params "$INC/decision.json")"
 if [ "${DRY_RUN:-0}" = 1 ] || [ "${AUTO_EXECUTE:-0}" != 1 ]; then
-  audit "$INC" action_skipped "allowed but not executed (DRY_RUN=${DRY_RUN:-0} AUTO_EXECUTE=${AUTO_EXECUTE:-0}): $CMD"
+  audit "$INC" action_skipped "allowed but not executed (DRY_RUN=${DRY_RUN:-0} AUTO_EXECUTE=${AUTO_EXECUTE:-0}): action_id=$AID params=$APARAMS command=$CMD"
   echo "allowed (not executed): $CMD"; exit 0
 fi
-if [ -f "$INC/action.lock" ]; then CMD="$(cat "$INC/action.lock")"; fi   # execute exactly the string that was claimed
+[ -f "$INC/action.lock" ] || { audit "$INC" action_skipped "no action.lock for an allowed decision: refusing to run (fail closed)" error; echo "refused: no action claim"; exit 1; }
+LOCK="$INC/action.lock"   # execute exactly the argv/env that was claimed
+CMD="$(jq -r .command "$LOCK")"; AID="$(jq -r .action_id "$LOCK")"; APARAMS="$(jq -c .params "$LOCK")"
+ARGV=(); while IFS= read -r l; do ARGV+=("$l"); done < <(jq -r '.argv[]' "$LOCK")
+ENVSET=(); while IFS= read -r l; do ENVSET+=("$l"); done < <(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$LOCK")
+[ "${#ARGV[@]}" -gt 0 ] || { audit "$INC" action_skipped "action.lock has no argv: refusing to run (fail closed)" error; echo "refused: empty argv"; exit 1; }
 [ -n "$CSTR" ] || { audit "$INC" action_skipped "COMPOSE_FILES not set: refusing to run (fail closed)"; echo "refused: COMPOSE_FILES not set"; exit 1; }
-audit "$INC" exec "$CMD"
+audit "$INC" exec "action_id=$AID params=$APARAMS command=$CMD"
 PASS=(); for n in ${ACTION_ENV_PASSTHROUGH:-POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB JWT_SECRET GRAFANA_ADMIN_PASSWORD APP_PORT APP_VERSION APP_COMMIT COOKIE_SECURE REGISTER_MAX_PER_IP COMPOSE_ENV_FILES}; do
   [[ "$n" =~ ^[A-Z_][A-Z0-9_]*$ ]] && [ -n "${!n:-}" ] && PASS+=("$n=${!n}"); done
 audit "$INC" action_env "passthrough names: $(for p in ${PASS[@]+"${PASS[@]}"}; do printf '%s ' "${p%%=*}"; done) compose=$CSTR"
-( cd "$REPO" && env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${PASS[@]+"${PASS[@]}"} bash -c "$CMD" ) >> "$INC/action-output.txt" 2>&1
+( cd "$REPO" && env -i PATH="$PATH" HOME="$HOME" ${DOCKER_HOST:+DOCKER_HOST="$DOCKER_HOST"} ${PASS[@]+"${PASS[@]}"} ${ENVSET[@]+"${ENVSET[@]}"} "${ARGV[@]}" ) >> "$INC/action-output.txt" 2>&1
 ARC=$?; audit "$INC" action_result "rc=$ARC"
 "$IR_DIR/runbooks/verify-recovery.sh" "$ROUTE" "$ID"; VRC=$?   # warm-up is measured from here (action time)
 audit "$INC" verify_result "rc=$VRC"

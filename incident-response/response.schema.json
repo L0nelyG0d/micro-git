@@ -3,24 +3,86 @@
   "title": "IncidentResponderOutput",
   "type": "object",
   "additionalProperties": false,
-  "required": ["incident_id", "summary", "root_cause_hypothesis", "confidence", "evidence_refs", "proposed_action", "risk", "needs_human"],
+  "required": [
+    "incident_id",
+    "summary",
+    "root_cause_hypothesis",
+    "confidence",
+    "evidence_refs",
+    "proposed_action",
+    "risk",
+    "needs_human"
+  ],
   "properties": {
-    "incident_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"},
-    "summary": {"type": "string", "maxLength": 1000},
-    "root_cause_hypothesis": {"type": "string", "maxLength": 2000},
-    "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-    "evidence_refs": {"type": "array", "minItems": 1, "items": {"type": "string", "description": "evidence file name, optionally #jsonpath"}},
+    "incident_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,79}$"
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "root_cause_hypothesis": {
+      "type": "string",
+      "maxLength": 2000
+    },
+    "confidence": {
+      "type": "number",
+      "minimum": 0,
+      "maximum": 1
+    },
+    "evidence_refs": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "string",
+        "description": "evidence file name, optionally #jsonpath"
+      }
+    },
     "proposed_action": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "command", "files"],
+      "required": [
+        "type",
+        "action_id",
+        "files"
+      ],
       "properties": {
-        "type": {"enum": ["rollback", "restart", "config_change", "code_fix_pr", "escalate"]},
-        "command": {"type": "string", "maxLength": 500, "description": "exact shell command; empty for escalate/code_fix_pr"},
-        "files": {"type": "array", "items": {"type": "string"}}
+        "type": {
+          "enum": [
+            "rollback",
+            "restart",
+            "config_change",
+            "code_fix_pr",
+            "escalate"
+          ]
+        },
+        "action_id": {
+          "enum": [
+            "restart_app",
+            "fault_off",
+            "none"
+          ],
+          "description": "id from the policy allowlist; 'none' for code_fix_pr/escalate. The system builds the command; the model never supplies one."
+        },
+        "params": {
+          "type": "object",
+          "description": "parameters of the action; each action declares its own (none today: must be empty or absent). Validated strictly by policy-check.py against autonomy-policy.yaml"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
       }
     },
-    "risk": {"type": "string", "maxLength": 1000},
-    "needs_human": {"type": "boolean"}
+    "risk": {
+      "type": "string",
+      "maxLength": 1000
+    },
+    "needs_human": {
+      "type": "boolean"
+    }
   }
 }

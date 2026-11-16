@@ -7,44 +7,102 @@ pass=0; fail=0
 export GLOBAL_COOLDOWN_SECONDS=0   # cooldown has its own tests below
 export COMPOSE_FILES="docker-compose.yml:observability/compose.yaml" COMPOSE_PROJECT_NAME=mgobs
 CA="-p mgobs -f docker-compose.yml -f observability/compose.yaml"
-mk() { # name command type confidence needs_human
-  mkdir -p "$T/$1"
-  jq -n --arg id "$1" --arg c "$2" --arg t "$3" --argjson conf "$4" --argjson nh "${5:-false}" \
+mk() { # name action_id type confidence [needs_human] [params-json]   (the model never supplies a command)
+  local EMPTY='{}'; mkdir -p "$T/$1"
+  jq -n --arg id "$1" --arg a "$2" --arg t "$3" --argjson conf "$4" --argjson nh "${5:-false}" --argjson p "${6:-$EMPTY}" \
    '{incident_id:$id,summary:"s",root_cause_hypothesis:"h",confidence:$conf,evidence_refs:["prom_error_ratio.json"],
-     proposed_action:{type:$t,command:$c,files:[]},risk:"low",needs_human:$nh}' > "$T/$1/response.json"
+     proposed_action:{type:$t,action_id:$a,params:$p,files:[]},risk:"low",needs_human:$nh}' > "$T/$1/response.json"
 }
-expect() { # name expected-exit
-  python3 -I "$D/policy-check.py" "$T/$1" > "$T/$1/out" 2>&1; rc=$?
-  if [ $rc -eq "$2" ]; then pass=$((pass+1)); echo "ok   $1 (exit $rc)"; else fail=$((fail+1)); echo "FAIL $1 (exit $rc, want $2)"; cat "$T/$1/out"; fi
+mkraw() { mkdir -p "$T/$1"; printf '%s\n' "$2" > "$T/$1/response.json"; }   # name raw-json
+expect() { # name expected-exit [policy-check args...]
+  n="$1"; want="$2"; shift 2
+  python3 -I "$D/policy-check.py" "$T/$n" "$@" > "$T/$n/out" 2>&1; rc=$?
+  if [ $rc -eq "$want" ]; then pass=$((pass+1)); echo "ok   $n (exit $rc)"; else fail=$((fail+1)); echo "FAIL $n (exit $rc, want $want)"; cat "$T/$n/out"; fi
 }
-mk allow-restart        "docker compose $CA restart app" restart 0.9;                                       expect allow-restart 0
-mk allow-faultoff       "FAULT_ENDPOINT_500= docker compose $CA up -d --no-deps app" config_change 0.85;    expect allow-faultoff 0
-mk deny-rollback        "APP_IMAGE=mg-app:v1.2.3 docker compose $CA up -d --no-deps app" rollback 0.9;  expect deny-rollback 3   # rollback removed from allowlist
-mk deny-no-compose-args "docker compose restart app" restart 0.9;                                       expect deny-no-compose-args 3  # template needs -p/-f
-mk deny-other-stack     "docker compose -p other -f docker-compose.yml restart app" restart 0.9;        expect deny-other-stack 3
-mk deny-ws              " docker compose $CA restart app" restart 0.9;                                  expect deny-ws 3
-( unset COMPOSE_FILES COMPOSE_FILE; mk fail-closed "docker compose $CA restart app" restart 0.9; python3 -I "$D/policy-check.py" "$T/fail-closed" >/dev/null 2>&1; [ $? -eq 3 ] ) && { pass=$((pass+1)); echo "ok   fail-closed without COMPOSE_FILES"; } || { fail=$((fail+1)); echo "FAIL fail-closed"; }
-mk deny-db-write        "docker compose exec db psql -c 'DELETE FROM repos'" restart 0.99;              expect deny-db-write 3
-mk deny-secrets         "cat .env" config_change 0.99;                                                  expect deny-secrets 3
-mk deny-force-push      "git push --force origin main" rollback 0.99;                                   expect deny-force-push 3
-mk deny-prod-deploy     "kubectl rollout restart deploy/app" restart 0.99;                              expect deny-prod-deploy 3
-mk deny-metachar        "docker compose $CA restart app; rm -rf /" restart 0.99;                            expect deny-metachar 3
-mk deny-suffix          "docker compose $CA restart app --timeout 1" restart 0.99;                          expect deny-suffix 3
-mk deny-type-mismatch   "docker compose $CA restart app" rollback 0.99;                                     expect deny-type-mismatch 3
-mk low-confidence       "docker compose $CA restart app" restart 0.5;                                       expect low-confidence 3
-mk needs-human          "docker compose $CA restart app" restart 0.95 true;                                 expect needs-human 3
-mk propose-only         "" code_fix_pr 0.95;                                                            expect propose-only 3
+reason() { # name substring : decision.json reasons must mention it, and no command may be built
+  if jq -e --arg s "$2" '[.reasons[]|contains($s)]|any' "$T/$1/decision.json" >/dev/null && jq -e '.command==null and .argv==null' "$T/$1/decision.json" >/dev/null; then pass=$((pass+1)); echo "ok   $1: reason '$2', no command built"; else fail=$((fail+1)); echo "FAIL $1: reason '$2' not found"; jq -c .reasons "$T/$1/decision.json"; fi
+}
+okjq() { # label name jq-filter
+  if jq -e "$3" "$T/$2/decision.json" >/dev/null; then pass=$((pass+1)); echo "ok   $1"; else fail=$((fail+1)); echo "FAIL $1"; cat "$T/$2/decision.json"; fi
+}
+# approved actions: the policy builds the command from the template + system compose args
+mk allow-restart  restart_app restart 0.9;                  expect allow-restart 0
+okjq "restart_app builds the template with the compose args" allow-restart ".command==\"docker compose $CA restart app\" and .action_id==\"restart_app\" and .params=={} and .argv==[\"docker\",\"compose\",\"-p\",\"mgobs\",\"-f\",\"docker-compose.yml\",\"-f\",\"observability/compose.yaml\",\"restart\",\"app\"]"
+mk allow-faultoff fault_off config_change 0.85;             expect allow-faultoff 0
+okjq "fault_off builds the template with the compose args" allow-faultoff ".command==\"FAULT_ENDPOINT_500= docker compose $CA up -d --no-deps app\" and .env=={\"FAULT_ENDPOINT_500\":\"\"} and .argv[0:2]==[\"docker\",\"compose\"] and .argv[-4:]==[\"up\",\"-d\",\"--no-deps\",\"app\"]"
+# unknown / missing / disallowed ids (replaces deny-rollback: rollback is not an action)
+mk deny-rollback-id      rollback rollback 0.9;             expect deny-rollback-id 3;  reason deny-rollback-id "unknown action_id"
+mk deny-rollback-type    fault_off rollback 0.9;            expect deny-rollback-type 3; reason deny-rollback-type "not allowed for incident type rollback"
+mk deny-unknown-id       drop_database config_change 0.99;  expect deny-unknown-id 3;   reason deny-unknown-id "unknown action_id"
+mk deny-id-wrong-type    fault_off restart 0.99;            expect deny-id-wrong-type 3; reason deny-id-wrong-type "not allowed for incident type restart"
+mk deny-id-wrong-type2   restart_app config_change 0.99;    expect deny-id-wrong-type2 3; reason deny-id-wrong-type2 "not allowed for incident type config_change"
+mk deny-none-executable  none restart 0.99;                 expect deny-none-executable 3
+mkraw deny-missing-id '{"incident_id":"x","summary":"s","root_cause_hypothesis":"h","confidence":0.9,"evidence_refs":["a"],"proposed_action":{"type":"restart","params":{},"files":[]},"risk":"r","needs_human":false}'
+expect deny-missing-id 3; reason deny-missing-id "missing action_id"
+mkraw deny-id-not-string '{"incident_id":"x","summary":"s","root_cause_hypothesis":"h","confidence":0.9,"evidence_refs":["a"],"proposed_action":{"type":"restart","action_id":["restart_app"],"params":{},"files":[]},"risk":"r","needs_human":false}'
+expect deny-id-not-string 3
+# legacy command field: refused outright, even when the string is the exact allowlisted command (replaces deny-no-compose-args/other-stack/ws/suffix intents: a command string can no longer reach execution)
+for c in "docker compose $CA restart app" "FAULT_ENDPOINT_500= docker compose $CA up -d --no-deps app" "docker compose restart app" "docker compose -p other -f docker-compose.yml restart app" " docker compose $CA restart app" "docker compose $CA restart app --timeout 1" "docker compose $CA restart app; rm -rf /"; do
+  n="legacy-$(printf '%s' "$c" | cksum | cut -d' ' -f1)"; mk "$n" restart_app restart 0.99
+  jq --arg c "$c" '.proposed_action.command=$c' "$T/$n/response.json" > "$T/$n/r2" && mv "$T/$n/r2" "$T/$n/response.json"
+  expect "$n" 3; reason "$n" "legacy command field refused"
+done
+# legacy denied-pattern intents (db write, secrets, force push, prod deploy, metachar) as legacy commands, and as param values below
+for c in "docker compose exec db psql -c 'DELETE FROM repos'" "cat .env" "git push --force origin main" "kubectl rollout restart deploy/app"; do
+  n="legacy-deny-$(printf '%s' "$c" | cksum | cut -d' ' -f1)"; mkraw "$n" "$(jq -n --arg c "$c" '{incident_id:"x",summary:"s",root_cause_hypothesis:"h",confidence:0.99,evidence_refs:["a"],proposed_action:{type:"config_change",command:$c,files:[]},risk:"r",needs_human:false}')"
+  expect "$n" 3; reason "$n" "legacy command field refused"
+done
+( unset COMPOSE_FILES COMPOSE_FILE; mk fail-closed restart_app restart 0.9; python3 -I "$D/policy-check.py" "$T/fail-closed" >/dev/null 2>&1; [ $? -eq 3 ] && grep -q 'COMPOSE_FILES not set' "$T/fail-closed/decision.json" ) && { pass=$((pass+1)); echo "ok   fail-closed without COMPOSE_FILES"; } || { fail=$((fail+1)); echo "FAIL fail-closed"; }
+for bad in ":a.yml" "a.yml:" "a.yml::b.yml" "-f:b.yml" "a.yml:-x" "a b.yml" 'a.yml;rm'; do
+  n="badcompose-$(printf '%s' "$bad" | cksum | cut -d' ' -f1)"; mk "$n" restart_app restart 0.9
+  ( COMPOSE_FILES="$bad" python3 -I "$D/policy-check.py" "$T/$n" >/dev/null 2>&1; [ $? -eq 3 ] ) && { pass=$((pass+1)); echo "ok   invalid COMPOSE_FILES '$bad' fails closed"; } || { fail=$((fail+1)); echo "FAIL invalid COMPOSE_FILES '$bad'"; }
+done
+# params: neither shipped action takes any, so every param is unknown
+mk deny-extra-param      restart_app restart 0.9 false '{"service":"db"}';   expect deny-extra-param 3; reason deny-extra-param "unknown param"
+mk deny-param-metachar   fault_off config_change 0.9 false '{"x":"a;rm -rf /"}'; expect deny-param-metachar 3; reason deny-param-metachar "unknown param"
+mkraw deny-params-array '{"incident_id":"x","summary":"s","root_cause_hypothesis":"h","confidence":0.9,"evidence_refs":["a"],"proposed_action":{"type":"restart","action_id":"restart_app","params":["x"],"files":[]},"risk":"r","needs_human":false}'; expect deny-params-array 3
+# strict param validation, exercised with a test policy that declares an action with parameters
+jq '.allowed_actions.set_level={types:["config_change"],env:{},argv:["docker","compose","{{COMPOSE_ARGS}}","run","{{param:level}}","{{param:name}}"],params:{level:{enum:["info","debug"]},name:{regex:"^[a-z]{1,10}$"}}}' "$D/autonomy-policy.yaml" > "$T/param-policy.json"
+pp() { # name params-json want-exit
+  mk "$1" set_level config_change 0.9 false "$2"; expect "$1" "$3" --policy "$T/param-policy.json"
+}
+pp param-ok '{"level":"debug","name":"abc"}' 0
+okjq "param value becomes exactly one argv element" param-ok '.argv[-2:]==["debug","abc"] and (.command|endswith(" debug abc"))'
+pp param-missing '{"level":"debug"}' 3
+pp param-unknown-key '{"level":"debug","name":"abc","extra":"x"}' 3
+pp param-not-in-enum '{"level":"trace","name":"abc"}' 3
+pp param-regex-miss '{"level":"info","name":"ABC"}' 3
+pp param-int '{"level":"info","name":5}' 3
+pp param-null '{"level":null,"name":"abc"}' 3
+pp param-nested '{"level":{"a":"info"},"name":"abc"}' 3
+for v in 'info;id' 'info$(id)' 'info`id`' "info
+id" 'info id' 'info|id' 'info&id' 'info>x' 'info\x' "info'x" 'info"x' '-x' '' 'a/../b*' 'info{a,b}'; do
+  n="param-meta-$(printf '%s' "$v" | cksum | cut -d' ' -f1)"; mk "$n" set_level config_change 0.9 false "$(jq -nc --arg v "$v" '{level:$v,name:"abc"}')"
+  expect "$n" 3 --policy "$T/param-policy.json"
+done
+jq '.allowed_actions.set_level.params.name={regex:".*"}' "$T/param-policy.json" > "$T/loose-policy.json"   # even a permissive rule cannot admit shell syntax
+for v in 'a;b' 'a b' 'a$(id)' 'a`id`' "a
+b"; do
+  n="param-loose-$(printf '%s' "$v" | cksum | cut -d' ' -f1)"; mk "$n" set_level config_change 0.9 false "$(jq -nc --arg v "$v" '{level:"info",name:$v}')"
+  expect "$n" 3 --policy "$T/loose-policy.json"
+done
+# confidence, needs_human, propose-only (they apply to a valid action too)
+mk low-confidence restart_app restart 0.5;                  expect low-confidence 3
+mk needs-human    restart_app restart 0.95 true;            expect needs-human 3
+mk propose-only   none code_fix_pr 0.95;                    expect propose-only 3
+mk propose-only-id restart_app code_fix_pr 0.95;            expect propose-only-id 3
+mk propose-escalate none escalate 0.95;                     expect propose-escalate 3
 # invalid JSON / schema violations
 mkdir -p "$T/invalid-json"; echo '{not json' > "$T/invalid-json/response.json";                          expect invalid-json 3
 mkdir -p "$T/missing-field"; echo '{"incident_id":"x"}' > "$T/missing-field/response.json";             expect missing-field 3
-mk bad-confidence "docker compose $CA restart app" restart 1.7;                                             expect bad-confidence 3
-mk bad-type "docker compose $CA restart app" nuke 0.9;                                                      expect bad-type 3
+mk bad-confidence restart_app restart 1.7;                                             expect bad-confidence 3
+mk bad-type restart_app nuke 0.9;                                                      expect bad-type 3
 mkdir -p "$T/no-file";                                                                                  expect no-file 3
 # max one automatic action: second run on the same incident must escalate
-mk once "docker compose $CA restart app" restart 0.9; expect once 0; expect once 3
+mk once restart_app restart 0.9; expect once 0; expect once 3
 # global cooldown across incidents (separate dir so .last_action is isolated)
 CD="$T/cd"; mkdir -p "$CD/a" "$CD/b" "$CD/c"
-for i in a b c; do jq -n --arg id "$i" --arg c "docker compose $CA restart app" '{incident_id:$id,summary:"s",root_cause_hypothesis:"h",confidence:0.9,evidence_refs:["x"],proposed_action:{type:"restart",command:$c,files:[]},risk:"low",needs_human:false}' > "$CD/$i/response.json"; done
+for i in a b c; do jq -n --arg id "$i" '{incident_id:$id,summary:"s",root_cause_hypothesis:"h",confidence:0.9,evidence_refs:["x"],proposed_action:{type:"restart",action_id:"restart_app",params:{},files:[]},risk:"low",needs_human:false}' > "$CD/$i/response.json"; done
 cdrun() { GLOBAL_COOLDOWN_SECONDS="$2" python3 -I "$D/policy-check.py" "$CD/$1" "${@:3}" >/dev/null 2>&1; echo $?; }
 [ "$(cdrun a 300)" = 0 ] && [ -f "$CD/.last_action" ] && { pass=$((pass+1)); echo "ok   cooldown: first action allowed + .last_action stamped"; } || { fail=$((fail+1)); echo "FAIL cooldown first"; }
 [ "$(cdrun b 300)" = 3 ] && grep -q 'global action cooldown' "$CD/b/decision.json" && [ ! -f "$CD/b/action.lock" ] && { pass=$((pass+1)); echo "ok   cooldown: second incident escalated, no lock left"; } || { fail=$((fail+1)); echo "FAIL cooldown second"; }
@@ -71,7 +129,7 @@ python3 -I "$D/policy-check.py" "$T/crash" --policy "$T/crash/bad-policy.json" >
 [ $rc -eq 1 ] && grep -q policy_error "$T/crash/audit.jsonl" && { pass=$((pass+1)); echo "ok   policy crash exits 1 + audited"; } || { fail=$((fail+1)); echo "FAIL policy crash (rc=$rc)"; }
 # concurrent claims: 8 incidents race for the global cooldown; exactly one may win (flock), the rest escalate
 CC="$T/cc"; mkdir -p "$CC"
-for i in 1 2 3 4 5 6 7 8; do mkdir -p "$CC/i$i"; jq -n --arg id "i$i" --arg c "docker compose $CA restart app" '{incident_id:$id,summary:"s",root_cause_hypothesis:"h",confidence:0.9,evidence_refs:["x"],proposed_action:{type:"restart",command:$c,files:[]},risk:"low",needs_human:false}' > "$CC/i$i/response.json"; done
+for i in 1 2 3 4 5 6 7 8; do mkdir -p "$CC/i$i"; jq -n --arg id "i$i" '{incident_id:$id,summary:"s",root_cause_hypothesis:"h",confidence:0.9,evidence_refs:["x"],proposed_action:{type:"restart",action_id:"restart_app",params:{},files:[]},risk:"low",needs_human:false}' > "$CC/i$i/response.json"; done
 for i in 1 2 3 4 5 6 7 8; do ( GLOBAL_COOLDOWN_SECONDS=300 python3 -I "$D/policy-check.py" "$CC/i$i" >/dev/null 2>&1; echo $? > "$CC/i$i.rc" ) & done; wait
 WON=$(cat "$CC"/i?.rc | grep -c '^0$'); ESC=$(cat "$CC"/i?.rc | grep -c '^3$'); LOCKS=$(ls "$CC"/i*/action.lock 2>/dev/null | wc -l | tr -d ' ')
 [ "$WON" = 1 ] && [ "$ESC" = 7 ] && [ "$LOCKS" = 1 ] && { pass=$((pass+1)); echo "ok   cooldown: 8 concurrent claims -> 1 allowed, 7 escalated, 1 lock"; } || { fail=$((fail+1)); echo "FAIL concurrent claims (won=$WON esc=$ESC locks=$LOCKS)"; }
