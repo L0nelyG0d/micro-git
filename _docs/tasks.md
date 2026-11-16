@@ -325,6 +325,7 @@ Description: Issue #175. Root `README.md` is the entry point; `_docs/` holds pro
 ## 176. Module 4: one real-model responder drill
 Goal: The operations report includes one drill run by the real model, not a stub.
 Description: Issue #176. Paused until the other work is merged (user decision 2026-11-15). Related fix: #200.
+Status (2026-11-16): Drill C run with the real model and `AUTO_EXECUTE=1` (incident `inc-20261116T161811-14418a2888c4d605-97706f`, executed fault-off, RECOVERED); section 2.8 of the operations report updated, ready for QA. Branch `issue-176-real-model-drill`.
 
 ## 177. Render: dashboard auto-deploy off
 Goal: Only the CI/E2E-gated deploy hook puts a commit live on Render.
