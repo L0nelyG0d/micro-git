@@ -1,6 +1,6 @@
 # Deployment
 
-One Docker image serves the API and the built SPA. It is deployed to two targets, Render and AWS, by `.github/workflows/deploy.yml` after CI and E2E are green on `main`. CD details (jobs, secrets and variables): [`deploy/README.md`](../deploy/README.md). Per-target details: [`deploy/render/README.md`](../deploy/render/README.md), [`deploy/aws/README.md`](../deploy/aws/README.md). Operations (live check, rollback, key rotation): [`_docs/deploy-runbook.md`](../_docs/deploy-runbook.md). App configuration reference: [`_docs/README.md`](../_docs/README.md).
+One Docker image serves the API and the built SPA. It is deployed to two targets, Render and AWS, by `.github/workflows/deploy.yml` after CI and E2E are green on `main`. CD details (jobs, secrets and variables): [`deploy/README.md`](../deploy/README.md). Per-target details: [`deploy/render/README.md`](../deploy/render/README.md), [`deploy/aws/README.md`](../deploy/aws/README.md). Operations (live check, rollback, key rotation): [`_docs/deploy-runbook.md`](../_docs/deploy-runbook.md). App configuration reference: [`_docs/README.md`](../_docs/README.md). Merge flow, smoke checks and rollback: [release-process.md](release-process.md). What CI and E2E check before a deploy: [testing.md](testing.md).
 
 ## Docker image
 
@@ -34,6 +34,7 @@ For plain HTTP on localhost set `COOKIE_SECURE=false` (empty also works but logs
 | `STORE`, `DB_DRIVER` | app | `db`/`memory`; `postgres`/`sqlite` |
 | `APPLY_SCHEMA` | app, optional | `true` applies the embedded `backend/db/schema.sql` at startup (set on Render) |
 | `COOKIE_SECURE` | app | `true` behind HTTPS (Render sets it; on AWS only with `DomainName`); unset logs a warning |
+| `APP_ENV` | app, optional | environment label `[a-z0-9-]{1,16}`, default `local`; `dev` on Render (`render.yaml`), `prod` on AWS (`remote-deploy.sh`) |
 | `APP_COMMIT` | app, optional | `X-Build` value when `RENDER_GIT_COMMIT` is absent; set to the sha by the AWS rollout |
 | `PORT`, `STATIC_DIR` | app | Image defaults 8080 and `/app/public` |
 | `METRICS_ADDR` | app, optional | Separate listener for `/metrics`; see `_docs/plan.md` |
@@ -53,22 +54,33 @@ The Postgres store does not create tables. There is no migration tool, only `bac
 
 | Target | Definition | What it deploys |
 | --- | --- | --- |
-| Render | `deploy/render.yaml` (Blueprint) | Docker web service `micro-git` + managed Postgres `mg-db`; `JWT_SECRET` generated; `autoDeploy: false` (only the gated deploy hook deploys); free plan (sleeps when idle, free Postgres expires after 30 days). Live at https://micro-git.onrender.com |
-| AWS | `deploy/aws/main.yaml` (CloudFormation) and `deploy/aws/deploy.sh` | One EC2 `t3.micro` with Docker (Postgres, the app, Caddy) and an ECR repository, stack `micro-git-prod` in `ap-southeast-2`. The image is built from the exact commit, rolled out through SSM, and smoke-checked on `X-Build`. URL: stack output `AppUrl` |
+| Render (dev) | `deploy/render.yaml` (Blueprint) | Docker web service `micro-git` + managed Postgres `mg-db`; `JWT_SECRET` generated; `autoDeploy: false` (only the gated deploy hook deploys); free plan (sleeps when idle, free Postgres expires after 30 days). Live at https://micro-git.onrender.com |
+| AWS (prod) | `deploy/aws/main.yaml` (CloudFormation) and `deploy/aws/deploy.sh` | One EC2 `t3.micro` with Docker (Postgres, the app, Caddy) and an ECR repository, stack `micro-git-prod` in `ap-southeast-2`. The image is built from the exact commit, rolled out through SSM, and smoke-checked on `X-Build`. URL: stack output `AppUrl` |
 
-## Deploy workflow (`deploy.yml`)
+## Environments
+
+| Environment | Target | Changes through | `APP_ENV` |
+| --- | --- | --- | --- |
+| dev | Render | `deploy.yml`, automatically on every green `main` commit | `dev` |
+| prod | AWS `micro-git-prod` | `promote.yml` ("Promote to production"), manually, with approval | `prod` |
+
+Each has its own database. `APP_ENV` (`[a-z0-9-]{1,16}`, default `local`, invalid falls back to `local` with a warning) is the `env` field of every JSON log line, the `env` label of `build_info` and the span resource attribute `deployment.environment`.
+
+## Deploy workflow (`deploy.yml`, dev)
 
 Trigger: `workflow_run` of `CI` or `E2E` completing on `main`. Job `gate` runs only if that run concluded `success`, was a `push`, and on `main`. It then queries `gh run list` for the same commit SHA and sets `ready=true` only if both `ci.yml` and `e2e.yml` have a completed `success` run. Whichever of the two finishes last sees both green, so one deploy starts per commit. `concurrency: deploy-main` does not cancel running deploys.
 
-The gate also writes true/false flags (never values) for which targets are configured; a job runs when `ready` and its flag are both true:
+The gate also writes a true/false flag (never a value) for whether the Render hook is configured; `deploy-render` runs when `ready` and that flag are both true:
 
 | Job | Enabled by | Type |
 | --- | --- | --- |
 | `deploy-render` (POST to the deploy hook, pinned with `ref=<sha>`), then `smoke` (waits for `X-Build` == sha on `/health`, then `/` 200) | `RENDER_DEPLOY_HOOK` | secret |
-| `deploy-aws-keys` (`deploy/aws/deploy.sh --apply --ci --ref <sha>`, IAM-user key from environment `aws-prod`) | `AWS_DEPLOY_MODE=keys` and no `AWS_ROLE_ARN` | variable |
-| `deploy-aws` (OIDC; optional, not used) | `AWS_ROLE_ARN` | variable |
 
-`deploy-aws` is optional: in the current AWS account an organization SCP denies creating the GitHub OIDC provider, so `AWS_ROLE_ARN` is unset and production AWS uses `deploy-aws-keys`. With no target configured the workflow is a no-op.
+With the hook unset the workflow is a no-op. It does not deploy AWS.
+
+## Promotion workflow (`promote.yml`, prod)
+
+Manual (`workflow_dispatch`, run from `main`), input `sha` (empty = the commit dev serves now). Jobs: `resolve` (commit exists, is on `main`, CI and E2E green, equals dev's build unless typed), `approve` (environment `production`, required reviewer), `deploy` (environment `aws-prod`, `deploy/aws/deploy.sh --apply --ci --ref <sha>`), `verify` (X-Build on dev, and on prod when the variable `PROD_URL` is set). `concurrency: promote-production`. Details, secrets and failure behaviour: [`deploy/README.md`](../deploy/README.md#promote-to-production).
 
 ## Health check
 
@@ -76,4 +88,4 @@ The gate also writes true/false flags (never values) for which targets are confi
 
 ## Current status
 
-Both targets are automated: Render through `RENDER_DEPLOY_HOOK` (live at https://micro-git.onrender.com) and AWS through `deploy-aws-keys` (stack `micro-git-prod`). Last verified runs and the current AWS address are in [`_docs/deploy-runbook.md`](../_docs/deploy-runbook.md).
+dev (Render) is automated through `RENDER_DEPLOY_HOOK` (live at https://micro-git.onrender.com); prod (AWS, stack `micro-git-prod`) deploys only through the manual `Promote to production` workflow. Last verified runs and the current AWS address are in [`_docs/deploy-runbook.md`](../_docs/deploy-runbook.md).

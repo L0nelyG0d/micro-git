@@ -46,7 +46,7 @@ func TestTimingLogsPatternNotPath(t *testing.T) {
 
 func TestTimingStatusAndSlow(t *testing.T) {
 	buf := captureTimingLog(t)
-	h := newObserver().middleware(http.NewServeMux(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	h := newObserver(observerConfig{}).middleware(http.NewServeMux(), http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(slowRequest + 20*time.Millisecond)
 		w.WriteHeader(http.StatusTeapot)
 	}))

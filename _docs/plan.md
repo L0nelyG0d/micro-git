@@ -308,7 +308,7 @@ In-memory, standard library only; constants and their meaning are at the top of 
 | `RENDER_GIT_COMMIT`, `APP_COMMIT` | no | commit label in `build_info`; the same id as the `X-Build` header (`buildID`), default `dev` |
 | `OTEL_EXPORTER_OTLP_ENDPOINT` | no | when set, one span per request is sent to `<endpoint>/v1/traces` (OTLP/HTTP JSON) |
 | `FAULT_ENDPOINT_500` | no | route pattern (e.g. `/repos/{owner}/{repo}`) that answers 500 for incident drills; logs a WARN at startup, and is refused (ERROR logged, no fault) when `COOKIE_SECURE=true` |
-| `METRICS_ADDR` | no | e.g. `127.0.0.1:9100`; serves `/metrics` only on that listener (graceful shutdown in parallel with the main one); its port must differ from `PORT` or startup is refused and removes it from the public mux. Unset and `COOKIE_SECURE` not `true`: `/metrics` is public on the app port (needed by the compose scrape) and exposes routes, traffic and version. Unset with `COOKIE_SECURE=true`: `/metrics` is disabled and a WARN is logged. A WARN is also logged when `METRICS_ADDR` has no host (`:9100`, `0.0.0.0`) under `COOKIE_SECURE=true` |
+| `METRICS_ADDR` | no | e.g. `127.0.0.1:9100`; serves `/metrics` only on that listener and removes it from the public mux (graceful shutdown in parallel with the main one); its port must differ from `PORT`, otherwise startup is refused. Unset and `COOKIE_SECURE` not `true`: `/metrics` is public on the app port (needed by the compose scrape) and exposes routes, traffic and version. Unset with `COOKIE_SECURE=true`: `/metrics` is disabled and a WARN is logged. A WARN is also logged when `METRICS_ADDR` has no host (`:9100`, `0.0.0.0`) under `COOKIE_SECURE=true` |
 | `TEST_DATABASE_URL` | for Postgres tests | separate database; Postgres-only tests are skipped without it |
 | `TEST_STORE` | no | tests only: `postgres`, `memory` or `sqlite`, the store the API suite runs on (default `postgres` if `TEST_DATABASE_URL` is set, else `sqlite`) |
 
@@ -322,16 +322,16 @@ Known limits (accepted): logout only clears the cookie, a stolen JWT stays valid
 
 ## Deployment
 
-One Docker image (root `Dockerfile`) serves the API and the SPA; the server strips `/api` in front of the API routes (`backend/static.go`). Two targets, both deployed by `.github/workflows/deploy.yml` only after CI and E2E are green for the commit on `main`:
+One Docker image (root `Dockerfile`) serves the API and the SPA; the server strips `/api` in front of the API routes (`backend/static.go`). Two environments (#201): dev on Render, deployed by `.github/workflows/deploy.yml` on every green `main` commit (CI and E2E green); prod on AWS, deployed only by the manual workflow `.github/workflows/promote.yml` ("Promote to production": checks, approval in environment `production`, deploy with the key in `aws-prod`). `APP_ENV` (`dev`, `prod`, default `local`) labels logs (`env`), `build_info` and spans (`deployment.environment`).
 
-- Render (free plan): Blueprint `deploy/render.yaml`, service `micro-git` with managed Postgres `mg-db`, `autoDeploy: false`, deploy hook pinned with `ref=<sha>`, then the `smoke` job waits for `X-Build` == sha.
-- AWS (Free plan account, `ap-southeast-2`): stack `micro-git-prod` (one EC2 instance with Docker Postgres, the app and Caddy) through `deploy/aws/deploy.sh`, run by job `deploy-aws-keys` with an IAM-user key in environment `aws-prod`. The OIDC job `deploy-aws` is optional and unused (the org SCP denies the OIDC provider).
+- dev, Render (free plan): Blueprint `deploy/render.yaml`, service `micro-git` with managed Postgres `mg-db`, `autoDeploy: false`, deploy hook pinned with `ref=<sha>`, then the `smoke` job waits for `X-Build` == sha.
+- prod, AWS (Free plan account, `ap-southeast-2`): stack `micro-git-prod` (one EC2 instance with Docker Postgres, the app and Caddy) through `deploy/aws/deploy.sh`, run by job `deploy` of the promote workflow with an IAM-user key in environment `aws-prod`. No workflow uses OIDC (the org SCP denies the OIDC provider; `bootstrap.sh` still supports it).
 
 Decision (user, 2026-11-13, #174): Railway, GCP and Vercel were removed; only Render and AWS are kept. Details: `deploy/README.md`, `docs/deployment.md`, `_docs/deploy-runbook.md`.
 
 ## Frontend
 
-Styling follows `DESIGN.md` and `frontend/src/index.css` (colors, radius, density); `_docs/design-system.md` is superseded for visual values and still holds the non-visual rules and the approved packages.
+Styling follows `_docs/DESIGN.md` and `frontend/src/index.css` (colors, radius, density); `_docs/design-system.md` is superseded for visual values and still holds the non-visual rules and the approved packages.
 
 | route | page |
 |---|---|

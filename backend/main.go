@@ -40,7 +40,7 @@ func main() {
 		log.Fatalf("database: %v", err)
 	}
 
-	srv := NewServer(store)
+	srv := NewServer(store, cfg.observerConfig())
 	srv.JWTSecret = []byte(cfg.JWTSecret)
 	srv.CookieSecure = cfg.CookieSecure
 
@@ -72,7 +72,7 @@ func main() {
 	// METRICS_ADDR: /metrics on its own listener, not on the public one.
 	var metricsSrv *http.Server
 	var mln net.Listener
-	if addr := srv.obs.metricsAddr; addr != "" {
+	if addr := cfg.MetricsAddr; addr != "" {
 		mln, err = net.Listen("tcp", addr)
 		if err != nil {
 			_ = ln.Close()
@@ -93,7 +93,7 @@ func main() {
 	log.Printf("listening on %s", cfg.Addr)
 	if metricsSrv != nil {
 		go func() { errc <- fmt.Errorf("metrics: %w", metricsSrv.Serve(mln)) }()
-		log.Printf("metrics listening on %s", srv.obs.metricsAddr)
+		log.Printf("metrics listening on %s", cfg.MetricsAddr)
 	}
 
 	select {
@@ -106,27 +106,43 @@ func main() {
 	log.Printf("shutting down")
 	shutCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
-	// Shut both listeners down in parallel so a slow API drain does not keep /metrics up.
+	gracefulShutdown(shutCtx, httpSrv, metricsSrv, func() {
+		// Flush after the drain so spans from requests that were still in flight are
+		// included, with its own budget so a slow drain cannot starve the flush.
+		flushCtx, flushCancel := context.WithTimeout(context.Background(), exporterFlushTimeout)
+		defer flushCancel()
+		srv.obs.exp.Close(flushCtx) // nil-safe when the exporter is disabled
+	}, closeStore)
+}
+
+// gracefulShutdown stops both listeners in parallel (so a slow API drain does
+// not keep /metrics up; metrics may be nil), then runs flush, then closeStore.
+// closeStore runs only when the API drained: if api.Shutdown gave up (its ctx
+// ended), handlers may still be running and must not lose the store under them;
+// the process is about to exit, so the OS reclaims the connections. It returns
+// whether closeStore ran.
+func gracefulShutdown(ctx context.Context, api, metrics *http.Server, flush, closeStore func()) bool {
 	var wg sync.WaitGroup
-	if metricsSrv != nil {
+	if metrics != nil {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if err := metricsSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			if err := metrics.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				log.Printf("metrics shutdown: %v", err)
 			}
 		}()
 	}
-	if err := httpSrv.Shutdown(shutCtx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Printf("shutdown: %v", err)
-	}
+	err := api.Shutdown(ctx)
 	wg.Wait()
-	// Flush after the drain so spans from requests that were still in flight are
-	// included, with its own budget so a slow drain cannot starve the flush.
-	flushCtx, flushCancel := context.WithTimeout(context.Background(), exporterFlushTimeout)
-	defer flushCancel()
-	srv.obs.exp.Close(flushCtx) // nil-safe when the exporter is disabled
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		log.Printf("shutdown: %v", err)
+		flush()
+		log.Printf("store left open: API drain did not finish, handlers may still be active")
+		return false
+	}
+	flush()
 	closeStore()
+	return true
 }
 
 // openStore builds the Store the config names. STORE=memory opens no database

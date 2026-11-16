@@ -45,7 +45,7 @@ docker exec -i mg-db psql -v ON_ERROR_STOP=1 -q -U mg -d mg < "$SCHEMA"
 
 docker rm -f mg-app >/dev/null 2>&1 || true
 docker run -d --name mg-app --restart unless-stopped --network mg \
-  --env-file /opt/mg/app.env ${APP_COMMIT:+-e "APP_COMMIT=$APP_COMMIT"} "$IMAGE" >/dev/null
+  --env-file /opt/mg/app.env -e APP_ENV=prod ${APP_COMMIT:+-e "APP_COMMIT=$APP_COMMIT"} "$IMAGE" >/dev/null
 sleep 3
 docker ps --filter name=mg-app --filter status=running --format 'mg-app running: {{.Image}}' | grep -q running \
   || { docker logs --tail 30 mg-app >&2; exit 1; }

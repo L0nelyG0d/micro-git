@@ -11,8 +11,10 @@ The main session is the orchestrator. It launches the roles below as subagents a
 - Engineer - implements one groomed task, follows `_docs/team/software-engineer.md`
 - QA - checks the result against the acceptance criteria, follows `_docs/team/qa-engineer.md`
 - Code reviewer - reviews the code after QA PASS, then merges into `main` and pushes, follows `_docs/team/code-reviewer.md`
+- Architect - keeps the structure map and the ownership of each area, reviews changes for structural fit, writes ADRs in `_docs/decisions/`, follows `_docs/team/architect.md`. May launch sub-architects (one per area) that report to it
+- DevOps - CI/CD, Render, AWS, observability, incident response, security audit. A branch per issue, hands over to QA, never merges; follows `_docs/team/devops.md`
 
-Models (user decision 2026-11-12, replaces 2026-10-19): PM runs on Haiku (`haiku`); the engineer on Sonnet or Opus (`sonnet`/`opus`); the code reviewer and the system analyst on Opus (`opus`); QA on Sonnet (`sonnet`). At most 5 subagents at once (user decision 2026-11-12, was 3). Tests run against the local Postgres on port 54329 (see AGENTS.md), not Neon.
+Models (user decision 2026-11-12, replaces 2026-10-19): PM runs on Haiku (`haiku`); the engineer on Sonnet or Opus (`sonnet`/`opus`); the code reviewer and the system analyst on Opus (`opus`); QA on Sonnet (`sonnet`). At most 5 subagents at once (user decision 2026-11-12, was 3). Tests run against the local Postgres on port 54329 (see AGENTS.md), not Neon. The architect runs on Fable, sub-architects on Opus for design and approval, DevOps on Opus; any agent that writes code or config runs on Sonnet (user decisions 2026-11-13 to 2026-11-15, ADR 0008).
 
 ## Lifecycle
 
@@ -31,7 +33,7 @@ Models (user decision 2026-11-12, replaces 2026-10-19): PM runs on Haiku (`haiku
 
 ## Controller role
 
-The orchestrator is a controller: it assigns issues to branches, launches engineers, QA and the code reviewer, and keeps `_docs/questions.md`. It does not write feature code, verify features, review code, merge or push itself; the code reviewer merges and pushes, QA closes. Independent issues may run in parallel, each on its own branch (at most 5 agents at once); issues that touch the same files or depend on each other run in order. The reviewer merges one branch at a time, and the waiting branches are updated from `main` before QA re-checks them.
+The orchestrator is a controller: it assigns issues to branches, launches engineers, QA, the code reviewer, the architect and DevOps, and keeps `_docs/questions.md`. It does not write feature code, verify features, review code, merge or push itself; the code reviewer merges and pushes, QA closes. Independent issues may run in parallel, each on its own branch (at most 5 agents at once); issues that touch the same files or depend on each other run in order. The reviewer merges one branch at a time, and the waiting branches are updated from `main` before QA re-checks them.
 
 ## Rules
 
@@ -42,17 +44,18 @@ The orchestrator is a controller: it assigns issues to branches, launches engine
 - If an issue is unclear or conflicts with `_docs/plan.md`, ask the user before building
 - If a decision needs the user (architecture, data model, stack, endpoint set) and they are away, do not wait: append the question to `_docs/questions.md` with the default you used, take the simplest reversible default, comment on the issue, and keep going. The user reviews that file on return
 - When a user decision is pending and the user is present, ask and wait about one minute. No answer: stash the question as above and keep working. Never stop the pipeline to wait
+- An architectural decision gets an ADR in `_docs/decisions/` and its own GitHub issue. Nothing in an ADR is applied before the user approves it on the issue
 
 ## CI and QA
 
-`.github/workflows/ci.yml` runs the repeatable mechanical gates on every push to `main`, every pull request and on demand: gofmt, `go vet`, the backend suite (`go test -p 1 -race ./...` against a throwaway Postgres service container, never Neon; the same suite also runs with `TEST_STORE=sqlite` and `TEST_STORE=memory` in a parallel job with no database), the frontend tests and build, `openapi.yaml` lint, and a secret scan. It needs no repository secrets. QA owns what CI cannot: acceptance criteria, exploratory and adversarial testing, browser and visual checks, and review of the tests. QA no longer re-runs gofmt, vet and the unit suites as its main evidence; it may rely on a green CI run plus its own targeted checks.
+`.github/workflows/ci.yml` runs the repeatable mechanical gates on every push to `main`, every pull request and on demand: gofmt, `go vet`, the backend suite (`go test -p 1 -race ./...` against a throwaway Postgres service container, never Neon; the same suite also runs with `TEST_STORE=sqlite` and `TEST_STORE=memory` in a parallel job with no database), the frontend tests and build, `_docs/openapi.yaml` lint, and a secret scan. It needs no repository secrets. The backend job also runs `go mod tidy -diff` and govulncheck. `.github/workflows/e2e.yml` runs the Playwright suite against the Docker image, and `.github/workflows/deploy.yml` deploys only after CI and E2E are both green for the commit on `main` (see `deploy/README.md`). QA owns what CI cannot: acceptance criteria, exploratory and adversarial testing, browser and visual checks, and review of the tests. QA no longer re-runs gofmt, vet and the unit suites as its main evidence; it may rely on a green CI run plus its own targeted checks.
 
 ## Testing-phase issues
 
 QA turns every finding into a new GitHub issue (use `_docs/task_template.md`, add the next number to `tasks.md`, label UI findings `ui`). These issues follow the normal lifecycle, plus:
 
 - UI issues use the project skills in `.claude/skills` (pinned in `skills-lock.json`; `.claude/` is git-ignored, so a fresh clone has no skills; `skills-lock.json` only pins them, so install them before a UI issue): the PM and engineer invoke `web-design-guidelines` to audit the affected screens, then `design-taste-frontend` and `image-to-code` to implement the fix. QA re-audits the result with `web-design-guidelines`
-- The skills never override `DESIGN.md` / `frontend/src/index.css` (the visual source of truth; `_docs/design-system.md` is superseded for visual values) or the AGENTS.md rule for design questions: show the user several options before changing the look
+- The skills never override `_docs/DESIGN.md` / `frontend/src/index.css` (the visual source of truth; `_docs/design-system.md` is superseded for visual values) or the AGENTS.md rule for design questions: show the user several options before changing the look
 - Non-UI issues (API, data, CLI) need none of these skills
 
 ## Dogfooding with mg

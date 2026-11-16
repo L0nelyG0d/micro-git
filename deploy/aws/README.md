@@ -24,7 +24,7 @@ Region `ap-southeast-2` and stack `micro-git-prod` are fixed in the scripts; the
 
 Options: `--ref <commit>` deploys another commit (default `HEAD`), `--profile`, `--rotate-jwt`, `--ci` (used by GitHub Actions: skips preflight and bootstrap, Free plan check informational). A lock in `$TMPDIR` stops two runs overlapping.
 
-Automating updates: any run of `deploy.sh --apply --account 228619515667` is the update. Options: a local git hook (for example `.git/hooks/post-merge` that runs it when `main` is pulled), a scheduled run (cron or launchd), or the `deploy-aws-keys` GitHub job below. Local hooks and schedules need a live `aws login` session; there are no stored keys on the machine.
+Automating updates: any run of `deploy.sh --apply --account 228619515667` is the update. Options: a local git hook (for example `.git/hooks/post-merge` that runs it when `main` is pulled), a scheduled run (cron or launchd), or the `Promote to production` GitHub workflow below. Local hooks and schedules need a live `aws login` session; there are no stored keys on the machine.
 
 ### GitHub Actions without OIDC: CI IAM user
 
@@ -34,21 +34,21 @@ User decision (2026-11-13): GitHub deploys with one dedicated IAM user, because 
 - It creates (idempotently) the GitHub environment `aws-prod` with a deployment branch policy that allows only `main`, so workflows on other branches cannot read its secrets.
 - If the user has no key, one is created and its JSON is piped through `python3` straight into `gh secret set --env aws-prod AWS_SECRET_ACCESS_KEY` / `AWS_ACCESS_KEY_ID` (stdin). It is never printed, logged or written to a file; only the last 4 characters of the key id are shown. If GitHub is unreachable no key is created; if storing fails, the new key is deleted again and the script says to re-run with `--rotate-ci-key` (the secrets may be a mismatched pair). It then sets the repository variables `AWS_REGION`, `AWS_STACK_NAME`, `AWS_CFN_ROLE_ARN`, `AWS_ACCOUNT_ID` and, last, `AWS_DEPLOY_MODE=keys` (not secrets).
 - Rotation: same command plus `--rotate-ci-key`: new key into the secrets, then the old key is deleted, so there is one active key.
-- Workflow: the gate sets `aws_keys=true` when the variable `AWS_DEPLOY_MODE` is `keys` and `AWS_ROLE_ARN` is not set; job `deploy-aws-keys` (environment `aws-prod`, after CI and E2E are green on `main`, workflow concurrency `deploy-main`) passes the key only as env of the step that runs `deploy/aws/deploy.sh --apply --ci --ref <sha>` (no third-party action sees it); that includes the change-set guard and the X-Build smoke.
+- Workflow: `.github/workflows/promote.yml` (manual, `workflow_dispatch`; since #201 nothing deploys AWS on push). Job `deploy` (environment `aws-prod`, after the `resolve` checks and the approval in environment `production`, workflow concurrency `promote-production`) passes the key only as env of the step that runs `deploy/aws/deploy.sh --apply --ci --ref <sha>` (no third-party action sees it); that includes the change-set guard and the X-Build smoke. `remote-deploy.sh` starts the container with `APP_ENV=prod`. The variable `AWS_DEPLOY_MODE` is still set by `bootstrap.sh` but no workflow reads it.
 - Server-side guard: local `deploy.sh --apply` runs set a stack policy that denies `Update:Replace` and `Update:Delete` on `AppInstance`, so even a hand-made change set cannot replace the instance.
 - Teardown: `destroy.sh --apply` deletes the user, its keys, the variable `AWS_DEPLOY_MODE` and the two environment secrets.
 - Accepted risk: anyone holding this key (or able to change the workflow on `main`) can deploy any image and run any command as root on the `micro-git-prod` instance through `ssm:SendCommand` (scoped to instances tagged with this stack). That is what a deploy credential does; it cannot reach other stacks, IAM, or other regions. Rotate it with `--rotate-ci-key` and delete it with `destroy.sh` when not needed.
 
-## OIDC path (job `deploy-aws`; not usable in account 228619515667)
+## OIDC path (former job `deploy-aws`, removed from CI in #201; not usable in account 228619515667)
 
-Used by `.github/workflows/deploy.yml`, job `deploy-aws`. The job runs only when the repository variable `AWS_ROLE_ARN` is set and CI and E2E are green for the commit on `main`.
+Formerly used by `.github/workflows/deploy.yml`, job `deploy-aws`, which ran when the repository variable `AWS_ROLE_ARN` was set. The job was removed in #201 (ADR 0005, option B); `bootstrap.sh` still creates the OIDC provider and role. The text below describes what the job did.
 
 ## Status: what is verified and what is not
 
 - Static: `cfn-lint` on `deploy/aws/main.yaml`, `actionlint` on `.github/workflows/deploy.yml` and `shellcheck` on all `deploy/aws/*.sh` are clean.
-- Real account (2026-11-13, account 228619515667): `deploy.sh --apply` (no-OIDC path) was run end to end; see `_docs/deploy-runbook.md` for the result. The OIDC path (`deploy-aws` job) is still unverified and cannot run in this account (SCP).
+- Real account (2026-11-13, account 228619515667): `deploy.sh --apply` (no-OIDC path) was run end to end; see `_docs/deploy-runbook.md` for the result. The OIDC path (the former `deploy-aws` job) is still unverified and cannot run in this account (SCP).
 
-## How the deploy works (job `deploy-aws`)
+## How the deploy works (former job `deploy-aws`)
 
 1. Fails early if secret `AWS_JWT_SECRET` is missing or shorter than 32 characters (the value is never printed).
 2. Assumes the role in `AWS_ROLE_ARN` through GitHub OIDC (no stored AWS keys). Fails early if `AWS_CFN_ROLE_ARN` is not set.
@@ -90,7 +90,7 @@ Steps:
 1. Log in with your own credentials: `aws login` (or `aws sso login --profile NAME`).
 2. Check first (read-only, changes nothing): `deploy/aws/preflight.sh --region <region> --stack-name <stack>`. It verifies the identity, default VPC, `t3.micro`/`t2.micro` offering, whether a stack with that name exists (use a NEW stack name if the hand-made `mg` exists, see Gotchas), whether the roles and policies already exist, and which GitHub variables and secrets are set (names only).
 3. Review the plan: `deploy/aws/bootstrap.sh --region <region> --stack-name <stack>` (dry-run is the default; it prints the aws commands and runs no mutating call).
-4. Apply: `deploy/aws/bootstrap.sh --apply --region <region> --stack-name <stack>` (add `--profile NAME` if needed). It prints the account id and asks you to type it. It creates, in order and idempotently: the GitHub OIDC provider (if missing), `mg-instance-boundary` (if missing), `cfn-deploy-<stack>` with its policy, `github-deploy-<stack>` with its policy (existing roles get their trust and policy refreshed).
+4. Apply: `deploy/aws/bootstrap.sh --apply --region <region> --stack-name <stack>` (add `--profile NAME` if needed). It prints the account id and asks you to type it. It creates, in order and idempotently: the GitHub OIDC provider (if missing), `mg-instance-boundary` (if missing), `cfn-deploy-<stack>` with its policy, `github-deploy-<stack>` with its policy (existing roles get their trust and policy refreshed; if an existing role's trust policy differs from the repo file, `--apply` aborts unless you pass `--force`, and the dry-run says it would overwrite). The OIDC provider is created without `--thumbprint-list`, which needs AWS CLI v2 2.15.38 or newer (older versions require the parameter; checked against the AWS CLI v2 changelog, v1 not verified).
 5. Run the `gh` commands the script prints at the end (it does not run them):
 
         gh variable set AWS_ROLE_ARN --repo L0nelyG0d/micro-git --body <github-deploy ARN>
@@ -101,7 +101,7 @@ Steps:
         gh variable set AWS_REGION --repo L0nelyG0d/micro-git --body <region>
 
    Use a NEW random `AWS_JWT_SECRET`; do not reuse any value that was ever in the old template parameters, user data, chat or logs.
-6. Push to `main` (or re-run the Deploy workflow after CI and E2E pass). Watch the `deploy-aws` job; the first run takes several minutes (instance boot, image pull). If it fails, read the job log (the SSM step prints the instance command output); re-running is safe after a failure of an ordinary update. After a FAILED FIRST CREATE (stack in `ROLLBACK_COMPLETE` or `ROLLBACK_FAILED`) an admin must first run `aws cloudformation delete-stack --stack-name <stack>` and wait for `DELETE_COMPLETE`; the job cannot update a stack in that state. `AppInstance` uses `DeletionPolicy: RetainExceptOnCreate`, so a failed first create deletes the half-built instance, while a later `delete-stack` still retains it.
+6. Deploy with `deploy.sh` or the `Promote to production` workflow and watch the job; the first run takes several minutes (instance boot, image pull). If it fails, read the job log (the SSM step prints the instance command output); re-running is safe after a failure of an ordinary update. After a FAILED FIRST CREATE (stack in `ROLLBACK_COMPLETE` or `ROLLBACK_FAILED`) an admin must first run `aws cloudformation delete-stack --stack-name <stack>` and wait for `DELETE_COMPLETE`; the job cannot update a stack in that state. `AppInstance` uses `DeletionPolicy: RetainExceptOnCreate`, so a failed first create deletes the half-built instance, while a later `delete-stack` still retains it.
 
 Manual equivalent: the same IAM objects can be created in the console from the JSON files (replace the placeholders by hand). The account also needs a default VPC in the region and EC2 capacity for a `t3.micro`.
 
@@ -120,7 +120,7 @@ Within the free tier (legacy accounts, first 12 months): about 0 USD/month for o
       --stack-name mg --capabilities CAPABILITY_IAM --no-fail-on-empty-changeset \
       --role-arn <AWS_CFN_ROLE_ARN> --parameter-overrides LatestAmiId=$AMI [DomainName=app.example.com] [KeyName=mykey]
 
-Then push the image and run `remote-deploy.sh` through SSM as the workflow does (see the `deploy-aws` job). Other parameters: `InstanceType`, `AdminCidr`, `VolumeSizeGb`. For an existing stack pass the running instance's current AMI id, never a newer one.
+Then push the image and run `remote-deploy.sh` through SSM as the workflow does (see `deploy.sh`). Other parameters: `InstanceType`, `AdminCidr`, `VolumeSizeGb`. For an existing stack pass the running instance's current AMI id, never a newer one.
 
 ## What this creates and what is free
 
@@ -141,6 +141,7 @@ Not used on purpose: App Runner (not free), RDS (`db.t3.micro` is free only for 
 - **Secrets**: the JWT secret is in SSM Parameter Store (SecureString, default `aws/ssm` key) and in `/opt/mg/app.env` (mode 600) on the instance; it is not in user data. The generated DB password is in `/opt/mg/*.env` and is generated in user data on the instance, never in the template. Anyone with `ssm:GetParameter` (with decryption) on `/<stack>/jwt-secret` or shell access to the instance can read the JWT secret.
 - **Rotating the JWT secret**: update the GitHub secret and re-run the deploy; all sessions are invalidated.
 - **Existing hand-made stacks must be recreated under a NEW stack name.** First-boot user data runs once, so editing `UserData` on an existing stack only stops and starts the instance and does not re-run it; an old instance would lack the new layout, and the removed `JwtSecret`/`ImageTag` parameters change the stack. Deploy to a new name (set `AWS_STACK_NAME`), migrate data if needed, then delete the old stack.
+- **JWT secret.** `main.yaml` has no JWT parameter and no user-data secret. For stack `micro-git-prod`, a manual `deploy.sh` run generates a fresh random secret (`openssl rand -hex 32`, piped straight into SSM, never printed) if none exists, so the value that was exposed in the hand-made `mg` stack's user data is not used by it. The OIDC job `deploy-aws` instead overwrites `/<stack>/jwt-secret` from the GitHub secret `AWS_JWT_SECRET` on every deploy: generate that with `openssl rand -hex 32` and never reuse the `mg` value. Never copy a secret from another stack into SSM. Rotating the live secret is an operator action and logs every user out: `deploy.sh --apply --rotate-jwt` (and, if `deploy-aws` is ever enabled, also update `AWS_JWT_SECRET`, or its next deploy reverts it). Rotate the `mg` stack's secret or delete that stack if it is still running.
 - **AMI upgrades are a deliberate manual action.** CI never changes the AMI of a running stack, and the change-set guard fails the job if `AppInstance` would be replaced or removed. To move to a newer AMI: back up Postgres, then deploy manually with a new `LatestAmiId` knowing the instance is replaced and the data is lost unless restored.
 - **The image serves the SPA and the API** (root `Dockerfile`). Caddy forwards everything to `mg-app:8080`.
 - **Swap**: `t3.micro` has 1 GB RAM; user data adds a 1 GB swap file.
@@ -149,7 +150,7 @@ Not used on purpose: App Runner (not free), RDS (`db.t3.micro` is free only for 
 ## What was actually deployed
 
 - Stack `mg` in `ap-southeast-2`, created by hand with `aws cloudformation deploy` (not by CI). Public address: http://ec2-13-211-236-62.ap-southeast-2.compute.amazonaws.com
-- The `deploy-aws` job in `.github/workflows/deploy.yml` runs only when the variable `AWS_ROLE_ARN` exists, and it did not when this was written. It defaults `AWS_REGION` to `us-east-1`, not `ap-southeast-2`, unless the variable is set.
+- The former `deploy-aws` job in `.github/workflows/deploy.yml` (removed in #201) ran only when the variable `AWS_ROLE_ARN` exists, and it did not when this was written. It defaults `AWS_REGION` to `us-east-1`, not `ap-southeast-2`, unless the variable is set.
 
 ## Delete the stack / avoid charges
 

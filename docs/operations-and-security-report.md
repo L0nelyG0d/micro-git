@@ -16,6 +16,8 @@ Prometheus alert rule --> Alertmanager --webhook--> incident-response/listener.p
 
 The app (`backend/observe.go`, stdlib only) exposes `/metrics`, writes JSON slog logs with redaction, propagates `traceparent`, and exports spans over OTLP/HTTP JSON. Metrics, logs (via the collector filelog receiver) and traces were verified live in Prometheus, Loki and Tempo. The listener turns a firing alert into an incident directory with an append-only `audit.jsonl`. The responder only proposes; `autonomy-policy.yaml` (confidence threshold 0.7, allow-list of two commands (restart, fault-flag-off; rollback was removed), deny patterns, propose-only types) decides.
 
+Environments (#201): dev runs on Render and receives every green `main` commit; prod runs on AWS and changes only through the manual workflow `Promote to production`. Each instance labels its own telemetry with `APP_ENV` (`dev`, `prod`; `local` by default): field `env` in the JSON logs, label `env` on `build_info`, resource attribute `deployment.environment` on spans. The local stack labels scraped series `env=local`; the dashboard has an `env` variable and the alert rules keep `env`.
+
 ## 2. Incident reconstruction (live drills)
 
 Two drills were run. **Drill A (2.1 to 2.6)** is the main incident: the full path alert, evidence, stub proposal, policy allow, **executed** allowlisted command, **verified recovery**. **Drill B (2.7)** is the earlier escalation-path example. Both were deliberate fault injections (`FAULT_ENDPOINT_500=/repos/{owner}/{repo}` via `observability/app-telemetry.yaml`), not real user incidents. Incident id format: `inc-<UTC timestamp>-<alert fingerprint>` for these drills; new incidents get a random 6-hex suffix and a private (0700) directory.

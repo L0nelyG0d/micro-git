@@ -193,6 +193,19 @@ func TestLoadConfigMetricsAddr(t *testing.T) {
 		{"", ":8080", true},
 		{"9090", "127.0.0.1:9090", true},
 		{"", "9100", true},
+		// forms that name the same port as PORT but differ as strings
+		{"", "127.0.0.1:08080", true},
+		{"08080", "127.0.0.1:8080", true},
+		{"+8080", "127.0.0.1:8080", true},
+		{"+8080", ":08080", true},
+		{"80", "127.0.0.1:http", true},
+		{"", "127.0.0.1:http", false},
+		// port 0 or an empty port binds a random port silently
+		{"", "127.0.0.1:0", true},
+		{"", "127.0.0.1:", true},
+		{"", ":0", true},
+		{"", "127.0.0.1:99999", true},
+		{"", "127.0.0.1:nosuchservice", true},
 	} {
 		env := map[string]string{"DATABASE_URL": "x", "JWT_SECRET": goodSecret, "PORT": tc.port, "METRICS_ADDR": tc.addr}
 		cfg, err := LoadConfig(func(k string) string { return env[k] })
@@ -211,5 +224,50 @@ func TestLoadConfigCookieSecureOddValueWarns(t *testing.T) {
 	cfg, err := LoadConfig(func(k string) string { return env[k] })
 	if err != nil || cfg.CookieSecure || len(cfg.Warnings) != 1 || !strings.Contains(cfg.Warnings[0], "COOKIE_SECURE") {
 		t.Errorf("COOKIE_SECURE=yes: cfg %+v err %v", cfg, err)
+	}
+}
+
+func TestLoadConfigAddrIsCanonical(t *testing.T) {
+	t.Parallel()
+	env := map[string]string{"DATABASE_URL": "x", "JWT_SECRET": goodSecret, "PORT": "+08081"}
+	cfg, err := LoadConfig(func(k string) string { return env[k] })
+	if err != nil || cfg.Addr != ":8081" {
+		t.Errorf("Addr = %q err %v, want :8081", cfg.Addr, err)
+	}
+}
+
+func TestLoadConfigAppEnv(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		val      string
+		want     string
+		wantWarn bool
+	}{
+		{"", "local", false},
+		{"dev", "dev", false},
+		{"prod", "prod", false},
+		{"staging-2", "staging-2", false},
+		{"Prod", "local", true},
+		{"prod_1", "local", true},
+		{"a-very-long-environment-name", "local", true},
+		{"prod\nx", "local", true},
+	} {
+		env := map[string]string{"DATABASE_URL": "x", "JWT_SECRET": goodSecret, "COOKIE_SECURE": "true"}
+		if tc.val != "" {
+			env["APP_ENV"] = tc.val
+		}
+		cfg, err := LoadConfig(func(k string) string { return env[k] })
+		if err != nil {
+			t.Fatalf("APP_ENV=%q must not stop startup: %v", tc.val, err)
+		}
+		if cfg.AppEnv != tc.want {
+			t.Errorf("APP_ENV=%q: AppEnv = %q, want %q", tc.val, cfg.AppEnv, tc.want)
+		}
+		if got := len(cfg.Warnings) > 0; got != tc.wantWarn {
+			t.Errorf("APP_ENV=%q: warnings %q, want warning=%v", tc.val, cfg.Warnings, tc.wantWarn)
+		}
+		if cfg.observerConfig().Env != tc.want {
+			t.Errorf("APP_ENV=%q: observerConfig env = %q", tc.val, cfg.observerConfig().Env)
+		}
 	}
 }

@@ -1,6 +1,6 @@
 # Iterations
 
-The teacher-assignment round (issues #79 and up, listed in `_docs/tasks.md`) delivered the app in five steps: mock, openapi, memory, sqlite, connect. Each step can be run on its own. The API contract is [`openapi.yaml`](../openapi.yaml); the backlog is `_docs/tasks.md`, issue numbers are `L0nelyG0d/micro-git` issues.
+The teacher-assignment round (issues #79 and up, listed in `_docs/tasks.md`) delivered the app in five steps: mock, openapi, memory, sqlite, connect. Each step can be run on its own. The API contract is [`openapi.yaml`](openapi.yaml); the backlog is `_docs/tasks.md`, issue numbers are `L0nelyG0d/micro-git` issues.
 
 ## Layers
 

@@ -35,6 +35,16 @@ def token():
         return ""
 
 
+def token_problem():
+    """Why token() is empty, as an operator-facing config error (or None when the token is usable)."""
+    try:
+        return None if open(TOKEN_FILE).read().strip() else "ALERT_TOKEN_FILE %s is empty" % TOKEN_FILE
+    except FileNotFoundError:
+        return "ALERT_TOKEN_FILE %s does not exist; run make-token.sh" % TOKEN_FILE
+    except OSError as e:
+        return "ALERT_TOKEN_FILE %s is not readable by the listener user (%s); fix ownership/mode (re-run make-token.sh)" % (TOKEN_FILE, e.strerror)
+
+
 _perm_warned = False   # token-permission warning is emitted once per process
 
 
@@ -186,7 +196,10 @@ class H(BaseHTTPRequestHandler):
             return self._send(404, {"error": "not found"})
         tok = token()
         got = self.headers.get("Authorization", "")
-        if not tok or not got.startswith("Bearer ") or not hmac.compare_digest(got[7:].encode(), tok.encode()):
+        if not tok:
+            gaudit("config", token_problem() or "ALERT_TOKEN_FILE is unusable", "reject")   # a server-side config error, not a bad client token
+            return self._send(401, {"error": "unauthorized"})
+        if not got.startswith("Bearer ") or not hmac.compare_digest(got[7:].encode(), tok.encode()):
             gaudit("auth_rejected", "missing/invalid bearer token from %s" % self.client_address[0], "reject")
             return self._send(401, {"error": "unauthorized"})
         if not (self.headers.get("Content-Type") or "").split(";")[0].strip().lower() == "application/json":

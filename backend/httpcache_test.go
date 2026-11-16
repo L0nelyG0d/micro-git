@@ -135,7 +135,7 @@ func TestGzipJSON(t *testing.T) {
 		buf := captureTimingLog(t)
 		mux := http.NewServeMux()
 		mux.Handle("/x", jsonHandler(418, 3000))
-		serve(newObserver().middleware(mux, gzipJSON(mux)), "GET", "/x", gz)
+		serve(newObserver(observerConfig{}).middleware(mux, gzipJSON(mux)), "GET", "/x", gz)
 		if !strings.Contains(buf.String(), `"status":418`) {
 			t.Errorf("log = %q", buf.String())
 		}

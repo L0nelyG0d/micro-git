@@ -8,6 +8,7 @@ services:
       - "${APP_PORT:-8080}:8080"
     environment:
       PORT: "8080"
+      APP_ENV: "${APP_ENV:-local}"
       STORE: db
       DB_DRIVER: postgres
       DATABASE_URL: "postgres://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}?sslmode=disable"

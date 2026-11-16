@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -18,7 +19,7 @@ func obsServer(t *testing.T) (*Server, *bytes.Buffer) {
 	t.Helper()
 	s := NewServer(newMemStore())
 	buf := &bytes.Buffer{}
-	s.obs.log = newJSONLogger(buf)
+	s.obs.log = newJSONLogger(buf, defaultAppEnv)
 	return s, buf
 }
 
@@ -46,7 +47,7 @@ func TestRedact(t *testing.T) {
 		t.Errorf("url credentials leaked: %q", got)
 	}
 	var buf bytes.Buffer
-	newJSONLogger(&buf).Info("x", "password", "p1", "Authorization", "Bearer abc", "ok", "fine")
+	newJSONLogger(&buf, defaultAppEnv).Info("x", "password", "p1", "Authorization", "Bearer abc", "ok", "fine")
 	if strings.Contains(buf.String(), "p1") || strings.Contains(buf.String(), "abc") || !strings.Contains(buf.String(), "fine") {
 		t.Errorf("logger redaction wrong: %s", buf.String())
 	}
@@ -84,8 +85,6 @@ func TestAccessLogJSON(t *testing.T) {
 }
 
 func TestMetricsEndpoint(t *testing.T) {
-	t.Setenv("COOKIE_SECURE", "")
-	t.Setenv("METRICS_ADDR", "")
 	t.Setenv("APP_VERSION", "1.2.3")
 	t.Setenv("RENDER_GIT_COMMIT", "")
 	t.Setenv("APP_COMMIT", "")
@@ -105,7 +104,7 @@ func TestMetricsEndpoint(t *testing.T) {
 		`http_request_duration_seconds_bucket{method="GET",route="/health",le="+Inf"} 2`,
 		`http_request_duration_seconds_count{method="GET",route="/health"} 2`,
 		`http_requests_in_flight 1`,
-		`build_info{version="1.2.3",commit="dev"} 1`,
+		`build_info{version="1.2.3",commit="dev",env="local"} 1`,
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("metrics missing %q in:\n%s", want, body)
@@ -248,16 +247,14 @@ func TestMiddlewarePanicSafe(t *testing.T) {
 
 func TestFaultRefusedWhenCookieSecure(t *testing.T) {
 	t.Setenv("FAULT_ENDPOINT_500", "/repos/{owner}/{repo}")
-	t.Setenv("COOKIE_SECURE", "true")
 	buf := captureTimingLog(t)
-	s := NewServer(newMemStore())
+	s := NewServer(newMemStore(), observerConfig{CookieSecure: true})
 	if rec := obsDo(s.Handler(), "GET", "/repos/a/b", nil); rec.Code == 500 {
 		t.Error("fault applied despite COOKIE_SECURE=true")
 	}
 	if !strings.Contains(buf.String(), `"level":"ERROR"`) || !strings.Contains(buf.String(), "refused") {
 		t.Errorf("no refusal error logged: %s", buf)
 	}
-	t.Setenv("COOKIE_SECURE", "")
 	buf.Reset()
 	NewServer(newMemStore())
 	if !strings.Contains(buf.String(), `"level":"WARN"`) {
@@ -266,10 +263,8 @@ func TestFaultRefusedWhenCookieSecure(t *testing.T) {
 }
 
 func TestMetricsDisabledInProduction(t *testing.T) {
-	t.Setenv("METRICS_ADDR", "")
-	t.Setenv("COOKIE_SECURE", "true")
 	buf := captureTimingLog(t)
-	s := NewServer(newMemStore())
+	s := NewServer(newMemStore(), observerConfig{CookieSecure: true})
 	if rec := obsDo(s.Handler(), "GET", "/metrics", nil); rec.Code != 404 {
 		t.Errorf("/metrics with COOKIE_SECURE=true and no METRICS_ADDR = %d, want 404", rec.Code)
 	}
@@ -277,9 +272,8 @@ func TestMetricsDisabledInProduction(t *testing.T) {
 		t.Errorf("no disabled warning: %s", buf)
 	}
 	// with METRICS_ADDR set the private handler still serves, and unspecified hosts warn
-	t.Setenv("METRICS_ADDR", ":9100")
 	buf.Reset()
-	s = NewServer(newMemStore())
+	s = NewServer(newMemStore(), observerConfig{CookieSecure: true, MetricsAddr: ":9100"})
 	if !strings.Contains(buf.String(), "all interfaces") {
 		t.Errorf("no unspecified-host warning: %s", buf)
 	}
@@ -294,8 +288,7 @@ func TestMetricsDisabledInProduction(t *testing.T) {
 }
 
 func TestMetricsAddrRemovesPublicRoute(t *testing.T) {
-	t.Setenv("METRICS_ADDR", "127.0.0.1:0")
-	s, _ := obsServer(t)
+	s := NewServer(newMemStore(), observerConfig{MetricsAddr: "127.0.0.1:9100"})
 	if rec := obsDo(s.Handler(), "GET", "/metrics", nil); rec.Code != 404 {
 		t.Errorf("public /metrics = %d, want 404", rec.Code)
 	}
@@ -343,7 +336,7 @@ func TestExporterNon2xxCountsDropped(t *testing.T) {
 	if got := e.dropped.Load(); got != 3 {
 		t.Fatalf("dropped after full queue = %d, want 3", got)
 	}
-	m := newMetrics("v", "c")
+	m := newMetrics("v", "c", "local")
 	m.spansDropped = e.dropped.Load
 	var sb strings.Builder
 	m.write(&sb)
@@ -356,7 +349,7 @@ func TestExporterCloseFlushes(t *testing.T) {
 	var n atomic.Int32
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { n.Add(1); w.WriteHeader(200) }))
 	defer ts.Close()
-	e := newExporter(ts.URL)
+	e := newExporter(ts.URL, "local")
 	e.enqueue(span{name: "x"})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -369,4 +362,150 @@ func TestExporterCloseFlushes(t *testing.T) {
 		t.Fatalf("dropped = %d", e.dropped.Load())
 	}
 	(*exporter)(nil).Close(ctx)
+}
+
+// TestEnvLabelFlows checks that the validated APP_ENV value reaches the log
+// line, the build_info series and the span resource, for each case.
+func TestEnvLabelFlows(t *testing.T) {
+	t.Setenv("APP_VERSION", "1.2.3")
+	t.Setenv("RENDER_GIT_COMMIT", "")
+	t.Setenv("APP_COMMIT", "")
+	for _, tc := range []struct{ name, env, want string }{
+		{"default", "", "local"},
+		{"dev", "dev", "dev"},
+		{"prod", "prod", "prod"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := make(chan map[string]any, 4)
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var m map[string]any
+				_ = json.NewDecoder(r.Body).Decode(&m)
+				got <- m
+			}))
+			defer ts.Close()
+			t.Setenv("OTEL_EXPORTER_OTLP_ENDPOINT", ts.URL)
+			buf := &bytes.Buffer{}
+			old := accessLogOut
+			accessLogOut = buf
+			defer func() { accessLogOut = old }()
+			s := NewServer(newMemStore(), observerConfig{Env: tc.env})
+			h := s.Handler()
+			obsDo(h, "GET", "/health", nil)
+			var line map[string]any
+			if err := json.Unmarshal(bytes.TrimSpace(bytes.SplitN(buf.Bytes(), []byte("\n"), 2)[0]), &line); err != nil {
+				t.Fatalf("log line: %v: %s", err, buf.String())
+			}
+			if line["env"] != tc.want {
+				t.Errorf("log env = %v, want %q", line["env"], tc.want)
+			}
+			body := obsDo(h, "GET", "/metrics", nil).Body.String()
+			if want := `build_info{version="1.2.3",commit="dev",env="` + tc.want + `"} 1`; !strings.Contains(body, want) {
+				t.Errorf("metrics missing %q", want)
+			}
+			if strings.Count(body, `env="`) != 1 {
+				t.Errorf("env label must be only on build_info:\n%s", body)
+			}
+			select {
+			case m := <-got:
+				b, _ := json.Marshal(m)
+				want := `{"key":"deployment.environment","value":{"stringValue":"` + tc.want + `"}}`
+				if !strings.Contains(string(b), want) {
+					t.Errorf("span resource missing %s in %s", want, b)
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("no span exported")
+			}
+		})
+	}
+}
+
+// Close must return at its context deadline even when the collector hangs.
+func TestExporterCloseReturnsAtDeadlineWithSlowCollector(t *testing.T) {
+	release := make(chan struct{})
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { <-release }))
+	defer ts.Close()
+	defer close(release)
+	e := newExporter(ts.URL, "local")
+	e.enqueue(span{name: "x"})
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	start := time.Now()
+	e.Close(ctx)
+	if d := time.Since(start); d > 2*time.Second {
+		t.Fatalf("Close took %v, want about the 300ms deadline (client timeout is 3s)", d)
+	}
+}
+
+// A drain larger than one batch (100) must be sent completely, in several posts.
+func TestExporterCloseDrainsMoreThanOneBatch(t *testing.T) {
+	var posts, spans atomic.Int32
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		posts.Add(1)
+		spans.Add(int32(strings.Count(string(b), `"spanId"`)))
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+	e := newExporter(ts.URL, "local")
+	for i := 0; i < 250; i++ {
+		e.enqueue(span{method: "GET", route: "/x"})
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	e.Close(ctx)
+	if spans.Load() != 250 || posts.Load() < 3 {
+		t.Fatalf("spans = %d in %d posts, want 250 in >= 3", spans.Load(), posts.Load())
+	}
+	if e.dropped.Load() != 0 {
+		t.Fatalf("dropped = %d", e.dropped.Load())
+	}
+}
+
+func TestExporterEnqueueAfterCloseCountsDropped(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer ts.Close()
+	e := newExporter(ts.URL, "local")
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	e.Close(ctx)
+	e.enqueue(span{name: "late"})
+	e.enqueue(span{name: "late"})
+	if got := e.dropped.Load(); got != 2 {
+		t.Fatalf("dropped = %d, want 2 for spans enqueued after Close", got)
+	}
+}
+
+func TestExporterConcurrentEnqueueAndCloseLosesNothing(t *testing.T) {
+	var posted atomic.Int64
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var p struct {
+			ResourceSpans []struct {
+				ScopeSpans []struct {
+					Spans []json.RawMessage `json:"spans"`
+				} `json:"scopeSpans"`
+			} `json:"resourceSpans"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&p)
+		for _, rs := range p.ResourceSpans {
+			for _, ss := range rs.ScopeSpans {
+				posted.Add(int64(len(ss.Spans)))
+			}
+		}
+		w.WriteHeader(200)
+	}))
+	defer ts.Close()
+	e := newExporter(ts.URL, "local")
+	const n = 500
+	var wg sync.WaitGroup
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); e.enqueue(span{name: "x"}) }()
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	e.Close(ctx)
+	wg.Wait()
+	if sent, dropped := posted.Load(), int64(e.dropped.Load()); sent+dropped != n {
+		t.Fatalf("sent %d + dropped %d != %d: spans neither sent nor counted", sent, dropped, n)
+	}
 }

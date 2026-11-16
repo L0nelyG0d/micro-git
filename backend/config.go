@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"regexp"
 	"strconv"
 	"time"
 )
@@ -41,7 +42,10 @@ type Config struct {
 	// ApplySchema (APPLY_SCHEMA=true) applies the embedded db/schema.sql to the
 	// Postgres database at startup. The script is idempotent.
 	ApplySchema bool
-	Pool        PoolConfig
+	// AppEnv is APP_ENV, the environment label (dev, prod, ...): [a-z0-9-]{1,16},
+	// default "local". An invalid value falls back to "local" and adds a warning.
+	AppEnv string
+	Pool   PoolConfig
 	// Warnings are startup notices about risky defaults. They never contain
 	// secret values; main logs them.
 	Warnings []string
@@ -103,7 +107,8 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if port == "" {
 		port = "8080"
 	}
-	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
+	portNum, err := strconv.Atoi(port)
+	if err != nil || portNum < 1 || portNum > 65535 {
 		return Config{}, fmt.Errorf("PORT must be a number from 1 to 65535, got %q", port)
 	}
 	store := getenv("STORE")
@@ -152,7 +157,14 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 		if err != nil {
 			return Config{}, fmt.Errorf("METRICS_ADDR must be host:port such as \"127.0.0.1:9100\", got %q", metricsAddr)
 		}
-		if mport == port {
+		// Compare resolved numbers, not strings: "08080", "+8080" and named
+		// ports such as "http" all name a port that may equal PORT.
+		mnum, err := net.LookupPort("tcp", mport)
+		if err != nil || mnum < 1 || mnum > 65535 {
+			// Port 0 or an empty port would bind a random port silently.
+			return Config{}, fmt.Errorf("METRICS_ADDR port must be a service name or a number from 1 to 65535, got %q", mport)
+		}
+		if mnum == portNum {
 			// BSD/macOS accepts a loopback bind on the public port and would shadow the API.
 			return Config{}, fmt.Errorf("METRICS_ADDR port %s must differ from PORT", mport)
 		}
@@ -165,13 +177,18 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if store == StoreMemory {
 		warnings = append(warnings, "STORE=memory: all data is lost when the process exits")
 	}
+	appEnv, envWarn := parseAppEnv(getenv("APP_ENV"))
+	if envWarn != "" {
+		warnings = append(warnings, envWarn)
+	}
 	return Config{
+		AppEnv:       appEnv,
 		Store:        store,
 		DBDriver:     driver,
 		SQLitePath:   sqlitePath,
 		Warnings:     warnings,
 		Pool:         pool,
-		Addr:         ":" + port,
+		Addr:         ":" + strconv.Itoa(portNum),
 		DatabaseURL:  dbURL,
 		JWTSecret:    secret,
 		CookieSecure: secure,
@@ -193,4 +210,21 @@ func parseCookieSecure(v string) (bool, string) {
 		return false, "COOKIE_SECURE is not set: the session cookie is sent without the Secure attribute. Set COOKIE_SECURE=true when serving over HTTPS"
 	}
 	return false, "COOKIE_SECURE must be \"true\" or \"false\"; other values are treated as false and the session cookie is sent without the Secure attribute"
+}
+
+// defaultAppEnv is the environment label when APP_ENV is unset or invalid.
+const defaultAppEnv = "local"
+
+var appEnvRE = regexp.MustCompile(`^[a-z0-9-]{1,16}$`)
+
+// parseAppEnv is the single reading of APP_ENV: it returns the label and, for
+// an invalid value, a warning (the process still starts, with "local").
+func parseAppEnv(v string) (string, string) {
+	if v == "" {
+		return defaultAppEnv, ""
+	}
+	if !appEnvRE.MatchString(v) {
+		return defaultAppEnv, "APP_ENV must match [a-z0-9-]{1,16}; using \"local\""
+	}
+	return v, ""
 }

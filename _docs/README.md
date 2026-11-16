@@ -7,7 +7,7 @@ format on PostgreSQL, a SQLite file or in memory (your choice, see "Quick start"
 Clone, push and fetch of the git protocol are not supported; use the web UI or the `mg` command-line client (see "Command line"). See `_docs/plan.md` for the full
 feature list, endpoints, tables and rules.
 
-The original brainstorm chat, cleaned and redacted, is in [`_docs/brainstorm-history.md`](_docs/brainstorm-history.md).
+The original brainstorm chat, cleaned and redacted, is in [`_docs/brainstorm-history.md`](brainstorm-history.md).
 
 ## Quick start
 
@@ -298,6 +298,13 @@ backend/                 package main: HTTP server (net/http patterns, no router
                            sqliteDSNParams (pragmas) and InTx are in gormrefs.go
   models.go, sqlite.go     GORM models + idempotent Migrate; OpenSQLite (pure-Go driver)
   memstore.go              in-memory store (STORE=memory)
+  ratelimit.go, httpcache.go
+                           login/register limits; ETag and conditional GET helpers
+  observe.go, timing.go    JSON logs, /metrics, trace spans; per-request timing and statement tracer
+  build.go, static.go      X-Build id; SPA and /api prefix handling in the Docker image
+  cmd/mg, cmd/migrate-sqlite-to-pg
+                           the mg command-line client; the SQLite-to-Postgres migration tool
+  testdata/golden/         expected API responses for the golden tests
   db/schema.sql            users, repos, objects, refs (the Postgres reference)
   known_skips.txt          test skips the matrix accepts, per store
   *_test.go                tests next to the code, including concurrency_test.go and
@@ -324,13 +331,13 @@ frontend/                React + TypeScript + Vite + Tailwind + shadcn/ui
 
 ### API contract
 
-`openapi.yaml` at the repo root describes every endpoint (OpenAPI 3.0.3): request and
+[`_docs/openapi.yaml`](openapi.yaml) describes every endpoint (OpenAPI 3.0.3): request and
 response schemas, the `session` cookie auth, the `{"error": ...}` shape and every status
-code the handlers return. The backend serves no `/api` prefix; the Vite dev server adds it
-for the browser and strips it again. Lint it with
+code the handlers return. The API routes themselves have no `/api` prefix: in development the Vite dev server proxies `/api/*`
+and strips the prefix, and in the Docker image the server does the same in `backend/static.go`. Lint it with
 
 ```
-npx @redocly/cli lint openapi.yaml
+npx @redocly/cli lint _docs/openapi.yaml
 ```
 
 (Redocly is run through `npx`, not a project dependency.) Two tests keep the spec in sync:
@@ -520,4 +527,4 @@ Two targets, both deployed by the Deploy workflow after CI and E2E are green on 
 - [Deployment and CD overview](../deploy/README.md) (jobs, secrets and variables)
 - [Image, compose and environment variables](../docs/deployment.md)
 - [Render](../deploy/render/README.md), live: https://micro-git.onrender.com
-- [AWS](../deploy/aws/README.md), stack `micro-git-prod` in `ap-southeast-2` (job `deploy-aws-keys`); URL: stack output `AppUrl`, current address in the [deploy runbook](deploy-runbook.md)
+- [AWS](../deploy/aws/README.md), stack `micro-git-prod` in `ap-southeast-2` (manual workflow `Promote to production`); URL: stack output `AppUrl`, current address in the [deploy runbook](deploy-runbook.md)
