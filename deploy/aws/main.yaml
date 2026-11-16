@@ -213,7 +213,9 @@ Resources:
             fi
             DATA_UUID="$(blkid -o value -s UUID "$DATA_DEV")"
             mkdir -p /opt/mg/data
-            grep -q "UUID=$DATA_UUID " /etc/fstab || echo "UUID=$DATA_UUID /opt/mg/data xfs defaults,nofail 0 2" >> /etc/fstab
+            # nofail: the instance still boots without the data disk (SSM must work). x-systemd.before/required-by:
+            # docker and mg-db then never start without it, so they cannot initialise an empty cluster on the root disk.
+            grep -q "UUID=$DATA_UUID " /etc/fstab || echo "UUID=$DATA_UUID /opt/mg/data xfs defaults,nofail,x-systemd.before=docker.service,x-systemd.required-by=docker.service 0 2" >> /etc/fstab
             mountpoint -q /opt/mg/data || mount /opt/mg/data
             mkdir -p /opt/mg/data/pgdata /opt/mg/data/backups
 

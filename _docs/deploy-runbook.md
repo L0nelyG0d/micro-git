@@ -85,13 +85,17 @@ User data runs only on first boot, so a stack created before #182 keeps Postgres
 2. From your machine: `deploy/aws/deploy.sh --apply --account 228619515667`. The stack update attaches the data disk and stops and starts the instance (`UserData` changed: the public IP changes, and the containers restart on the old `/opt/mg/pgdata`, so nothing is lost).
 3. On the instance, as root:
 
+        dnf install -y xfsprogs
         lsblk -o NAME,SIZE,TYPE,MOUNTPOINT      # the 5 GB disk with no mountpoint is the data disk
         DEV=/dev/nvme1n1                          # replace with that disk; never the root disk
         docker stop mg-app mg-db
         blkid "$DEV" || mkfs.xfs -q "$DEV"        # formats only a disk with no filesystem
         UUID="$(blkid -o value -s UUID "$DEV")"
         mkdir -p /opt/mg/data
-        echo "UUID=$UUID /opt/mg/data xfs defaults,nofail 0 2" >> /etc/fstab
+        # same options as user data in deploy/aws/main.yaml: nofail (boot without the disk), and docker and mg-db
+        # wait for and require the mount, so they never start on an empty /opt/mg/data
+        echo "UUID=$UUID /opt/mg/data xfs defaults,nofail,x-systemd.before=docker.service,x-systemd.required-by=docker.service 0 2" >> /etc/fstab
+        systemctl daemon-reload
         mount /opt/mg/data
         mkdir -p /opt/mg/data/pgdata /opt/mg/data/backups
         cp -a /opt/mg/pgdata/. /opt/mg/data/pgdata/
@@ -110,7 +114,8 @@ Undo before step 6: `docker rm -f mg-db` and run the original `mg-db` line with 
 
 Details in `deploy/aws/README.md` "IAM scoping (#181)". Not done by an agent; nothing here has run against the account yet.
 
-1. Publish the new boundary version (the statement `OnlyFromTheInstance` is not in effect until you do): render `deploy/aws/policies/mg-instance-boundary.json` (`<ACCOUNT_ID>` = 228619515667, `<STACK_NAME>` = micro-git-prod) and run `aws iam create-policy-version --policy-arn arn:aws:iam::228619515667:policy/mg-instance-boundary --policy-document file://<rendered> --set-as-default --region ap-southeast-2`.
+1. Publish the new boundary version (the statement `OnlyFromTheInstance` is not in effect until you do): render `deploy/aws/policies/mg-instance-boundary.json` (`<ACCOUNT_ID>` = 228619515667, `<STACK_NAME>` = micro-git-prod) and run `aws iam create-policy-version --policy-arn arn:aws:iam::228619515667:policy/mg-instance-boundary --policy-document file://<rendered> --set-as-default --region ap-southeast-2`. Before publishing, note the current default version (`aws iam get-policy --policy-arn arn:aws:iam::228619515667:policy/mg-instance-boundary --query Policy.DefaultVersionId --output text`); that is the rollback target.
+   Then verify (the ECR calls made with the docker token may not carry `ec2:SourceInstanceARN`, so this is not proven yet): run `deploy.sh --apply` or, over SSM, `docker pull` of the app image on the instance. If anything is denied, roll back at once: `aws iam set-default-policy-version --policy-arn arn:aws:iam::228619515667:policy/mg-instance-boundary --version-id <previous version>`.
 2. Run `deploy/aws/preflight.sh --stack-name micro-git-prod` and check the `mg-InstanceRole-*` line (it warns if an old unbounded role exists; delete it when no instance uses it).
 3. `deploy.sh --apply --account 228619515667` (the first apply moves the instance role and profile to the `/mg-stack/micro-git-prod/` path; the instance is re-associated, not stopped by IAM; the stack update also stops and starts it because `UserData` changed, see #182).
 4. After it succeeded: remove `TransitionDeleteRootPathRoles` from `deploy/aws/policies/cfn-deploy-policy.json`, commit, and run `deploy.sh --apply` again so the deployed service-role policy loses it.
