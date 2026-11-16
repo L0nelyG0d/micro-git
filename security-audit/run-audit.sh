@@ -28,8 +28,10 @@ fi
 # 2. Cheap local checks
 (cd backend && go vet ./... > "$ROOT/$OUT/go-vet.txt" 2>&1; echo "go vet exit $?")
 (cd frontend && npm audit --omit=dev --json > "$ROOT/$OUT/npm-audit.json" 2>/dev/null; echo "npm audit exit $?")
-git grep -nIE 'postgres(ql)?://[^:/@ ]+:[^@ ]+@|npg_[A-Za-z0-9]+' -- . ':(exclude).github/workflows/ci.yml' \
-  | grep -v 'USER:PASSWORD@HOST' | cut -d: -f1,2 > "$OUT/secret-grep.txt" || true
+# Pattern and allow-list shared with the secret-scan job in .github/workflows/ci.yml; the pattern is security-audit/secret-patterns.txt (one ERE)
+[ -s security-audit/secret-patterns.txt ] || { echo "secret-patterns.txt missing or empty" >&2; exit 1; }
+git grep -nIE -e "$(cat security-audit/secret-patterns.txt)" -- . ':(exclude).github/workflows/ci.yml' \
+  | grep -F -v -e 'USER:PASSWORD@HOST' -e '${' -e '%s@' | cut -d: -f1,2 > "$OUT/secret-grep.txt" || true   # same allow-list as ci.yml secret-scan
 
 # 3. Model review pass: headless, read-only, findings JSON only. Same isolation as incident-response/run-responder.sh:
 # clean `git archive HEAD` copy in a 0700 temp dir (untracked files such as .env are absent; the committed state is
