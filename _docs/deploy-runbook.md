@@ -68,6 +68,15 @@ Tracked in issues #167, #160, #166 and #168 (AWS hardening, backups and other de
 - After a failed FIRST create the stack sits in `ROLLBACK_COMPLETE`/`ROLLBACK_FAILED`: a local `deploy.sh --apply` deletes and recreates it; the CI job stops and asks for that local run.
 - `mg-instance-boundary` is a single account-wide policy and its name is fixed. It covers the secret path of the stack name used at bootstrap. A second stack name in the same account needs its `/<stack>/jwt-secret` path added by hand (`aws iam create-policy-version --set-as-default`); `bootstrap.sh` never modifies an existing policy.
 
+## Owner steps for the IAM change (#181)
+
+Details in `deploy/aws/README.md` "IAM scoping (#181)". Not done by an agent; nothing here has run against the account yet.
+
+1. Publish the new boundary version (the statement `OnlyFromTheInstance` is not in effect until you do): render `deploy/aws/policies/mg-instance-boundary.json` (`<ACCOUNT_ID>` = 228619515667, `<STACK_NAME>` = micro-git-prod) and run `aws iam create-policy-version --policy-arn arn:aws:iam::228619515667:policy/mg-instance-boundary --policy-document file://<rendered> --set-as-default --region ap-southeast-2`.
+2. Run `deploy/aws/preflight.sh --stack-name micro-git-prod` and check the `mg-InstanceRole-*` line (it warns if an old unbounded role exists; delete it when no instance uses it).
+3. `deploy.sh --apply --account 228619515667` (the first apply moves the instance role and profile to the `/mg-stack/micro-git-prod/` path; the instance is re-associated, not stopped by IAM; the stack update also stops and starts it because `UserData` changed, see #182).
+4. After it succeeded: remove `TransitionDeleteRootPathRoles` from `deploy/aws/policies/cfn-deploy-policy.json`, commit, and run `deploy.sh --apply` again so the deployed service-role policy loses it.
+
 ## Owner checklist (AWS, your credentials only)
 
 OIDC path only. It cannot be completed in account 228619515667: the organization SCP denies creating the GitHub OIDC provider in step 4. Removed from CI in #201: no workflow uses OIDC any more (`bootstrap.sh` still supports it). Production uses the keys path above (`deploy.sh`, `Promote to production`); this list is kept only for an account without that SCP and would need a workflow job added back.

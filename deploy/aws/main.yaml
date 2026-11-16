@@ -79,6 +79,10 @@ Resources:
   InstanceRole:
     Type: AWS::IAM::Role
     Properties:
+      # IAM path per stack: the CloudFormation service role may only create, pass and manage
+      # roles under /mg-stack/<stack>/ (deploy/aws/policies/cfn-deploy-policy.json). Changing a
+      # path replaces the role (see deploy/aws/README.md, "IAM scoping (#181)").
+      Path: !Sub "/mg-stack/${AWS::StackName}/"
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
@@ -104,6 +108,7 @@ Resources:
   InstanceProfile:
     Type: AWS::IAM::InstanceProfile
     Properties:
+      Path: !Sub "/mg-stack/${AWS::StackName}/"
       Roles: [!Ref InstanceRole]
 
   AppSecurityGroup:

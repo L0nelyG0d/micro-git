@@ -75,15 +75,15 @@ Schema is applied by the deploy step rather than in user data so there is a sing
 
 Honesty label: `bootstrap.sh` and `preflight.sh` are tested only offline (shellcheck, `bash -n`, a stubbed `aws`); they have never been run against a real AWS account. Read the dry-run output before using `--apply`, and never point them at an account you do not own.
 
-Two roles keep privileges apart: a GitHub deploy role (small, assumed through OIDC) and a CloudFormation service role (holds the EC2/IAM/ECR rights and is only usable by CloudFormation, trust pinned with `aws:SourceAccount`). The role names are `cfn-deploy-<stack>` and `github-deploy-<stack>` (default stack `mg`). Neither is named `<stack>-*`, because the service role may manage only `<stack>-*` IAM roles, and the stack's own roles must not be able to touch the deployers.
+Two roles keep privileges apart: a GitHub deploy role (small, assumed through OIDC) and a CloudFormation service role (holds the EC2/IAM/ECR rights and is only usable by CloudFormation, trust pinned with `aws:SourceAccount`). The role names are `cfn-deploy-<stack>` and `github-deploy-<stack>` (default stack `mg`). The deploy roles are named `cfn-deploy-<stack>` and `github-deploy-<stack>` at the root IAM path. The stack's own roles and instance profile live under the path `/mg-stack/<stack>/` (since #181), so the service role cannot touch the deployers, and a stack's policies match only its own path.
 
 The exact JSON is in `deploy/aws/policies/` (single source of truth; `bootstrap.sh` substitutes `<ACCOUNT_ID>`, `<STACK_NAME>` and `<REPO>` into a temp dir):
 
 | File | What |
 | --- | --- |
 | `policies/mg-instance-boundary.json` | Customer-managed policy `mg-instance-boundary`: permissions boundary the template puts on the instance role (ECR pull, SSM agent, and `GetParameter` of `/<stack>/jwt-secret` only with credentials issued to an EC2 instance through the instance profile (`ec2:SourceInstanceARN`)). The name is fixed and account-wide because `main.yaml` references it, and its secret path is `/<stack>/jwt-secret` of the stack name used at bootstrap. A second stack name in the same account needs its own path added by hand (`aws iam create-policy-version --set-as-default` on this policy; the bootstrap script never changes an existing policy), otherwise its instance cannot read the secret. If it already exists the script leaves it unchanged. Never grant anyone `iam:CreatePolicyVersion` or `iam:SetDefaultPolicyVersion` on it. |
-| `policies/cfn-deploy-trust.json`, `policies/cfn-deploy-policy.json` | CloudFormation service role. IAM rights only for `<stack>-*` roles carrying the boundary (create, inline policy, delete, tag, attach/detach of the two AWS managed policies the template uses); EC2 limited to `t2.micro`/`t3.micro` and, for existing resources, to resources tagged with this stack. |
-| `policies/github-deploy-trust.json`, `policies/github-deploy-policy.json` | GitHub OIDC role: trust pinned to `repo:<REPO>:ref:refs/heads/main` with audience `sts.amazonaws.com`; policy is a starting point (tighten after the first successful run). |
+| `policies/cfn-deploy-trust.json`, `policies/cfn-deploy-policy.json` | CloudFormation service role. IAM rights only for roles and instance profiles under `/mg-stack/<stack>/` (create, inline policy, delete, attach/detach of the two AWS managed policies the template uses), plus the one-time transition statement described in "IAM scoping" below; EC2 limited to `t2.micro`/`t3.micro` and, for existing resources, to resources tagged with this stack. |
+| `policies/github-deploy-trust.json`, `policies/github-deploy-policy.json` | GitHub OIDC role: trust pinned to GitHub environment `aws-prod` (`repo:<REPO>:environment:aws-prod`) with audience `sts.amazonaws.com`. No workflow uses this role today (ADR 0005: production uses the IAM user key), so nothing assumes it. The policy is a starting point. |
 
 Steps:
 
@@ -106,6 +106,24 @@ Steps:
 Manual equivalent: the same IAM objects can be created in the console from the JSON files (replace the placeholders by hand). The account also needs a default VPC in the region and EC2 capacity for a `t3.micro`.
 
 `DomainName` is not passed by CI, and `aws cloudformation deploy` keeps the previous value of parameters it is not given, so a domain set by a manual deploy is not dropped by later CI runs. The AMI is passed on every run (see step 4 above).
+
+## IAM scoping (#181)
+
+What changed, and what the owner must do with it:
+
+- **Paths.** `main.yaml` gives `InstanceRole` and `InstanceProfile` the path `/mg-stack/<stack>/`. `cfn-deploy-policy.json` allows create, pass, attach and delete only on `role/mg-stack/<stack>/*` and `instance-profile/mg-stack/<stack>/*`. Nothing matches by name prefix any more.
+- **Path and the first apply.** IAM cannot change a role's path in place, so CloudFormation replaces the role on the first update after this change: it creates the new role and profile under `/mg-stack/`, moves the instance to the new profile (`ReplaceIamInstanceProfileAssociation`; the instance keeps running, IAM does not need a reboot), then deletes the old `<stack>-InstanceRole-*` and `<stack>-InstanceProfile-*` objects at the root path. The statement `TransitionDeleteRootPathRoles` allows only the delete side on those two names. `deploy.sh` (and `bootstrap.sh --apply`) refresh the service role's policy from the repo file before the stack update, so the statement is in place for that first run.
+  **Owner, after the first apply succeeded:** delete the statement `TransitionDeleteRootPathRoles` from `policies/cfn-deploy-policy.json`, commit it, and run `deploy.sh --apply` (or `bootstrap.sh --apply`) once so the deployed policy loses it. Until then the service role can delete roles named `<stack>-InstanceRole-*` at the root path; nothing else is widened by it.
+- **Instance profile association.** The instance statement in `cfn-deploy-policy.json` now also allows `ec2:ReplaceIamInstanceProfileAssociation` and `ec2:DisassociateIamInstanceProfile`, scoped by the stack-name tag like the other instance actions. `ec2:DescribeIamInstanceProfileAssociations` is already covered by `ec2:Describe*`. Not verified on a real account: if the first apply fails with AccessDenied on one of these, the error names the resource IAM checks; add it with the same tag scope.
+- **Boundary policy (account-wide, needs your action).** `policies/mg-instance-boundary.json` has a new statement `OnlyFromTheInstance`: it denies every action except `kms:Decrypt` when the request has no `ec2:SourceInstanceARN`, i.e. when the credentials are not issued to an EC2 instance. `bootstrap.sh` never changes an existing policy, so publish a new version by hand (render `<ACCOUNT_ID>` and `<STACK_NAME>` first, keep the account's version count at 5 or fewer):
+
+        aws iam create-policy-version --policy-arn arn:aws:iam::<ACCOUNT_ID>:policy/mg-instance-boundary \
+          --policy-document file://<rendered mg-instance-boundary.json> --set-as-default --region ap-southeast-2
+
+  The instance's own calls (ECR pull, SSM agent, `GetParameter` of the JWT secret) carry `ec2:SourceInstanceARN`, so they are unchanged. Until the new version is set, the statement is not in effect.
+- **OIDC trust.** `policies/github-deploy-trust.json` now pins `sub` to `repo:<REPO>:environment:aws-prod` (audience kept). IAM cannot check `job_workflow_ref` (which workflow file ran) with the default OIDC subject; that needs a custom OIDC subject template on the repository, which is a repository setting and the owner's call. The role is not used by any workflow (ADR 0005). `bootstrap.sh --apply` (without `--no-oidc`) refuses to overwrite the existing trust unless `--force`, as before.
+- **CreateRole trust (residual risk).** IAM has no condition key that limits which principal a new role may trust, so `iam:CreateRole` cannot be constrained to "trust only EC2". Mitigations: (a) the boundary's `OnlyFromTheInstance` statement leaves a role with no useful power for any principal other than an EC2 instance (`kms:Decrypt` stays possible only through SSM, as before); (b) `cfn-deploy-policy.json` denies `iam:UpdateAssumeRolePolicy` to the service role. Residual: the service role (usable by the CI user and the owner only, through CloudFormation with `cloudformation:RoleArn`) can still create a boundary-capped role under `/mg-stack/<stack>/` that trusts another principal, and that principal gets only the boundary's ECR-pull and SSM-agent actions. Side effect of (b): a future template change that edits a role's trust policy needs the deny removed first (owner).
+- **Old unbounded `mg-InstanceRole-*`.** The hand-made stack `mg` was deleted (2026-11-13/14). `preflight.sh` now also lists root-path roles named `mg-InstanceRole-*` (read-only) and warns if any exist; because PassRole is limited to `/mg-stack/<stack>/`, such a role cannot be passed to the new instance. Delete it when no instance uses it (owner).
 
 ## Expected cost
 
@@ -177,9 +195,8 @@ Also deferred to #166:
 
 - Stale DNS after a stop/start when `DomainName` is used (no Elastic IP).
 - `aws:SourceArn` on the CloudFormation service role trust policy (`aws:SourceAccount` is now set).
-- Scoping the IAM roles by `Path`.
-- Restricting the OIDC trust further (GitHub environment or `job_workflow_ref` condition).
+- Restricting the OIDC trust to `job_workflow_ref`: needs a custom OIDC subject template on the repository (a repository setting, owner's call). The trust itself is now pinned to environment `aws-prod` (#181).
 - Remaining EC2 rights are account-wide where AWS does not support tag conditions (for example `ec2:CreateSecurityGroup`, `ec2:Describe*`, `ec2:RunInstances` on non-instance resources). The account must not host other, more privileged instances or roles that the service role could pass or affect.
-- The `CreateRole` trust policy of stack roles is unconstrained (the boundary caps permissions, not who can assume). The boundary limits the secret read to credentials issued to an EC2 instance through the instance profile (`ec2:SourceInstanceARN`) and to `parameter/mg/jwt-secret`.
-- An old unbounded `mg-InstanceRole-*` from the hand-made stack can still be passed to EC2 by the service role. Delete the hand-made stack, use a NEW stack name, and keep no other `mg-*` roles in the account.
+- The `CreateRole` trust policy of stack roles cannot be constrained by IAM; mitigated and residual risk as described in "IAM scoping (#181)".
+- An old unbounded `mg-InstanceRole-*` from the hand-made stack: the stack is deleted; `preflight.sh` warns if such a root-path role still exists (see "IAM scoping (#181)").
 - Unverified on a real account, check on the first run: `kms:Decrypt` for the `aws/ssm` key under the boundary, the `iam:PassRole` context for `AddRoleToInstanceProfile`, and an orphaned instance after a failed first stack create (it is `Retain`ed and must be terminated by hand).
