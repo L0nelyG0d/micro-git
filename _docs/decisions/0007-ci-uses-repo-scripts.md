@@ -1,6 +1,6 @@
 # ADR 0007: CI uses the repository scripts
 
-Status: Accepted (2026-11-14): option C. Applied in branch `issue-198-ci-repo-scripts` except the `backend-store` switch (issue #198)
+Status: Accepted (2026-11-14): option C. Part 1 applied in `issue-198-ci-repo-scripts` (merged 605dd36); part 2 applied on branch `issue-203-198-responder-ci` (merge pending)
 
 Issue: #198
 
@@ -26,7 +26,13 @@ C in one DevOps change, tried on a branch run first.
 
 Option C, applied in branch `issue-198-ci-repo-scripts`: `scripts/test-pgurl.sh` step in `backend`, no-stack `ops-tests` job, unused `e2e.yml` steps (Postgres service, `DATABASE_URL`, Apply schema, `docker build -t mg:ci`, `MG_IMAGE`) removed.
 
-Not applied: `backend-store` still calls `go test` directly. `scripts/test-matrix.sh sqlite memory` runs offline in about 2 minutes but fails today because `backend/known_skips.txt` lacks 8 Postgres-only skips (`TestApplySchema*`, `TestMigrate*`) for sqlite and memory. An engineer runs `scripts/test-matrix.sh --update-skips`, reviews the diff, and the job then calls the script. `ops-tests` also omits `incident-response/test-incident.sh --dry-run`: on Linux `stat -f %Lp` succeeds with filesystem info, so the three mode checks (`make-token` 600 twice, incident dir 700) fail; swapping to `stat -c %a ... || stat -f %Lp` fixes it. The Postgres job keeps its own steps. The secret-scan drift is not addressed.
+Part 2 (branch `issue-203-198-responder-ci`):
+
+- `backend-store` calls `scripts/test-matrix.sh <store>` (sqlite, memory). `backend/known_skips.txt` gained the 8 Postgres-only skips per store that the matrix reported (`TestApplySchema*`, `TestMigrate*`).
+- `ops-tests` runs `incident-response/test-incident.sh --dry-run`. The `stat` order is now `stat -c %a ... || stat -f %Lp` (GNU first) in every script.
+- The secret-scan pattern is one file, `security-audit/secret-patterns.txt`, read by the CI `secret-scan` job and by `security-audit/run-audit.sh`. The audit now applies the CI allow-list too (`USER:PASSWORD@HOST`, `${`, `%s@`), so it reports fewer placeholder lines. The scan still excludes `.github/workflows/ci.yml`.
+
+The Postgres job keeps its own steps.
 
 ## Consequences
 
