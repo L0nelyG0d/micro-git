@@ -86,6 +86,17 @@ b"; do
   n="param-loose-$(printf '%s' "$v" | cksum | cut -d' ' -f1)"; mk "$n" set_level config_change 0.9 false "$(jq -nc --arg v "$v" '{level:"info",name:$v}')"
   expect "$n" 3 --policy "$T/loose-policy.json"
 done
+# full match (issue #203 D): a trailing newline or trailing text must not satisfy a pattern/regex rule
+mkraw inc-id-newline "$(jq -nc '{incident_id:"x\n",summary:"s",root_cause_hypothesis:"h",confidence:0.9,evidence_refs:["a"],proposed_action:{type:"restart",action_id:"restart_app",params:{},files:[]},risk:"r",needs_human:false}')"
+expect inc-id-newline 3; jq -e '.reasons|any(test("incident_id: pattern mismatch"))' "$T/inc-id-newline/decision.json" >/dev/null && { pass=$((pass+1)); echo "ok   incident_id with a trailing newline: pattern mismatch"; } || { fail=$((fail+1)); echo "FAIL incident_id newline reason"; }
+mkraw inc-id-ok "$(jq -nc '{incident_id:"x",summary:"s",root_cause_hypothesis:"h",confidence:0.9,evidence_refs:["a"],proposed_action:{type:"restart",action_id:"restart_app",params:{},files:[]},risk:"r",needs_human:false}')"
+expect inc-id-ok 0
+jq '.allowed_actions.set_level.params.name={regex:"^[a-z]+$"}' "$T/param-policy.json" > "$T/nl-policy.json"
+mk param-trailing-newline set_level config_change 0.9 false "$(jq -nc '{level:"info",name:"abc\n"}')"; expect param-trailing-newline 3 --policy "$T/nl-policy.json"
+jq '.allowed_actions.set_level.params.name={regex:"[a-z]"}' "$T/param-policy.json" > "$T/prefix-policy.json"   # unanchored: must still be a FULL match
+pp2() { mk "$1" set_level config_change 0.9 false "$2"; expect "$1" "$3" --policy "$T/prefix-policy.json"; }
+pp2 param-prefix-only '{"level":"info","name":"a1"}' 3
+pp2 param-single-char '{"level":"info","name":"a"}' 0
 # confidence, needs_human, propose-only (they apply to a valid action too)
 mk low-confidence restart_app restart 0.5;                  expect low-confidence 3
 mk needs-human    restart_app restart 0.95 true;            expect needs-human 3
@@ -145,6 +156,39 @@ fi
 # future-dated stamp: the reported wait equals the enforced wait (ts - now + cooldown), not the bare cooldown
 rm -f "$CD/c/action.lock" "$CD/c/decision.json"; echo "$(( $(date +%s) + 3600 )) x" > "$CD/.last_action"
 [ "$(cdrun c 300 --no-claim)" = 3 ] && W="$(jq -r '.reasons[0]' "$CD/c/decision.json" | sed -n 's/.*(\([0-9]*\)s left).*/\1/p')" && [ "${W:-0}" -ge 3890 ] && [ "$W" -le 3900 ] && { pass=$((pass+1)); echo "ok   cooldown: future stamp reports the real wait ($W s)"; } || { fail=$((fail+1)); echo "FAIL cooldown future stamp (W=${W:-})"; }
+# malformed policy structure (issue #203 A): exit 1 with a clear message, audited, no allow, no decision.json, no action.lock
+badpol() { # name jq-filter-applied-to-the-shipped-policy [want-message-substring]
+  mk "bp-$1" restart_app restart 0.9; jq "$2" "$D/autonomy-policy.yaml" > "$T/bp-$1/policy.json"
+  python3 -I "$D/policy-check.py" "$T/bp-$1" --policy "$T/bp-$1/policy.json" > "$T/bp-$1/out" 2>&1; rc=$?
+  if [ $rc -eq 1 ] && [ ! -e "$T/bp-$1/action.lock" ] && [ ! -e "$T/bp-$1/decision.json" ] && ! grep -q '"decision": "allow"' "$T/bp-$1/out" && grep -q 'policy invalid' "$T/bp-$1/out" && grep -q "${3:-policy invalid}" "$T/bp-$1/out"; then
+    pass=$((pass+1)); echo "ok   malformed policy refused: $1"; else fail=$((fail+1)); echo "FAIL malformed policy $1 (rc=$rc)"; cat "$T/bp-$1/out"; fi
+}
+badpol argv-string        '.allowed_actions.restart_app.argv="docker compose restart app"' "argv must be a non-empty list"
+badpol types-string       '.allowed_actions.restart_app.types="restart"' "types must be a non-empty list"
+badpol argv-missing       'del(.allowed_actions.restart_app.argv)' "missing argv"
+badpol argv-empty         '.allowed_actions.restart_app.argv=[]' "argv must be a non-empty list"
+badpol argv-nonstring     '.allowed_actions.restart_app.argv=["docker",5]' "argv must be a non-empty list"
+badpol types-empty        '.allowed_actions.restart_app.types=[]' "types must be a non-empty list"
+badpol env-nonstring      '.allowed_actions.fault_off.env={"FAULT_ENDPOINT_500":1}' "env must be an object"
+badpol params-list        '.allowed_actions.restart_app.params=["x"]' "params must be an object"
+badpol param-rule-kind    '.allowed_actions.restart_app.params={"x":{"glob":"*"}}' "rule must be exactly one of"
+badpol unknown-action-key '.allowed_actions.restart_app.shell="sh -c x"' "unknown key"
+badpol unknown-top-key    '.auto_approve=true' "unknown top-level key"
+badpol version-wrong      '.version=99' "unsupported policy version"
+badpol version-missing    'del(.version)' "missing top-level key version"
+badpol threshold-string   '.confidence_threshold="0.7"' "confidence_threshold must be"
+badpol threshold-range    '.confidence_threshold=-1' "confidence_threshold must be"
+badpol threshold-bool     '.confidence_threshold=true' "confidence_threshold must be"
+badpol cooldown-string    '.global_cooldown_seconds="soon"' "global_cooldown_seconds must be"
+badpol cooldown-negative  '.global_cooldown_seconds=-5' "global_cooldown_seconds must be"
+badpol actions-list       '.allowed_actions=[]' "allowed_actions must be an object"
+badpol template-unknown   '.allowed_actions.restart_app.argv=["docker","{{param:nope}}"]' "template element not understood"
+printf '{"version":2,"version":2}' > "$T/dupkey.json"; mk bp-dupkey restart_app restart 0.9
+python3 -I "$D/policy-check.py" "$T/bp-dupkey" --policy "$T/dupkey.json" >/dev/null 2>&1; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$T/bp-dupkey/action.lock" ] && { pass=$((pass+1)); echo "ok   malformed policy refused: duplicate key"; } || { fail=$((fail+1)); echo "FAIL duplicate key policy (rc=$rc)"; }
+printf 'version: 2\nactions: {}\n' > "$T/notjson.yaml"; mk bp-yaml restart_app restart 0.9
+python3 -I "$D/policy-check.py" "$T/bp-yaml" --policy "$T/notjson.yaml" >/dev/null 2>&1; rc=$?
+[ $rc -eq 1 ] && [ ! -e "$T/bp-yaml/action.lock" ] && { pass=$((pass+1)); echo "ok   non-JSON policy refused (no PyYAML path)"; } || { fail=$((fail+1)); echo "FAIL non-JSON policy (rc=$rc)"; }
 # a crash inside policy-check must exit 1 (not 0/3) and leave an audit line
 mkdir -p "$T/crash"; echo '{}' > "$T/crash/response.json"; echo '{broken' > "$T/crash/bad-policy.json"
 python3 -I "$D/policy-check.py" "$T/crash" --policy "$T/crash/bad-policy.json" >/dev/null 2>&1; rc=$?

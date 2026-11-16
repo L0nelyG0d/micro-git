@@ -103,6 +103,42 @@ FAKE
   ( PATH="$T/dockbin:$PATH" DRY_RUN=0 AUTO_EXECUTE=1 GLOBAL_COOLDOWN_SECONDS=0 VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 "$D/run-responder.sh" drill-hostile-lock "$ROUTE" >/dev/null 2>&1 )
   check "pre-existing action.lock: nothing executed, escalated" "[ ! -e '$T/PWNED2' ] && [ ! -f '$T/docker.out' ] && [ -f '$INCIDENTS_DIR/drill-hostile-lock/escalation-packet.json' ]"
 
+  echo "== executor refusals (fake python3 tampers action.lock after policy-check; fake docker records calls)"
+  REALPY="$(command -v python3)"; mkdir -p "$T/tamperbin"
+  cat > "$T/tamperbin/python3" <<TAMP
+#!/usr/bin/env bash
+"$REALPY" "\$@"; rc=\$?
+case "\$*" in *policy-check.py*) [ -n "\${TAMPER:-}" ] && eval "\$TAMPER";; esac
+exit \$rc
+TAMP
+  chmod +x "$T/tamperbin/python3"
+  exec_case() { # id AUTO_EXECUTE-value tamper-command   (nothing may run unless tamper is empty and AUTO_EXECUTE is exactly 1)
+    local id="$1" ae="$2" tamper="${3:-}" lock="$INCIDENTS_DIR/$1/action.lock"
+    EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" "$id" "$ROUTE" >/dev/null; rm -f "$T/docker.out" "$T/PWNED3"
+    ( PATH="$T/tamperbin:$T/dockbin:$PATH" TAMPER="$tamper" LOCKP="$lock" PWN="$T/PWNED3" DRY_RUN=0 AUTO_EXECUTE="$ae" GLOBAL_COOLDOWN_SECONDS=0 VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 "$D/run-responder.sh" "$id" "$ROUTE" >/dev/null 2>&1 )
+  }
+  refused() { # label id reason-substring
+    check "$1: nothing executed (fake docker and PWNED3 absent)" "[ ! -f '$T/docker.out' ] && [ ! -e '$T/PWNED3' ]"
+    check "$1: refusal audited ($3)" "grep action_skipped '$INCIDENTS_DIR/$2/audit.jsonl' | grep -q '$3'"
+    check "$1: no action_result audited" "! grep -q action_result '$INCIDENTS_DIR/$2/audit.jsonl'"
+  }
+  exec_case xr-symlink 1 'mv "$LOCKP" "$LOCKP.real" && ln -s "$LOCKP.real" "$LOCKP"'; refused "lock is a symlink" xr-symlink "action.lock is a symlink"
+  exec_case xr-argv 1 'jq ".argv=[\"touch\",\"$PWN\"]" "$LOCKP" > "$LOCKP.n" && mv "$LOCKP.n" "$LOCKP"'; refused "lock argv differs from decision.json" xr-argv "differ from decision.json"
+  exec_case xr-env 1 'jq ".env.FAULT_ENDPOINT_500=\"1\"" "$LOCKP" > "$LOCKP.n" && mv "$LOCKP.n" "$LOCKP"'; refused "lock env differs only" xr-env "differ from decision.json"
+  exec_case xr-env-extra 1 'jq ".env.EXTRA=\"1\"" "$LOCKP" > "$LOCKP.n" && mv "$LOCKP.n" "$LOCKP"'; refused "lock has an extra env entry" xr-env-extra "differ from decision.json"
+  exec_case xr-deleted 1 'rm -f "$LOCKP"'; refused "lock deleted after policy" xr-deleted "no action.lock"
+  exec_case xr-emptyargv 1 'jq ".argv=[]" "$LOCKP" > "$LOCKP.n" && mv "$LOCKP.n" "$LOCKP"'; refused "lock with empty argv" xr-emptyargv "argv is empty"
+  exec_case xr-garbled 1 'echo "{not json" > "$LOCKP"'; refused "lock is not JSON" xr-garbled "unreadable"
+  exec_case xr-fifo 1 'rm -f "$LOCKP" && mkfifo "$LOCKP"'; refused "lock is a fifo" xr-fifo "not a regular file"
+  for AE in true 01 " 1" ""; do
+    n="xr-ae-$(printf '%s' "$AE" | cksum | cut -d' ' -f1)"; exec_case "$n" "$AE"
+    check "AUTO_EXECUTE='$AE': nothing executes, no lock claimed" "[ ! -f '$T/docker.out' ] && [ ! -e '$INCIDENTS_DIR/$n/action.lock' ] && grep -q 'allowed but not executed' '$INCIDENTS_DIR/$n/audit.jsonl'"
+  done
+  exec_case xr-control 1
+  check "control: executes exactly the template argv" "[ \"\$(grep '^ARG=' '$T/docker.out' | tr '\n' ' ')\" = 'ARG=compose ARG=-f ARG=docker-compose.yml ARG=-f ARG=observability/compose.yaml ARG=-f ARG=observability/app-telemetry.yaml ARG=up ARG=-d ARG=--no-deps ARG=app ' ]"
+  check "control: template env applied (FAULT_ENDPOINT_500 set to empty, not unset)" "grep -qx 'FLAG=\[\]' '$T/docker.out'"
+  check "control: action_result audited" "grep -q action_result '$INCIDENTS_DIR/xr-control/audit.jsonl'"
+
   echo "== model path isolation (fake claude on PATH)"
   mkdir -p "$T/fakebin"; cat > "$T/fakebin/claude" <<FAKE
 #!/usr/bin/env bash
@@ -162,17 +198,39 @@ print(listener.run('$T/tmo', ['$T/slow.sh', '$T/tmo'], timeout=2))")
   mkdir -p "$T/vinc"; ( DRY_RUN=0 INCIDENTS_DIR="$T/vinc" PROBE_URL='http://127.0.0.1:1/x?token=SECRETQ' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc >/dev/null 2>&1 )
   check "probe enabled is audited" "grep -q 'probe enabled' '$T/vinc/vinc/audit.jsonl'"
   check "probe audit drops the query string" "! grep -q SECRETQ '$T/vinc/vinc/audit.jsonl'"
-  "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -f %Lp "$T/tok-new" 2>/dev/null || stat -c %a "$T/tok-new")"
+  "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -c %a "$T/tok-new" 2>/dev/null || stat -f %Lp "$T/tok-new")"
   check "make-token creates mode 600" "[ '$TM' = 600 ]"
   PU_OUT="$T/vinc2"; mkdir -p "$PU_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$PU_OUT" PROBE_URL='http://bob:SEC?RETPW@127.0.0.1:1/x?token=Q#f' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc2 >/dev/null 2>&1 )
   check "probe audit drops user:pass@" "grep -q 'http://127.0.0.1:1/x' '$PU_OUT/vinc2/audit.jsonl' && ! grep -q 'SEC\|RETPW\|bob' '$PU_OUT/vinc2/audit.jsonl'"
+  PS_OUT="$T/vinc3"; mkdir -p "$PS_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$PS_OUT" PROBE_URL='http://bob:se/cr@et@127.0.0.1:1/x' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc3 >/dev/null 2>&1 )
+  check "probe with a slash in the password: userinfo not logged" "grep -q 'http://127.0.0.1:1/x' '$PS_OUT/vinc3/audit.jsonl' && ! grep -q 'bob\|se/cr\|cr@et' '$PS_OUT/vinc3/audit.jsonl'"
+  RJ_OUT="$T/vinc4"; mkdir -p "$RJ_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$RJ_OUT" PROBE_URL='ftp://bob:RJPW@host/x?k=Q' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc4 >/dev/null 2>&1 )
+  check "invalid probe URL is rejected, logged without userinfo, no probe" "grep -q 'PROBE_URL rejected' '$RJ_OUT/vinc4/audit.jsonl' && ! grep -q 'bob\|RJPW\|SECRET\|k=Q' '$RJ_OUT/vinc4/audit.jsonl' && ! grep -q 'probe enabled' '$RJ_OUT/vinc4/audit.jsonl'"
+  # password-with-slash shapes: pa/ss must not appear in stdout, stderr or audit (a rejected URL prints fixed text only)
+  PWI=0; for PX in 'u:pa/ss@host/x' 'http:u:pa/ss@host/x' '//u:pa/ss@host/x' 'http://u:pa/ss@host/x'; do
+    PWI=$((PWI+1)); PX_OUT="$T/pw$PWI"; mkdir -p "$PX_OUT"
+    ( DRY_RUN=0 INCIDENTS_DIR="$PX_OUT" PROBE_URL="$PX" VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x pw$PWI >"$PX_OUT/stdout" 2>"$PX_OUT/stderr" )
+    check "probe shape $PWI: audit written" "[ -s '$PX_OUT/pw$PWI/audit.jsonl' ]"
+    check "probe shape $PWI: pa/ss not in stdout, stderr or audit" "! grep -q 'pa/ss' '$PX_OUT/stdout' '$PX_OUT/stderr' '$PX_OUT/pw$PWI/audit.jsonl'"
+  done
+  check "probe shape 4 (accepted http) audits scheme://host/path only" "grep -q 'to http://host/x' '$T/pw4/pw4/audit.jsonl'"
   # make-token re-run repairs mode and (Linux root path, stubbed uname/id/chown) ownership
-  chmod 644 "$T/tok-new"; "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -f %Lp "$T/tok-new" 2>/dev/null || stat -c %a "$T/tok-new")"
+  chmod 644 "$T/tok-new"; "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -c %a "$T/tok-new" 2>/dev/null || stat -f %Lp "$T/tok-new")"
   check "make-token re-run repairs mode to 600" "[ '$TM' = 600 ]"
   mkdir -p "$T/lnx"; printf '#!/bin/sh\necho Linux\n' > "$T/lnx/uname"; printf '#!/bin/sh\necho 0\n' > "$T/lnx/id"; printf '#!/bin/sh\necho "$@" > "%s/chown.args"\n' "$T" > "$T/lnx/chown"; chmod +x "$T/lnx/"*
   H1="$(cat "$T/tok-new")"; PATH="$T/lnx:$PATH" "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1
   check "make-token re-run on Linux root chowns to 65534" "grep -q '65534:65534' '$T/chown.args'"
   check "make-token re-run keeps the token content" "[ \"\$(cat '$T/tok-new')\" = '$H1' ]"
+  # re-run on a symlink: refused, and the target keeps its mode (chmod must not follow the link)
+  echo target > "$T/sym-target"; chmod 644 "$T/sym-target"; ln -sf "$T/sym-target" "$T/sym-tok"
+  "$D/make-token.sh" "$T/sym-tok" >/dev/null 2>&1; SRC=$?
+  TM="$(stat -c %a "$T/sym-target" 2>/dev/null || stat -f %Lp "$T/sym-target")"
+  check "make-token re-run refuses a symlink (exit non-zero)" "[ $SRC -ne 0 ]"
+  check "make-token symlink refusal leaves the target mode alone" "[ '$TM' = 644 ]"
+  # dangling symlink: -e is false, so the create branch used to write the token through the link
+  ln -sf "$T/dang-target" "$T/dang-tok"; "$D/make-token.sh" "$T/dang-tok" >/dev/null 2>&1; DRC=$?
+  check "make-token refuses a dangling symlink (exit non-zero)" "[ $DRC -ne 0 ]"
+  check "make-token dangling symlink: link target NOT created" "[ ! -e '$T/dang-target' ] && [ ! -L '$T/dang-target' ]"
   echo "== listener: unreadable token is a config error"
   if [ "$(id -u)" != 0 ]; then
     mkdir -p "$T/utok"; echo dummy-not-a-secret > "$T/utok/tok"; chmod 000 "$T/utok/tok"
@@ -228,7 +286,7 @@ listener.gaudit('auth_rejected', 'x', 'reject'); listener.gaudit('auth_rejected'
   code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{"alerts":[{"status":"firing","fingerprint":"badlabels1","startsAt":"2026-11-12T10:00:00Z","labels":"x"},{"status":"firing","fingerprint":"allroute1","startsAt":"2026-11-12T10:00:01Z","labels":{"alertname":"A","route":"all"}}]}' "$U"); check "non-dict labels / route=all accepted without crash" "[ '$code' = 202 ]"
   code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{"alerts":[{"status":"firing","fingerprint":7,"startsAt":null,"labels":{"route":"/x"}}]}' "$U"); check "non-string fingerprint/startsAt accepted but rejected+audited" "[ '$code' = 202 ]"
   sleep 4; check "non-string fingerprint audited" "grep -q 'fingerprint/startsAt missing' '$T'/incidents2/listener-audit.jsonl"
-  FI="$(ls -d "$T"/incidents2/inc-* | head -1)"; MODE="$(stat -f %Lp "$FI" 2>/dev/null || stat -c %a "$FI")"
+  FI="$(ls -d "$T"/incidents2/inc-* | head -1)"; MODE="$(stat -c %a "$FI" 2>/dev/null || stat -f %Lp "$FI")"
   check "incident ids have random suffix" "[[ '$(basename "$FI")' =~ ^inc-[0-9]{8}T[0-9]{6}-[A-Za-z0-9]+-[0-9a-f]{6}$ ]]"
   check "incident dir mode 700" "[ '$MODE' = 700 ]"
   check "non-dict labels audited"  "grep -q 'labels is not an object' '$T'/incidents2/listener-audit.jsonl"

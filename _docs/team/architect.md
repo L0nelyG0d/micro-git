@@ -125,7 +125,7 @@ Applied:
 
 Accepted, partly applied:
 
-- ADR 0007 CI uses the repo scripts (#198): pgurl step, `ops-tests` job (without `test-incident.sh --dry-run`, needs a Linux `stat` fix) and e2e cleanup done; `backend-store` waits for an updated `backend/known_skips.txt`
+- ADR 0007 CI uses the repo scripts (#198): pgurl step, `ops-tests` job (now with `test-incident.sh --dry-run`), e2e cleanup, `backend-store` through `scripts/test-matrix.sh` with the updated `backend/known_skips.txt`, and one secret-scan pattern file (`security-audit/secret-patterns.txt`). Part 2 is on branch `issue-203-198-responder-ci`; merge pending
 
 Since issue #201 the deploy topology is: dev = Render on every green push (`deploy.yml`), prod = AWS only through the manual workflow `promote.yml` (resolve checks, approval in environment `production`, deploy with the key in environment `aws-prod`, verify). Data flow: merge to `main` -> CI and E2E -> dev; promotion of the sha dev serves -> prod. `APP_ENV` (`config.go`, `observe.go`) labels logs, `build_info` and spans with `env`.
 

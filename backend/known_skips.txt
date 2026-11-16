@@ -1,3 +1,8 @@
+memory TestApplySchemaConcurrent
+memory TestApplySchemaDoesNotBlockOnTraffic
+memory TestApplySchemaIdempotent
+memory TestApplySchemaIndexGuardScopedToTable
+memory TestApplySchemaWaitsForAdvisoryLock
 memory TestBaseline
 memory TestCommitLogStatementCount
 memory TestCommitReachabilityGorm/postgres
@@ -10,6 +15,9 @@ memory TestGormStoreUsers/postgres
 memory TestMapGormErrRealForeignKey/postgres
 memory TestMergeStatementCountConstant
 memory TestMigrateMatchesSchemaSQL
+memory TestMigrateRefusesNonEmptyTargetUnlessForced
+memory TestMigrateRequiresTargetSchema
+memory TestMigrateSQLiteToPostgres
 memory TestMigrateTwiceKeepsSchema/postgres
 memory TestMigratedConstraints/postgres
 memory TestNewPoolAppliesSettings
@@ -32,6 +40,11 @@ memory TestTimingCountsStatements
 memory TestWalkFirstParentsGorm/postgres
 postgres TestBaseline
 postgres TestWalkFirstParents/limit_of_10000_on_a_longer_chain
+sqlite TestApplySchemaConcurrent
+sqlite TestApplySchemaDoesNotBlockOnTraffic
+sqlite TestApplySchemaIdempotent
+sqlite TestApplySchemaIndexGuardScopedToTable
+sqlite TestApplySchemaWaitsForAdvisoryLock
 sqlite TestBaseline
 sqlite TestCommitLogStatementCount
 sqlite TestCommitReachabilityGorm/postgres
@@ -44,6 +57,9 @@ sqlite TestGormStoreUsers/postgres
 sqlite TestMapGormErrRealForeignKey/postgres
 sqlite TestMergeStatementCountConstant
 sqlite TestMigrateMatchesSchemaSQL
+sqlite TestMigrateRefusesNonEmptyTargetUnlessForced
+sqlite TestMigrateRequiresTargetSchema
+sqlite TestMigrateSQLiteToPostgres
 sqlite TestMigrateTwiceKeepsSchema/postgres
 sqlite TestMigratedConstraints/postgres
 sqlite TestNewPoolAppliesSettings

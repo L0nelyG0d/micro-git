@@ -81,11 +81,9 @@ jobs:
           export JWT_SECRET
           go test -p 1 -race -timeout 20m ./...
 
-  # The same suite on the two stores that need no service container. Runs in
-  # parallel with `backend` (Postgres). A failing store fails the workflow.
-  # Calls go test directly: `scripts/test-matrix.sh ${{ matrix.store }}` would fail
-  # today because backend/known_skips.txt lacks 8 Postgres-only skips for sqlite and
-  # memory (see _docs/decisions/0007-ci-uses-repo-scripts.md). Switch once it is updated.
+  # The same suite on the two stores that need no service container, through
+  # scripts/test-matrix.sh (fails on any skip not listed in backend/known_skips.txt).
+  # Runs in parallel with `backend` (Postgres). A failing store fails the workflow.
   backend-store:
     name: Backend tests (${{ matrix.store }})
     runs-on: ubuntu-latest
@@ -103,13 +101,12 @@ jobs:
           go-version-file: backend/go.mod
           cache: true
           cache-dependency-path: backend/go.sum
-      - name: Backend tests (TEST_STORE=${{ matrix.store }}, no database)
-        working-directory: backend
+      - name: Backend tests (scripts/test-matrix.sh ${{ matrix.store }}, no database)
         run: |
           JWT_SECRET="$(openssl rand -base64 48)"
           echo "::add-mask::$JWT_SECRET"
           export JWT_SECRET
-          go test -p 1 -race -timeout 12m ./...
+          scripts/test-matrix.sh ${{ matrix.store }}
 
   # Offline checks of the incident-response and security-audit tooling: fixtures
   # and stubs only, no stack, no model, no network, no secrets.
@@ -125,9 +122,8 @@ jobs:
         run: bash incident-response/test-policy.sh
       - name: incident-response/test-redact.sh
         run: bash incident-response/test-redact.sh
-      # test-incident.sh --dry-run is not run here yet: it reads file modes with
-      # `stat -f %Lp ... || stat -c %a ...`, and on Linux `stat -f` succeeds with
-      # filesystem info, so 3 mode checks fail. Add it once the order is swapped (ADR 0007).
+      - name: incident-response/test-incident.sh --dry-run
+        run: bash incident-response/test-incident.sh --dry-run
       - name: security-audit/validate-findings.py (tracked run files)
         run: python3 security-audit/validate-findings.py
 
@@ -168,10 +164,12 @@ jobs:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
       - name: Scan tracked files for connection strings with passwords and Neon tokens
         run: |
+          # The pattern lives in security-audit/secret-patterns.txt (one ERE), shared with security-audit/run-audit.sh.
+          [ -s security-audit/secret-patterns.txt ] || { echo "security-audit/secret-patterns.txt missing or empty"; exit 1; }
           # Allow-list (each with a reason):
-          #  - this workflow file: holds the pattern and the throwaway CI service URL
+          #  - this workflow file: holds the throwaway CI service URL
           #  - lines containing USER:PASSWORD@HOST: documented placeholders in the README
-          hits="$(git grep -nIE 'postgres(ql)?://[^:/@ ]+:[^@ ]+@|npg_[A-Za-z0-9]+' -- . ':(exclude).github/workflows/ci.yml' | grep -F -v -e 'USER:PASSWORD@HOST' -e '${' -e '%s@' || true)"
+          hits="$(git grep -nIE -e "$(cat security-audit/secret-patterns.txt)" -- . ':(exclude).github/workflows/ci.yml' | grep -F -v -e 'USER:PASSWORD@HOST' -e '${' -e '%s@' || true)"
           if [ -n "$hits" ]; then
             echo "Possible secret in tracked files (values hidden; showing file:line only):"
             echo "$hits" | cut -d: -f1,2

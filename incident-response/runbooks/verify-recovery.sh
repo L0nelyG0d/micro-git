@@ -19,10 +19,25 @@ INC=""; [ -n "$ID" ] && valid_id "$ID" && INC="$INCIDENTS_DIR/$ID"
 log() { echo "verify: $*"; [ -n "$INC" ] && audit "$INC" verify "$*"; return 0; }
 if [ "${DRY_RUN:-0}" = 1 ]; then log "DRY_RUN simulated recovery for $ROUTE"; exit 0; fi
 
-if [ -n "${PROBE_URL:-}" ]; then   # audit what is probed (scheme://host/path only: query strings and user:pass@ may carry secrets)
-  # strip user:pass@ first (an unencoded ?/# inside a password must not leave a prefix), then the query/fragment
-  PU="$(printf '%s' "$PROBE_URL" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@#\1#')"; PU="${PU%%[?#]*}"
-  log "probe enabled: ${PROBE_COUNT:-5} GET per poll to $PU$([ -n "${PROBE_COOKIE_JAR:-}" ] && echo " with a cookie jar")"
+if [ -n "${PROBE_URL:-}" ]; then
+  # The URL as given is NEVER logged or echoed (a rejected value may carry a password; a password may contain "/", "?", "#").
+  # Accepted only as http(s)://, logged as scheme://host[:port][/path]: userinfo is dropped up to the LAST "@", then the
+  # query and fragment. The host part must be a plain hostname[:port], otherwise the URL is rejected.
+  PU=""
+  case "$PROBE_URL" in
+    http://*|https://*)
+      SCHEME="${PROBE_URL%%://*}"; REST="${PROBE_URL#*://}"
+      REST="${REST##*@}"            # longest prefix ending in "@" = everything up to the last "@"
+      REST="${REST%%[?#]*}"         # drop query and fragment
+      if printf '%s' "${REST%%/*}" | grep -Eq '^[A-Za-z0-9.-]+(:[0-9]+)?$'; then PU="$SCHEME://$REST"; fi
+      ;;
+  esac
+  if [ -n "$PU" ]; then
+    log "probe enabled: ${PROBE_COUNT:-5} GET per poll to $PU$([ -n "${PROBE_COOKIE_JAR:-}" ] && echo " with a cookie jar")"
+  else   # rejected: fixed text only, no probing; the ratio then relies on organic traffic (see header)
+    log "PROBE_URL rejected (must be http:// or https://); probing disabled"
+    PROBE_URL=""
+  fi
 fi
 Q="(sum(rate(${M_REQ}{route=\"$ROUTE\",status=~\"5..\"}[1m])) or vector(0)) / sum(rate(${M_REQ}{route=\"$ROUTE\"}[1m]))"
 WARM="${WARMUP_SECONDS:-75}"; START_TS=$(date +%s)

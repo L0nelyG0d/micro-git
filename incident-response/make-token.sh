@@ -4,6 +4,9 @@
 # http_config.authorization.credentials_file. Never print or commit it (.gitignore covers it).
 set -euo pipefail
 F="${1:-${ALERT_TOKEN_FILE:-$(cd "$(dirname "$0")" && pwd)/.alert-token}}"
+# A symlink is refused FIRST, before any test/write/chmod/chown: -e is false for a DANGLING link, so the create branch
+# below would otherwise write the token through the link into its target. chmod would follow a live link too.
+if [ -L "$F" ]; then echo "refused: $F is a symlink; replace it with a regular file (delete it to rotate)" >&2; exit 1; fi
 # Existing file: keep the content (no rotation) but REPAIR mode and, on Linux as root, ownership, so re-running fixes a token
 # that Alertmanager or the listener cannot read.
 if [ -e "$F" ]; then echo "exists: $F (delete it to rotate; mode/ownership re-checked)"; else
