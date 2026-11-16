@@ -102,8 +102,11 @@ it("refetches the list when the user logs out", async () => {
   renderWithMock("/", await homeMock(true, [{ name: "secret", private: true }, { name: "public" }]))
   await screen.findByRole("link", { name: "alice/secret" })
   await userEvent.click(screen.getByRole("button", { name: /log ?out/i }))
-  await waitFor(() => expect(screen.queryByRole("link", { name: "alice/secret" })).not.toBeInTheDocument(), { timeout: 5000 })
-  expect(screen.getByRole("link", { name: "alice/public" })).toBeInTheDocument()
+  // Logging out remounts the page (App.tsx keys Suspense by user), so the list
+  // first shows the loading state and secret disappears before the refetch
+  // lands. Wait for the refetched list itself, not for the secret to vanish.
+  expect(await screen.findByRole("link", { name: "alice/public" })).toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "alice/secret" })).not.toBeInTheDocument()
 })
 
 const many = (n: number) => Array.from({ length: n }, (_, i) => ({ name: `r${i}` }))
