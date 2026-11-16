@@ -65,7 +65,7 @@ Run the Playwright suite by hand: start the stack (for example `docker compose u
 | --- | --- | --- |
 | CI / `backend` | push to `main`, PRs, manual | gofmt, vet, `go mod tidy -diff`, govulncheck (advisory, `continue-on-error`), `scripts/test-pgurl.sh`, schema applied to a `postgres:16` service, `go test -p 1 -race` |
 | CI / `backend-store` | same | Same suite with `TEST_STORE=sqlite` and `memory`, no database; calls `go test` directly |
-| CI / `ops-tests` | same | No stack: `incident-response/test-policy.sh`, `test-redact.sh`, `test-incident.sh --dry-run` (fixtures and stubs) and `security-audit/validate-findings.py` on the tracked run files |
+| CI / `ops-tests` | same | No stack: `incident-response/test-policy.sh`, `test-redact.sh` (fixtures and stubs; `test-incident.sh --dry-run` is not run yet: its `stat -f %Lp || stat -c %a` order fails on Linux) and `security-audit/validate-findings.py` on the tracked run files |
 | CI / `frontend` | same | `npm ci`, `npm test -- --run`, `npm run build` (Node 22) |
 | CI / `openapi` | same | `npx @redocly/cli lint _docs/openapi.yaml` |
 | CI / `secret-scan` | same | `git grep` over tracked files for credentialed `postgres://` URLs and `npg_...` tokens; prints file:line only. Excludes `.github/workflows/ci.yml` and lines with `USER:PASSWORD@HOST`, `${` or `%s@` |
