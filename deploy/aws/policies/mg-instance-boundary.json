@@ -16,6 +16,12 @@
      "Condition": {"Null": {"ec2:SourceInstanceARN": "false"}}},
     {"Effect": "Allow", "Action": "kms:Decrypt",
      "Resource": "arn:aws:kms:*:<ACCOUNT_ID>:key/*",
-     "Condition": {"StringLike": {"kms:ViaService": "ssm.*.amazonaws.com"}}}
+     "Condition": {"StringLike": {"kms:ViaService": "ssm.*.amazonaws.com"}}},
+    {"Sid": "OnlyFromTheInstance",
+     "Effect": "Deny",
+     "NotAction": ["kms:Decrypt", "ecr:GetAuthorizationToken", "ecr:BatchCheckLayerAvailability",
+                   "ecr:GetDownloadUrlForLayer", "ecr:BatchGetImage"],
+     "Resource": "*",
+     "Condition": {"Null": {"ec2:SourceInstanceARN": "true"}}}
   ]
 }

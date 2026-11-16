@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time AWS bootstrap for the AWS deploy (deploy/aws/deploy.sh and the GitHub job deploy-aws).
+# One-time AWS bootstrap for the AWS deploy (deploy/aws/deploy.sh; the GitHub workflow promote.yml runs deploy.sh --ci).
 # Creates, in order, idempotently: GitHub OIDC provider, policy mg-instance-boundary,
 # role cfn-deploy-<stack> (+ inline policy), role github-deploy-<stack> (+ inline policy).
 #   --no-oidc  skips the OIDC provider and the github-deploy role (accounts where an SCP
@@ -72,13 +72,14 @@ if ! [[ "$STACK" =~ ^[a-z][a-z0-9-]{0,19}$ ]]; then
 fi
 _clash=
 for _role in cfn-deploy github-deploy; do
-  # The stack role pattern role/<stack>-* matches a deploy role <role>-<stack2> when "<stack>-" is a prefix of "<role>-"
-  # (stack names cfn, github) or when the stack name itself starts with the deploy role prefix.
+  # The stack's IAM objects live under the path /mg-stack/<stack>/, so the old name pattern <stack>-*
+  # no longer matches the deploy roles. This guard stays as a conservative check of the deploy role
+  # names (cfn-deploy-<stack>, github-deploy-<stack>): a stack name starting with cfn or github is refused.
   case "$_role-" in "$STACK-"*) _clash=1 ;; esac
   case "$STACK" in "$_role"*) _clash=1 ;; esac
 done
 if [ -n "${_clash:-}" ]; then
-  echo "error: --stack-name '$STACK' collides with the deploy role names: the stack role pattern <stack>-* would match cfn-deploy-* or github-deploy-* (reserved: cfn, github, and anything starting with cfn-deploy or github-deploy)" >&2; exit 2
+  echo "error: --stack-name '$STACK' collides with the deploy role names cfn-deploy-<stack> / github-deploy-<stack> (reserved: names starting with cfn or github, and anything starting with cfn-deploy or github-deploy)" >&2; exit 2
 fi
 if ! [[ "$REPO" =~ ^[A-Za-z0-9._-]+/[A-Za-z0-9._-]+$ ]]; then
   echo "error: --repo must look like OWNER/REPO" >&2; exit 2
@@ -378,7 +379,7 @@ if [ -n "$CI_USER" ]; then
         var_fail=1
       fi
     done
-    [ "$var_fail" = 0 ] || { echo "error: GitHub variables incomplete; the deploy-aws-keys job needs them" >&2; exit 1; }
+    [ "$var_fail" = 0 ] || { echo "error: GitHub variables incomplete" >&2; exit 1; }
     # Only switch CI on when the key really is in the environment, and no repo-level secret of the
     # same name exists (Actions would fall back to it, outside the main-only environment).
     env_secs="$(gh_t secret list --repo "$REPO" --env "$GH_ENV" 2>/dev/null | cut -f1)"
@@ -391,9 +392,10 @@ if [ -n "$CI_USER" ]; then
       fi
     done
     [ "$mode_ok" = 1 ] || { echo "error: not switching the CI job on (AWS_DEPLOY_MODE unchanged)" >&2; exit 1; }
-    # Set last: this is what switches the deploy-aws-keys job on.
+    # Set last. No workflow reads AWS_DEPLOY_MODE since #201 (job deploy of promote.yml uses the
+    # environment secrets directly); it is still set so that existing setups stay consistent.
     if gh_t variable set AWS_DEPLOY_MODE --repo "$REPO" --body keys >/dev/null 2>&1; then
-      echo "  GitHub variable AWS_DEPLOY_MODE=keys set (deploy-aws-keys job enabled)"
+      echo "  GitHub variable AWS_DEPLOY_MODE=keys set (no workflow reads it since #201)"
     else
       echo "error: could not set AWS_DEPLOY_MODE (retry: gh variable set AWS_DEPLOY_MODE --repo $REPO --body keys)" >&2; exit 1
     fi

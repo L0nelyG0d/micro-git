@@ -59,7 +59,7 @@ Settings > Secrets and variables > Actions, and Settings > Environments:
 | environment `aws-prod` | secret | `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | promote `deploy` | Key of IAM user `github-deploy-micro-git-prod-user`, piped in by `bootstrap.sh --ci-user` (rotate with `--rotate-ci-key`) |
 | environment `production` | setting | required reviewer | promote `approve` | Configured by the owner; without a reviewer `approve` passes at once |
 
-No longer read by any workflow: `AWS_DEPLOY_MODE`, `AWS_ROLE_ARN`, `AWS_JWT_SECRET`, `AWS_REGION`, `AWS_STACK_NAME`, `AWS_CFN_ROLE_ARN` (they belonged to the removed `deploy-aws-keys` gate switch and the OIDC job). `bootstrap.sh --ci-user` still sets some of them and `destroy.sh` still deletes `AWS_DEPLOY_MODE`; both are harmless. The prod JWT secret lives in SSM `/micro-git-prod/jwt-secret`, generated once by a local `deploy.sh --apply`. OIDC support remains in `bootstrap.sh`; no workflow uses it.
+No longer read by any workflow: `AWS_DEPLOY_MODE`, `AWS_ROLE_ARN`, `AWS_JWT_SECRET`, `AWS_REGION`, `AWS_STACK_NAME`, `AWS_CFN_ROLE_ARN` (they belonged to the gate switch and the OIDC job that were removed in #201). `bootstrap.sh --ci-user` still sets some of them and `destroy.sh` still deletes `AWS_DEPLOY_MODE`; both are harmless. The prod JWT secret lives in SSM `/micro-git-prod/jwt-secret`, generated once by a local `deploy.sh --apply`. OIDC support remains in `bootstrap.sh`; no workflow uses it.
 
 Never put these values in the repository, an issue or a commit message.
 

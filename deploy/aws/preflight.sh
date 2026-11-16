@@ -28,7 +28,7 @@ for _role in cfn-deploy github-deploy; do
   case "$STACK" in "$_role"*) _clash=1 ;; esac
 done
 if [ -n "${_clash:-}" ]; then
-  echo "[FAIL] stack name '$STACK' collides with the deploy role names: <stack>-* would match cfn-deploy-* or github-deploy-* (reserved: cfn, github, and anything starting with cfn-deploy or github-deploy)" >&2; exit 2
+  echo "[FAIL] stack name '$STACK' collides with the deploy role names cfn-deploy-<stack> / github-deploy-<stack> (reserved: names starting with cfn or github, and anything starting with cfn-deploy or github-deploy)" >&2; exit 2
 fi
 
 AWS=(aws)
@@ -105,6 +105,17 @@ else
     denied) note "GitHub OIDC provider: lookup denied (AccessDenied, likely an organization SCP on oidc-provider/*). The OIDC path cannot be used in this account; use deploy/aws/deploy.sh (--no-oidc) instead" ;;
     *) warn "GitHub OIDC provider: lookup failed: ${oidc#error:}" ;;
   esac
+fi
+# Read-only: the hand-made stack's instance role (mg-InstanceRole-*, root path, no boundary) must not
+# exist, because a root-path role cannot be passed under the /mg-stack/ path rule. Names only.
+old_roles="$("${AWS[@]}" iam list-roles --path-prefix / \
+  --query "Roles[?starts_with(RoleName, 'mg-InstanceRole-')].RoleName" --output text 2>/dev/null)" && rc_roles=0 || rc_roles=$?
+if [ "$rc_roles" -ne 0 ]; then
+  warn "could not list IAM roles for the mg-InstanceRole-* check (AccessDenied or error)"
+elif [ -n "$old_roles" ] && [ "$old_roles" != None ]; then
+  warn "unbounded role(s) from the hand-made stack still exist: $(echo "$old_roles" | tr -s '\t' ' '). Delete them once no instance uses them (the owner's call)"
+else
+  ok "no unbounded mg-InstanceRole-* role at the root path"
 fi
 chk_policy mg-instance-boundary
 chk_role "cfn-deploy-$STACK"

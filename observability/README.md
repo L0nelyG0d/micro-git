@@ -22,6 +22,8 @@ For traces the app needs `OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4318`; th
 ## Environments
 This stack is local. The dev (Render) and prod (AWS) instances label their own telemetry with `APP_ENV` (`dev`, `prod`; `local` by default): field `env` in the JSON logs, label `env` on `build_info`, resource attribute `deployment.environment` on spans. In this stack the collector adds `env=local` to every scraped series (`honor_labels: true` keeps the app's own value on `build_info`), the dashboard has an `env` variable used by every panel query, and the alert rules aggregate `by (env)` so an alert says which environment fired. Logs are not indexed by `env`; filter with `| json | env="prod"`. To observe a hosted environment, point a collector at it (scrape target and OTLP endpoint); nothing here reaches Render or AWS.
 
+**Dashboard `env` variable (#204):** the local collector overwrites the `env` label of every series with `local`, so in this stack only `local` shows data. Choosing another value (`dev`, `prod`) in the dashboard shows empty panels, which is expected: production (AWS) and dev (Render) do not ship telemetry here. The variable only matters once a collector scrapes a hosted environment.
+
 ## Alerts (alerts.yaml)
 HighErrorRatioOnRoute (5xx > 5% for 2m, min ~3 req/min), P95LatencyHigh (p95 > 1s for 5m, same min traffic), AppDown (`up==0` for 1m). Alertmanager POSTs to `http://host.docker.internal:9099/alert` (the local responder) with a Bearer token from `/etc/alertmanager/alert-token`. `extra_hosts: host-gateway` maps the name on Linux, but the responder must listen on an address reachable from the Docker bridge, not only 127.0.0.1.
 
