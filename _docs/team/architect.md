@@ -2,7 +2,7 @@ You’re the Architect
 
 You track the structure of the project and keep it coherent: where code, docs, config and infrastructure live, how the parts connect, who owns each part, and which decisions have been made. You do not implement features or merge; you review changes for structural fit and keep the map below current.
 
-The architect runs on Fable; for larger structure work it may launch sub-architects (one per area, on Opus) that report back to it (user decision 2026-11-13).
+The architect runs on Fable. For larger structure work it may launch sub-architects, one per area, that audit or design and report back; Opus is used for that design and approval role and for reviewing risky changes, Sonnet for every agent that edits files (user decisions 2026-11-13 and 2026-11-15).
 
 What you do:
 
@@ -70,18 +70,18 @@ security-audit/       run-audit.sh, normalize-semgrep.py, validate-findings.py, 
                       audit-brief.md, capability-table.md, runs/*.json (tracked results);
                       uses incident-response/redact.py
 
-docs/                 deployment.md, testing.md, release-process.md, operations-and-security-report.md
-_docs/                README.md (developer manual), CLAUDE.md (stub that loads AGENTS.md), AGENTS.md,
+docs/                 developer-guide.md (developer manual), deployment.md, testing.md, release-process.md, operations-and-security-report.md
+_docs/                CLAUDE.md (stub that loads AGENTS.md), AGENTS.md,
                       process.md, plan.md, tasks.md, task_template.md, questions.md, iterations.md,
-                      openapi.yaml, DESIGN.md, design-system.md, design-refs/, performance.md,
+                      openapi.yaml, DESIGN.md, design-system.md, performance.md,
                       rate-limiter.md, testing-guidelines.md, e2e.md, e2e/journey.js,
                       deploy-render.md, deploy-runbook.md, brainstorm-history.md,
                       decisions/ (ADRs), team/ (role briefs)
 ```
 
-Per-file detail of the backend and frontend: [`_docs/README.md`](../README.md#package-layout).
+Per-file detail of the backend and frontend: [`docs/developer-guide.md`](../../docs/developer-guide.md#package-layout).
 
-Data flow: browser SPA -> `/api/*` on the Go server (`static.go` strips the prefix; the same server serves the SPA) -> `Store` -> Postgres, SQLite or memory. Production runs the same image on two targets: Render (managed Postgres `mg-db`) and AWS stack `micro-git-prod` (Postgres container on the EC2 instance). Neon is only an optional remote Postgres for development and tests (`_docs/README.md`, `_docs/AGENTS.md`), not production. The observability stack and the incident listener run locally next to the compose stack; production does not ship telemetry to them.
+Data flow: browser SPA -> `/api/*` on the Go server (`static.go` strips the prefix; the same server serves the SPA) -> `Store` -> Postgres, SQLite or memory. Production runs the same image on two targets: Render (managed Postgres `mg-db`) and AWS stack `micro-git-prod` (Postgres container on the EC2 instance). Neon is only an optional remote Postgres for development and tests (`docs/developer-guide.md`, `_docs/AGENTS.md`), not production. The observability stack and the incident listener run locally next to the compose stack; production does not ship telemetry to them.
 
 ## Layering rules
 
@@ -108,16 +108,24 @@ There is no separate domain layer: the endpoint files (`auth.go` ... `compare.go
 
 ## Decisions
 
-Index with status: [`_docs/decisions/README.md`](../decisions/README.md). All eight were approved by the user on 2026-11-14 (0004 and 0005 settled by #201 on 2026-11-15).
+Index with status: [`_docs/decisions/README.md`](../decisions/README.md). The user approved all eight recommendations on 2026-11-14.
 
-- ADR 0001 backend package split (#191): no split now
-- ADR 0002 Go module path (#192): keep
+Decided, nothing to change:
+
+- ADR 0001 backend package split (#191): no split now; the flat `package main` and the layering rules above stay
+- ADR 0002 Go module path (#192): keep `backend/go.mod` and the module path
 - ADR 0003 ops and deploy directory moves (#195): no moves
-- ADR 0004 production topology and data (#196): Render = dev, AWS = prod; applied in #201 (promotion workflow), backups in #182
+
+Applied:
+
+- ADR 0004 production topology and data (#196): Render = dev, AWS = prod, by #201. The AWS backups it calls for are still open in #182
 - ADR 0005 AWS OIDC job (#197): the job was removed with the automatic AWS deploy in #201; OIDC stays in `bootstrap.sh`
-- ADR 0006 frontend helpers and the manual e2e journey (#193): being applied
-- ADR 0007 CI uses the repo scripts (#198): being applied
-- ADR 0008 docs moves (#199): applied after #175
+- ADR 0006 frontend class helper (#193): ui files use `@/lib/utils`, the `cn` package is gone; the manual e2e journey is not retired yet
+- ADR 0008 docs moves and role models (#199): `docs/developer-guide.md`, `_docs/design-refs/` deleted, models in `_docs/process.md`
+
+Accepted, not applied yet:
+
+- ADR 0007 CI uses the repo scripts (#198)
 
 Since issue #201 the deploy topology is: dev = Render on every green push (`deploy.yml`), prod = AWS only through the manual workflow `promote.yml` (resolve checks, approval in environment `production`, deploy with the key in environment `aws-prod`, verify). Data flow: merge to `main` -> CI and E2E -> dev; promotion of the sha dev serves -> prod. `APP_ENV` (`config.go`, `observe.go`) labels logs, `build_info` and spans with `env`.
 

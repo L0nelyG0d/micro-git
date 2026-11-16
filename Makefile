@@ -40,7 +40,7 @@ loadenv = export DATABASE_URL="$$($(call envval,DATABASE_URL))" \
 		COOKIE_SECURE="$$($(call envval,COOKIE_SECURE))" \
 		PORT="$(PORT)"
 
-cli: ## Build the command-line client to bin/mg (see README, "Command line")
+cli: ## Build the command-line client to bin/mg (see docs/developer-guide.md, "Command line")
 	cd backend && go build -o ../bin/mg ./cmd/mg
 	@echo "built bin/mg  (try: bin/mg help)"
 
