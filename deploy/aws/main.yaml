@@ -10,13 +10,15 @@ Description: >
 # 1. deploy.sh stores the JWT secret in SSM Parameter Store as the SecureString
 #    /<stack-name>/jwt-secret (outside this stack: CloudFormation cannot create
 #    SecureStrings), then creates/updates this stack through a change set.
-# 2. First boot (user data, runs once; later UserData changes only stop/start the instance) installs Docker, generates the database password, and
-#    starts Postgres and Caddy. It does NOT start the app and holds no app secret.
+# 2. First boot (user data, runs once) installs Docker, generates the database password, and
+#    starts Postgres and Caddy. It does NOT start the app and holds no app secret. UserData is
+#    frozen (#207): an edit makes the change set report AppInstance as conditionally replaced.
 # 3. deploy.sh builds and pushes the root Dockerfile (git archive of the commit) to the ECR
 #    repository, then runs deploy/aws/remote-deploy.sh on the instance through SSM Run Command.
 #    That script reads the JWT secret from SSM with the instance role, applies
-#    backend/db/schema.sql (idempotent), and (re)creates the mg-app container; if /health does
-#    not pass within 60 s it restarts the previous image (#182).
+#    backend/db/schema.sql (idempotent), mounts the optional data disk, installs the nightly
+#    pg_dump timer, and (re)creates the mg-app container; if /health does not pass within 60 s it
+#    restarts the previous image (#182).
 # 4. Open AppUrl. For HTTPS set DomainName to a name whose A record points at the
 #    instance IP. A stop/start changes the public IP (no Elastic IP is used).
 #
@@ -64,11 +66,21 @@ Parameters:
     Default: 5
     MinValue: 1
     MaxValue: 10
-    Description: Size of the separate data EBS gp3 volume (Postgres data, nightly dumps). Root + data must stay at or under 30 GB free tier.
+    Description: Size of the separate data EBS gp3 volume (Postgres data, nightly dumps). Root + data must stay at or under 30 GB free tier. Used only with EnableDataVolume=true.
+  EnableDataVolume:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Create and attach the data disk (DataVolume). Off by default so that the first update of a
+      stack created before #182 changes nothing on the instance. Turning it on only adds the volume
+      and its attachment; remote-deploy.sh then formats (only a blank disk) and mounts it. Do not
+      turn it off again after Postgres was moved onto it (deploy.sh refuses the removal).
 
 Conditions:
   HasKeyName: !Not [!Equals [!Ref KeyName, ""]]
   HasDomain: !Not [!Equals [!Ref DomainName, ""]]
+  HasDataVolume: !Equals [!Ref EnableDataVolume, "true"]
 
 Resources:
   AppRepository:
@@ -142,8 +154,9 @@ Resources:
 
   AppInstance:
     Type: AWS::EC2::Instance
-    # Postgres data lives on DataVolume (mounted at /opt/mg/data). Stacks created before #182 keep it
-    # on the root volume until the manual move in _docs/deploy-runbook.md. Never replace the instance implicitly.
+    # Postgres starts in /opt/mg/pgdata on the root volume. With EnableDataVolume=true, remote-deploy.sh
+    # mounts DataVolume at /opt/mg/data and the owner moves Postgres there once (_docs/deploy-runbook.md).
+    # Never replace the instance implicitly: deploy.sh refuses a change set that replaces or removes it.
     DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
@@ -166,60 +179,24 @@ Resources:
       Tags:
         - Key: Name
           Value: !Sub "${AWS::StackName}-app"
+      # FROZEN (#207): UserData is a conditionalCreateOnly property of AWS::EC2::Instance, so any edit
+      # makes the change set report AppInstance "Replacement: Conditional" and deploy.sh aborts the
+      # update. It also runs only on first boot. Put instance changes in remote-deploy.sh (runs over
+      # SSM on every deploy). deploy/aws/test-template.sh fails if this block changes.
       UserData:
         Fn::Base64: !Sub
           - |
             #!/bin/bash
             # No "set -x": it would copy secrets into the cloud-init log.
             set -euo pipefail
-            dnf install -y docker xfsprogs
+            dnf install -y docker
             systemctl enable --now docker
             if [ ! -f /swapfile ]; then
               fallocate -l 1G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
               echo '/swapfile none swap sw 0 0' >> /etc/fstab
             fi
 
-            # Data volume (DataVolume, its own encrypted EBS disk). The volume id cannot be referenced
-            # here: the volume takes its AZ from the instance, so a Ref would be a dependency cycle.
-            # The disk is found by what it is: the EBS disk that is not the root disk. Nitro (t3) shows
-            # it as an nvme device with a by-id link; older types as /dev/xvdf or /dev/sdf.
-            find_data_disk() {
-              local root_disk link dev
-              root_disk="$(lsblk -no PKNAME "$(findmnt -no SOURCE /)" 2>/dev/null | head -n1)"
-              [ -n "$root_disk" ] || return 1
-              for link in /dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_vol*; do
-                [ -e "$link" ] || continue
-                case "$link" in *-part*) continue ;; esac
-                dev="$(readlink -f "$link")"
-                [ "$(basename "$dev")" = "$root_disk" ] && continue
-                echo "$dev"; return 0
-              done
-              for dev in /dev/xvdf /dev/sdf; do
-                if [ -b "$dev" ]; then echo "$dev"; return 0; fi
-              done
-              return 1
-            }
-            DATA_DEV=""
-            for _ in $(seq 1 150); do   # up to 5 minutes: the attachment can finish after boot
-              DATA_DEV="$(find_data_disk || true)"
-              [ -n "$DATA_DEV" ] && break
-              sleep 2
-            done
-            [ -n "$DATA_DEV" ] || { echo "data volume not found after 5 minutes" >&2; exit 1; }
-            # Format only a disk that has no filesystem at all (never a disk with data on it).
-            FSTYPE="$(blkid -o value -s TYPE "$DATA_DEV" 2>/dev/null || true)"
-            if [ -z "$FSTYPE" ]; then
-              mkfs.xfs -q "$DATA_DEV"
-            fi
-            DATA_UUID="$(blkid -o value -s UUID "$DATA_DEV")"
-            mkdir -p /opt/mg/data
-            # nofail: the instance still boots without the data disk (SSM must work). x-systemd.before/required-by:
-            # docker and mg-db then never start without it, so they cannot initialise an empty cluster on the root disk.
-            grep -q "UUID=$DATA_UUID " /etc/fstab || echo "UUID=$DATA_UUID /opt/mg/data xfs defaults,nofail,x-systemd.before=docker.service,x-systemd.required-by=docker.service 0 2" >> /etc/fstab
-            mountpoint -q /opt/mg/data || mount /opt/mg/data
-            mkdir -p /opt/mg/data/pgdata /opt/mg/data/backups
-
-            mkdir -p /opt/mg/caddy-data
+            mkdir -p /opt/mg/pgdata /opt/mg/caddy-data
             umask 077
             PGPASS=$(openssl rand -hex 24)
             printf 'POSTGRES_USER=mg\nPOSTGRES_DB=mg\nPOSTGRES_PASSWORD=%s\n' "$PGPASS" > /opt/mg/db.env
@@ -237,7 +214,7 @@ Resources:
             docker network create mg 2>/dev/null || true
             docker rm -f mg-db mg-proxy 2>/dev/null || true
             docker run -d --name mg-db --restart unless-stopped --network mg \
-              --env-file /opt/mg/db.env -v /opt/mg/data/pgdata:/var/lib/postgresql/data \
+              --env-file /opt/mg/db.env -v /opt/mg/pgdata:/var/lib/postgresql/data \
               postgres:16-alpine
             docker run -d --name mg-proxy --restart unless-stopped --network mg \
               -p 80:80 -p 443:443 \
@@ -246,11 +223,14 @@ Resources:
           - SiteAddress: !If [HasDomain, !Ref DomainName, ":80"]
             CookieSecure: !If [HasDomain, "true", "false"]
 
-  # Data disk: Postgres and the nightly dumps (remote-deploy.sh installs mg-pgdump). Separate from
-  # the root volume, so a root replacement or a stop does not touch it. Snapshot on delete or replace
-  # (a snapshot costs money per GB-month; scheduled snapshots are not created, see the runbook).
+  # Data disk (optional, EnableDataVolume): Postgres after the one-time move, and the nightly dumps
+  # (remote-deploy.sh installs mg-pgdump, and formats/mounts this disk at /opt/mg/data). Separate from
+  # the root volume, so a stop does not touch it. Adding it only creates these two resources; the
+  # instance is not modified. Snapshot on delete or replace (a snapshot costs money per GB-month;
+  # scheduled snapshots are not created, see the runbook). deploy.sh refuses to remove or replace it.
   DataVolume:
     Type: AWS::EC2::Volume
+    Condition: HasDataVolume
     DeletionPolicy: Snapshot
     UpdateReplacePolicy: Snapshot
     Properties:
@@ -264,6 +244,7 @@ Resources:
 
   DataVolumeAttachment:
     Type: AWS::EC2::VolumeAttachment
+    Condition: HasDataVolume
     Properties:
       InstanceId: !Ref AppInstance
       VolumeId: !Ref DataVolume
@@ -285,6 +266,10 @@ Outputs:
       - HasDomain
       - !Sub "https://${DomainName}"
       - !Sub "http://${AppInstance.PublicIp}"
+  DataVolumeId:
+    Condition: HasDataVolume
+    Description: The data disk; deploy.sh passes it to remote-deploy.sh, which mounts it at /opt/mg/data
+    Value: !Ref DataVolume
   InstanceId:
     Description: Use with SSM Session Manager (aws ssm start-session --target <id>)
     Value: !Ref AppInstance
