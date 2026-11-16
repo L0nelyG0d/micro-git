@@ -1,6 +1,6 @@
 # ADR 0006: Frontend class helper and the manual e2e journey
 
-Status: Accepted (2026-11-14): option C. Not applied yet (issue #193)
+Status: Accepted (2026-11-14): option C, applied (issue #193). The manual journey (option D) is not retired yet
 
 Issue: #193
 
@@ -25,7 +25,7 @@ The user decides on approving `cn` and `radix-ui`; default C; retire the manual 
 
 ## Decision
 
-Option C, applied in branch `issue-193-frontend-cn-helper` (in progress). The manual journey is retired only when the Playwright suite covers it.
+Option C, applied in branch `issue-193-frontend-cn-helper`: the 10 ui files that used `cn` now import it from `@/lib/utils`, and the `cn` package is removed from `package.json` and the lockfile. Before the change, `cn` 0.4.0 (a separate compiled engine, not built on `tailwind-merge`) and `clsx` + `tailwind-merge` gave identical output for all 20535 inputs tried (every class string in the ui files, alone and with the className overrides used in `src/`). `components.json` keeps its `@/hooks` alias. The manual journey is retired only when the Playwright suite covers it.
 
 ## Consequences
 
