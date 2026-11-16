@@ -15,8 +15,11 @@ type Server struct {
 	Now          func() time.Time // injected clock
 	JWTSecret    []byte           // HMAC key for session tokens
 	CookieSecure bool             // Secure attribute on the session cookie
-	limiter      *limiter         // login/register rate limiter
-	obs          *observer        // logs, metrics, tracing, fault switch
+	// TrustedProxyHops is TRUSTED_PROXY_HOPS (0 = ignore X-Forwarded-For); the
+	// rate limiter is the only user, see clientAddr.
+	TrustedProxyHops int
+	limiter          *limiter  // login/register rate limiter
+	obs              *observer // logs, metrics, tracing, fault switch
 
 	// hook, if set (tests only), is called at named points of the read
 	// handlers so a test can act between two steps without sleeping.

@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -261,16 +262,121 @@ func (l *limiter) registerAttempt(ip string) time.Duration {
 	return 0
 }
 
-// clientIP is the host part of RemoteAddr and nothing else. X-Forwarded-For,
-// X-Real-IP and Forwarded are ignored on purpose: a client-controlled header
-// would let an attacker pick a fresh IP for every request. Behind a reverse
-// proxy all clients look like the proxy (the app is local-only).
+// Limits on the X-Forwarded-For header the limiter is willing to parse.
+const (
+	maxTrustedProxyHops = 5
+	maxXFFBytes         = 4096
+	maxXFFEntries       = 32
+)
+
+// clientIP is the host part of RemoteAddr and nothing else (no proxy is
+// trusted). The limiter itself uses Server.limiterIP.
 func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	return remoteHost(r.RemoteAddr)
+}
+
+func remoteHost(remoteAddr string) string {
+	host, _, err := net.SplitHostPort(remoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		return remoteAddr
 	}
 	return host
+}
+
+// limiterIP is the per-client key of the limiter: see clientAddr.
+func (s *Server) limiterIP(r *http.Request) string {
+	if s.TrustedProxyHops <= 0 {
+		return remoteHost(r.RemoteAddr)
+	}
+	return clientAddr(r.RemoteAddr, r.Header.Values("X-Forwarded-For"), s.TrustedProxyHops)
+}
+
+// clientAddr picks the client address for the limiter. With hops == 0 it is
+// the host part of remoteAddr and xff is ignored. With hops == N > 0 the
+// header lines are joined in order, split on commas, and the client is the Nth
+// entry counted from the RIGHT: every trusted proxy appends the address it
+// received the request from, so the entries to the left of that position were
+// written by the client and are never used. Whatever is wrong (fewer entries
+// than hops, an unparsable entry, a header over maxXFFBytes or maxXFFEntries)
+// falls back to the host of remoteAddr, so the request is counted against the
+// proxy and never against a value the client chose. IPv4-mapped IPv6 becomes
+// IPv4; IPv6 is kept whole (no /64 grouping).
+func clientAddr(remoteAddr string, xff []string, hops int) string {
+	fallback := remoteHost(remoteAddr)
+	if hops <= 0 || len(xff) == 0 {
+		return fallback
+	}
+	bytes, entries := 0, 0
+	for _, l := range xff {
+		bytes += len(l) + 1
+		entries += strings.Count(l, ",") + 1
+	}
+	if bytes-1 > maxXFFBytes || entries > maxXFFEntries || entries < hops {
+		return fallback
+	}
+	// Walk entries right to left, line by line, without building a slice.
+	seen := 0
+	for i := len(xff) - 1; i >= 0; i-- {
+		line := xff[i]
+		for {
+			j := strings.LastIndexByte(line, ',')
+			if seen++; seen == hops {
+				if ip, ok := parseForwardedIP(line[j+1:]); ok {
+					return ip
+				}
+				return fallback
+			}
+			if j < 0 {
+				break
+			}
+			line = line[:j]
+		}
+	}
+	return fallback
+}
+
+// parseForwardedIP parses one X-Forwarded-For entry: an IP with an optional
+// port, IPv6 optionally in brackets. Zones and empty values are rejected.
+func parseForwardedIP(e string) (string, bool) {
+	e = strings.TrimSpace(e)
+	if e == "" {
+		return "", false
+	}
+	if strings.HasPrefix(e, "[") {
+		end := strings.IndexByte(e, ']')
+		if end < 0 {
+			return "", false
+		}
+		rest := e[end+1:]
+		if rest != "" && !validPort(rest) {
+			return "", false
+		}
+		e = e[1:end]
+	} else if strings.Count(e, ":") == 1 { // IPv4 with port
+		host, port, _ := strings.Cut(e, ":")
+		if !validPort(":" + port) {
+			return "", false
+		}
+		e = host
+	}
+	a, err := netip.ParseAddr(e)
+	if err != nil || a.Zone() != "" {
+		return "", false
+	}
+	return a.Unmap().String(), true
+}
+
+// validPort reports whether s is ":" followed by 1-5 digits.
+func validPort(s string) bool {
+	if len(s) < 2 || len(s) > 6 || s[0] != ':' {
+		return false
+	}
+	for _, c := range s[1:] {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // tooMany writes the 429 answer with Retry-After in whole seconds (>= 1).
@@ -283,7 +389,7 @@ func tooMany(w http.ResponseWriter, wait time.Duration) {
 // limitRegister wraps the register handler with the per-IP limit.
 func (s *Server) limitRegister(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if wait := s.limiter.registerAttempt(clientIP(r)); wait > 0 {
+		if wait := s.limiter.registerAttempt(s.limiterIP(r)); wait > 0 {
 			tooMany(w, wait)
 			return
 		}
