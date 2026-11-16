@@ -35,6 +35,7 @@ For plain HTTP on localhost set `COOKIE_SECURE=false` (empty also works but logs
 | `APPLY_SCHEMA` | app, optional | `true` applies the embedded `backend/db/schema.sql` at startup (set on Render) |
 | `COOKIE_SECURE` | app | `true` behind HTTPS (Render sets it; on AWS only with `DomainName`); unset logs a warning |
 | `APP_ENV` | app, optional | environment label `[a-z0-9-]{1,16}`, default `local`; `dev` on Render (`render.yaml`), `prod` on AWS (`remote-deploy.sh`) |
+| `TRUSTED_PROXY_HOPS` | app, optional | number of reverse proxies in front of the app, 0-5, default 0 (invalid: 0 with a warning); the login/register limiter then takes the client from `X-Forwarded-For`, counted from the right. `1` on AWS (`remote-deploy.sh`, Caddy only), not set on Render until measured, compose passes it (default 0); see `_docs/rate-limiter.md` |
 | `APP_COMMIT` | app, optional | `X-Build` value when `RENDER_GIT_COMMIT` is absent; set to the sha by the AWS rollout |
 | `PORT`, `STATIC_DIR` | app | Image defaults 8080 and `/app/public` |
 | `METRICS_ADDR` | app, optional | Separate listener for `/metrics`; see `_docs/plan.md` |

@@ -9,6 +9,8 @@ services:
     environment:
       PORT: "8080"
       APP_ENV: "${APP_ENV:-local}"
+      # Reverse proxies in front of the app (0-5); see _docs/rate-limiter.md.
+      TRUSTED_PROXY_HOPS: "${TRUSTED_PROXY_HOPS:-0}"
       STORE: db
       DB_DRIVER: postgres
       DATABASE_URL: "postgres://${POSTGRES_USER:?set POSTGRES_USER in .env}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:?set POSTGRES_DB in .env}?sslmode=disable"

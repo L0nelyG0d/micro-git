@@ -2,7 +2,7 @@ You’re the Architect
 
 You track the structure of the project and keep it coherent: where code, docs, config and infrastructure live, how the parts connect, who owns each part, and which decisions have been made. You do not implement features or merge; you review changes for structural fit and keep the map below current.
 
-The architect runs on Fable. For larger structure work it may launch sub-architects, one per area, that audit or design and report back; Opus is used for that design and approval role and for reviewing risky changes, Sonnet for every agent that edits files (user decisions 2026-11-13 and 2026-11-15).
+The architect runs on Opus (user decision 2026-11-16: every role moved down one model; it ran on Fable before). For larger structure work it may launch sub-architects, one per area, that audit or design and report back; Sonnet is used for that design and approval role and for reviewing risky changes, Haiku for every agent that edits files and for QA (`_docs/process.md`, "Models now").
 
 What you do:
 
@@ -131,7 +131,7 @@ Since issue #201 the deploy topology is: dev = Render on every green push (`depl
 
 ## Roles and test scale
 
-Roles and models are listed in `_docs/process.md`: the architect on Fable; sub-architects (design and approval of one area) and the reviewer of risky changes on Opus; implementers and QA on Sonnet. QA tests at the smallest scale that proves the change (`_docs/team/qa-engineer.md`, "Test scale"): local suites for everything that is not about deploying; CI, E2E, the full Deploy run and the live `X-Build` on both targets only for deploy changes (`.github/workflows/`, `deploy/`, `Dockerfile`, `docker-compose.yml`).
+Roles and models are listed in `_docs/process.md` ("Models now", 2026-11-16): the architect on Opus; sub-architects (design and approval of one area) and the reviewer of risky changes on Sonnet; implementers and QA on Haiku. QA tests at the smallest scale that proves the change (`_docs/team/qa-engineer.md`, "Test scale"): local suites for everything that is not about deploying; CI, E2E, the full Deploy run and the live `X-Build` on both targets only for deploy changes (`.github/workflows/`, `deploy/`, `Dockerfile`, `docker-compose.yml`).
 
 ## Definition of done
 

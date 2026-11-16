@@ -43,6 +43,7 @@ func main() {
 	srv := NewServer(store, cfg.observerConfig())
 	srv.JWTSecret = []byte(cfg.JWTSecret)
 	srv.CookieSecure = cfg.CookieSecure
+	srv.TrustedProxyHops = cfg.TrustedProxyHops
 
 	staticDir := os.Getenv("STATIC_DIR") // built frontend; empty = API only
 	if staticDir != "" {

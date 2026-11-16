@@ -16,11 +16,20 @@ An in-memory limiter on `POST /auth/login` and `POST /auth/register`. It slows d
 
 ## Details
 - The check and the count are atomic (reserve at check time, undo on success), and cookie / no-cookie requests have separate pair counters, so bursts cannot bypass the limit or eat the real user's cookie budget.
-- Client identity is `RemoteAddr` only. `X-Forwarded-For` is ignored because it is spoofable. The app is now hosted behind proxies (Render's edge, Caddy on AWS), where `RemoteAddr` may be the proxy address, so the per-IP limits may count all users together: tracked in #194.
+- Client identity: see "Client address behind a proxy" below.
 - State lives in memory and resets on restart. Memory is bounded: at most 10,000 entries, oldest evicted.
 - The clock is injectable so tests need no sleeping.
 - All numbers above are defaults, kept as constants so they are easy to change.
 - Documented in `_docs/openapi.yaml` (429 response, `Retry-After` header) and `plan.md`.
+
+## Client address behind a proxy (issue #194)
+Setting `TRUSTED_PROXY_HOPS` (integer 0-5, default 0, read once in `LoadConfig`; an invalid value falls back to 0 with a startup warning). The function is `clientAddr` in `backend/ratelimit.go`; the register cap, the per-pair login counters and the per-IP login counter all use it (`Server.limiterIP`). Nothing else trusts a forwarded header, and the access log records no client address.
+- **0 (default):** the host part of `RemoteAddr`; `X-Forwarded-For` is ignored. Right when the app is reachable directly.
+- **N > 0:** all `X-Forwarded-For` lines are joined in order and split on commas; the client is the Nth entry counted from the **right**. Each trusted proxy appends the address it received the request from, so the last entry is what the nearest proxy saw and is not controlled by the client. Entries to the left may be written by the client (`X-Forwarded-For: 1.2.3.4` sent by an attacker arrives as `1.2.3.4, <real address>`), so they are never used. Counting from the left would let an attacker pick a fresh bucket per request.
+- **Fallback (fail safe):** fewer entries than N, no header, an entry that is not an IP (a port and IPv6 brackets are stripped; zones and empty values are rejected), a header over 4 KB or with more than 32 entries: the request uses the host of `RemoteAddr`, i.e. the proxy bucket, never a client-chosen value.
+- **Normalisation:** IPv4-mapped IPv6 (`::ffff:a.b.c.d`) becomes IPv4. IPv6 is kept whole: there is no grouping per /64, so one IPv6 client can use many addresses to get many buckets.
+- **Values per environment:** AWS 1 (Caddy is the only proxy: the app container is started without a published port and the security group opens only 80, 443 and SSH; `remote-deploy.sh` sets it, effective after the next promotion). Render stays 0 until someone measures how many proxies sit in front of a service. Local and compose 0 (`docker-compose.yml` passes `TRUSTED_PROXY_HOPS`, default 0).
+- **Measuring (acceptance criterion 1, not done yet):** the owner can check without logging client IPs. Deploy, then from two different networks (for example a laptop and a phone on mobile data) call `POST /api/auth/register` with an invalid body more than `registerMaxPerIP` times from the first network. If the second network is also answered `429`, both share one bucket: the app sees the proxy (hops too low or header missing). If the second network still gets `400`, the limiter separates clients. On Render run the same check with `TRUSTED_PROXY_HOPS` unset first: a shared `429` shows the proxy address is what `RemoteAddr` holds, and a value of 1 can then be tested the same way (spoofing check: send an extra `X-Forwarded-For: 1.2.3.4` from the first network, it must stay `429`).
 
 ## Where the related instructions live
 - Workflow rules for agents (branch per issue, controller, QA, waiting for the user): `_docs/AGENTS.md`, `_docs/process.md`, `_docs/team/*.md`.

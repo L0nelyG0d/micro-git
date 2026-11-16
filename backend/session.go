@@ -135,7 +135,7 @@ func (s *Server) login(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusUnauthorized, "invalid username or password")
 		return
 	}
-	ip := clientIP(r)
+	ip := s.limiterIP(r)
 	known := s.isKnownDevice(r, username)
 	// Throttled: answer before any database or bcrypt work, even if the
 	// password is right, and say nothing about whether the user exists.
