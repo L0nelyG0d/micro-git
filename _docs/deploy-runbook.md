@@ -38,7 +38,7 @@ Other views: Render dashboard (latest deploy commit SHA); `gh run list --workflo
 - Needs `aws login` (your own session), Docker running, `jq`, `openssl`. Region and stack are fixed in the scripts.
 - `deploy.sh` stops if the account is not on the Free plan. It runs preflight and bootstrap (`--no-oidc`), keeps the JWT secret in SSM (generated once, never printed; `--rotate-jwt` to replace), deploys the stack through a guarded change set, builds the exact commit for `linux/amd64`, rolls it out through SSM with `APP_COMMIT`, and smoke-checks `/health` (X-Build == sha), `/`, `/api/repos` (200) and `/api/auth/me` (401).
 - Automation: a git `post-merge` hook or a cron/launchd job can call the `--apply` command (needs a live `aws login`); GitHub runs the same script in the `deploy` job of `Promote to production` (manual, approved).
-- `destroy.sh` terminates the instance first (it is `RetainExceptOnCreate`, so a plain stack delete would leave it running), deletes the stack (ECR images with it), the CI user, its keys, the variable `AWS_DEPLOY_MODE` (no workflow reads it any more) and the `aws-prod` environment secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. `--all` also deletes `/micro-git-prod/jwt-secret`, role `cfn-deploy-micro-git-prod` and `mg-instance-boundary` (if unused). Postgres data is lost; there are no backups.
+- `destroy.sh` terminates the instance first (it is `RetainExceptOnCreate`, so a plain stack delete would leave it running), deletes the stack (ECR images with it), the CI user, its keys, the variable `AWS_DEPLOY_MODE` (no workflow reads it any more) and the `aws-prod` environment secrets `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. `--all` also deletes `/micro-git-prod/jwt-secret`, role `cfn-deploy-micro-git-prod` and `mg-instance-boundary` (if unused). The stack delete snapshots the data disk (`DeletionPolicy: Snapshot`), so the data survives as a snapshot you delete by hand; the nightly dumps on that disk go with it unless you copied them off the instance first.
 - Check credits: `aws freetier get-account-plan-state --region us-east-1`.
 
 ### Changing the AMI on purpose
@@ -56,7 +56,7 @@ Creates a new key, pipes it into the secrets of GitHub environment `aws-prod` (m
 
 - Render: dashboard > service > Events/Deploys > pick the previous good deploy > Rollback. Or revert the bad commit on `main`; the next green CI and E2E redeploys. If Render's build fails, the previous deploy keeps serving (per Render docs, untested here). `autoDeploy` is `false`, so pushes alone do not deploy.
 - dev: as above.
-- prod (AWS): run `Promote to production` with an older `sha` (it must be on `main` with green CI and E2E; a sha older than dev is allowed and only prints a notice). Locally: `deploy/aws/deploy.sh --apply --account 228619515667 --ref <older-sha>`. The image tag is `<repo>:<sha7>` (reused if still in ECR, which keeps the last 5). There is no automatic container rollback if a rollout fails (#182). Postgres data is not rolled back and there are no backups. Never roll the AMI or replace `AppInstance` (the change-set guard blocks it; the data would be lost).
+- prod (AWS): run `Promote to production` with an older `sha` (it must be on `main` with green CI and E2E; a sha older than dev is allowed and only prints a notice). Locally: `deploy/aws/deploy.sh --apply --account 228619515667 --ref <older-sha>`. The image tag is `<repo>:<sha7>` (reused if still in ECR, which keeps the last 5). If the new `mg-app` fails its health check within 60 s, `remote-deploy.sh` starts the previous image again with its previous `APP_COMMIT` and `deploy.sh` fails (#182). The schema is not rolled back (additive and idempotent). Postgres data is not rolled back: use the nightly dump or a snapshot (below). Never roll the AMI or replace `AppInstance` (the change-set guard blocks it; the data would be lost).
 - Any target: `git revert <sha>` on `main` and let CI/E2E gate the redeploy.
 
 ## Known follow-ups
@@ -67,6 +67,44 @@ Tracked in issues #167, #160, #166 and #168 (AWS hardening, backups and other de
 
 - After a failed FIRST create the stack sits in `ROLLBACK_COMPLETE`/`ROLLBACK_FAILED`: a local `deploy.sh --apply` deletes and recreates it; the CI job stops and asks for that local run.
 - `mg-instance-boundary` is a single account-wide policy and its name is fixed. It covers the secret path of the stack name used at bootstrap. A second stack name in the same account needs its `/<stack>/jwt-secret` path added by hand (`aws iam create-policy-version --set-as-default`); `bootstrap.sh` never modifies an existing policy.
+
+## Data volume, backups and rollback (#182)
+
+Postgres data is on its own EBS disk `DataVolume` (5 GB by default, `/opt/mg/data`, see `deploy/aws/README.md` "Data volume, nightly dump and rollback (#182)"). What protects it:
+
+- **Nightly dump**: `mg-pgdump.timer` (03:15 UTC) writes `/opt/mg/data/backups/mg-<UTC time>.sql.gz` and deletes dumps older than 7 days. The dumps are on the same disk, not off the instance. Run one now: `systemctl start mg-pgdump.service`.
+- **Snapshot on delete or replace**: CloudFormation snapshots `DataVolume` before deleting or replacing it. Nothing else snapshots it.
+- **Snapshots, design question on #182 (default used: B)**: A = a DLM daily snapshot, keep 7, about 0.05 USD per GB-month (needs an extra IAM role); B = a manual `aws ec2 create-snapshot` before a risky change (the default, below); C = no snapshots, dumps only. The owner decides; until then B. Find the volume id with `aws ec2 describe-volumes --region ap-southeast-2 --filters Name=tag:aws:cloudformation:logical-id,Values=DataVolume --query 'Volumes[0].VolumeId' --output text`, then `aws ec2 create-snapshot --volume-id <id> --description "before <change>" --region ap-southeast-2`. Snapshots cost money and nothing deletes them for you (`aws ec2 delete-snapshot --snapshot-id <id>` by hand).
+- **Schema rollback**: none. `schema.sql` is additive and idempotent; an older image ignores newer tables and columns. A dump restore is the only data rollback.
+
+### Move Postgres to the data volume (existing stack, one time, owner)
+
+User data runs only on first boot, so a stack created before #182 keeps Postgres in `/opt/mg/pgdata` on the root volume. The data disk is attached by the stack update but not mounted. Do this in order, as root on the instance (`aws ssm start-session --target <InstanceId>`):
+
+1. Dump and snapshot first (default B). On the instance: `docker exec mg-db pg_dump -U mg -d mg | gzip > /root/pg-before-move.sql.gz`; from your machine: a manual snapshot of the root volume.
+2. From your machine: `deploy/aws/deploy.sh --apply --account 228619515667`. The stack update attaches the data disk and stops and starts the instance (`UserData` changed: the public IP changes, and the containers restart on the old `/opt/mg/pgdata`, so nothing is lost).
+3. On the instance, as root:
+
+        lsblk -o NAME,SIZE,TYPE,MOUNTPOINT      # the 5 GB disk with no mountpoint is the data disk
+        DEV=/dev/nvme1n1                          # replace with that disk; never the root disk
+        docker stop mg-app mg-db
+        blkid "$DEV" || mkfs.xfs -q "$DEV"        # formats only a disk with no filesystem
+        UUID="$(blkid -o value -s UUID "$DEV")"
+        mkdir -p /opt/mg/data
+        echo "UUID=$UUID /opt/mg/data xfs defaults,nofail 0 2" >> /etc/fstab
+        mount /opt/mg/data
+        mkdir -p /opt/mg/data/pgdata /opt/mg/data/backups
+        cp -a /opt/mg/pgdata/. /opt/mg/data/pgdata/
+        docker rm -f mg-db
+        docker run -d --name mg-db --restart unless-stopped --network mg --env-file /opt/mg/db.env \
+          -v /opt/mg/data/pgdata:/var/lib/postgresql/data postgres:16-alpine
+        docker exec mg-db pg_isready -U mg -d mg
+
+4. From your machine: `deploy/aws/deploy.sh --apply --account 228619515667` again. It restarts `mg-app` (with the rollback check) and installs `mg-pgdump`.
+5. Check `curl -sI <AppUrl>/health | grep -i '^x-build'`, log in, look at a repository, then on the instance `systemctl start mg-pgdump.service && ls -l /opt/mg/data/backups`.
+6. Keep `/opt/mg/pgdata` until step 5 has passed for a while, then `rm -rf /opt/mg/pgdata` to free root space.
+
+Undo before step 6: `docker rm -f mg-db` and run the original `mg-db` line with `-v /opt/mg/pgdata:/var/lib/postgresql/data`; the copy only read the old directory.
 
 ## Owner steps for the IAM change (#181)
 

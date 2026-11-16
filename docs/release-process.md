@@ -33,7 +33,7 @@ Render does not deploy on its own: `deploy/render.yaml` sets `autoDeploy: false`
 | dev (Render) and prod (AWS) | [`_docs/deploy-runbook.md`](../_docs/deploy-runbook.md#rollback) |
 | Compose: image tag rollback | `docker-compose.yml` uses `image: mg-app:local`, rebuilt on each `build`; no versioned tags are published. Before upgrading, `docker tag mg-app:local mg-app:prev`; to roll back, set `image: mg-app:prev` (remove `build`) and `docker compose up -d` |
 | Git revert | `git revert <sha>` (or the merge: `git revert -m 1 <merge-sha>`) on a branch, merged through the normal flow; CI, E2E and Deploy then ship it |
-| Database | No down-migrations. `schema.sql` is additive and idempotent. The AWS Postgres has no backups (#182); data is not rolled back with the app |
+| Database | No down-migrations. `schema.sql` is additive and idempotent and is not rolled back: an older app ignores the newer tables and columns. AWS Postgres: nightly `pg_dump` on the data disk (7 days), snapshot of the data disk on stack delete; data is not rolled back with the app (#182, [runbook](../_docs/deploy-runbook.md#data-volume-backups-and-rollback-182)) |
 
 ## Which commit is live
 
