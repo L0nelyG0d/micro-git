@@ -133,6 +133,7 @@ if [ "${DRY_RUN:-0}" = 1 ] || [ "${AUTO_EXECUTE:-0}" != 1 ]; then
 fi
 [ -f "$INC/action.lock" ] || { audit "$INC" action_skipped "no action.lock for an allowed decision: refusing to run (fail closed)" error; echo "refused: no action claim"; exit 1; }
 LOCK="$INC/action.lock"   # execute exactly the argv/env that was claimed
+{ [ -f "$LOCK" ] && [ ! -L "$LOCK" ] && [ "$(jq -r .command "$LOCK" 2>/dev/null)" = "$CMD" ]; } || { audit "$INC" action_skipped "action.lock is not the claim the policy just wrote (symlink or different command): refusing to run (fail closed)" error; echo "refused: action.lock mismatch"; exit 1; }
 CMD="$(jq -r .command "$LOCK")"; AID="$(jq -r .action_id "$LOCK")"; APARAMS="$(jq -c .params "$LOCK")"
 ARGV=(); while IFS= read -r l; do ARGV+=("$l"); done < <(jq -r '.argv[]' "$LOCK")
 ENVSET=(); while IFS= read -r l; do ENVSET+=("$l"); done < <(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$LOCK")

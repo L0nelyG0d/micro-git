@@ -26,11 +26,32 @@ except ImportError:  # non-POSIX: cooldown still works, without the cross-proces
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def _reject_constant(name):
+    raise ValueError("non-finite number %s" % name)
+
+
+def strict_json(text):
+    """json.loads that refuses the non-standard NaN/Infinity/-Infinity tokens (they would defeat every numeric comparison)."""
+    return json.loads(text, parse_constant=_reject_constant)
+
+
+def too_deep(obj, limit=16):
+    """Iterative nesting check (no recursion): the responder schema is shallow; anything deeper is hostile or broken."""
+    stack = [(obj, 1)]
+    while stack:
+        o, d = stack.pop()
+        if isinstance(o, (dict, list)):
+            if d > limit:
+                return True
+            stack.extend((v, d + 1) for v in (o.values() if isinstance(o, dict) else o))
+    return False
+
+
 def load_policy(path):
     # Policy file is JSON-compatible YAML. Use PyYAML only if present, else JSON.
     text = open(path).read()
     try:
-        return json.loads(text)
+        return strict_json(text)
     except ValueError:
         try:
             import yaml  # optional
@@ -46,6 +67,8 @@ def validate(inst, schema):
     if t == "number":
         if isinstance(inst, bool) or not isinstance(inst, (int, float)):
             return ["expected number"]
+        if not math.isfinite(inst):
+            return ["non-finite number"]   # 1e999 parses to inf
     elif t in tmap and (not isinstance(inst, tmap[t]) or (t != "boolean" and isinstance(inst, bool))):
         return ["expected " + t]
     if "enum" in schema and inst not in schema["enum"]:
@@ -159,7 +182,7 @@ def cooldown_seconds(policy):
     """Global cooldown between automatic actions of ANY incident. Env GLOBAL_COOLDOWN_SECONDS overrides the policy; 0 = off."""
     try:
         return max(0, int(os.environ.get("GLOBAL_COOLDOWN_SECONDS", policy.get("global_cooldown_seconds", 300))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 300   # unparseable -> keep the safe default
 
 
@@ -168,8 +191,8 @@ def last_action_path(inc):
 
 
 def cooldown_state(inc, policy):
-    """(seconds left, unreadable). Seconds left of the global cooldown (0 = free). Only a missing file (FileNotFoundError) or garbled content is 'free';
-    any other read error (permissions, I/O) fails closed with the full cooldown. A timestamp in the future keeps the cooldown
+    """(seconds left, unreadable). Seconds left of the global cooldown (0 = free). Only a missing file (FileNotFoundError) is 'free';
+    any other problem (permissions, I/O, garbled or non-finite content) fails closed with the full cooldown. A timestamp in the future keeps the cooldown
     running until ts + cooldown, and the reported seconds are exactly that."""
     cd = cooldown_seconds(policy)
     if cd <= 0:
@@ -181,9 +204,9 @@ def cooldown_state(inc, policy):
     except OSError:
         return cd, True   # unreadable state: cannot prove the cooldown is over -> fail closed
     except (ValueError, IndexError):
-        return 0, False
+        return cd, True   # garbled/empty stamp: cannot prove the cooldown is over -> fail closed
     if not math.isfinite(ts):
-        return 0, False   # nan/inf: treat like garbage, "no previous action"
+        return cd, True   # nan/inf: same
     return max(0, int(cd - (time.time() - ts) + 0.999)), False
 
 
@@ -219,9 +242,11 @@ def claim_cooldown(inc, policy):
         lf.close()
 
 
-def decide(resp, policy, schema, inc):
+def decide(resp, policy, schema, inc, load_err=None):
     """Returns (verdict, reasons, built). built is the command built by the policy (only when verdict is allow)."""
     reasons = []
+    if resp is None and load_err:
+        return "escalate", ["schema: response unreadable: " + load_err], None
     act0 = resp.get("proposed_action") if isinstance(resp, dict) else None
     if isinstance(act0, dict):   # clear reasons for the new contract before the generic schema errors
         if "command" in act0:
@@ -241,8 +266,12 @@ def decide(resp, policy, schema, inc):
     built = None
     if resp["needs_human"]:
         reasons.append("responder set needs_human")
-    if resp["confidence"] < policy["confidence_threshold"]:
-        reasons.append("confidence %.2f < threshold %.2f" % (resp["confidence"], policy["confidence_threshold"]))
+    conf, thr = resp["confidence"], policy.get("confidence_threshold")
+    thr_ok = isinstance(thr, (int, float)) and not isinstance(thr, bool) and math.isfinite(thr)
+    if not thr_ok:
+        reasons.append("policy confidence_threshold is not a finite number")
+    elif not (isinstance(conf, (int, float)) and not isinstance(conf, bool) and math.isfinite(conf) and conf >= thr):
+        reasons.append("confidence %s is not a finite number >= threshold %.2f" % (conf, thr))
     if typ in policy["propose_only_types"]:
         reasons.append("action type %s is propose-only" % typ)
         if aid != "none" or act.get("params"):
@@ -268,14 +297,17 @@ def main():
     os.makedirs(inc, exist_ok=True)
     opt = lambda n, d: a[a.index(n) + 1] if n in a else d
     policy = load_policy(opt("--policy", os.path.join(HERE, "autonomy-policy.yaml")))
-    schema = json.load(open(os.path.join(HERE, "response.schema.json")))
+    schema = strict_json(open(os.path.join(HERE, "response.schema.json")).read())
     rpath = opt("--response", os.path.join(inc, "response.json"))
+    load_err = None
     try:
-        resp = json.load(open(rpath))
-    except Exception as e:
-        resp = None
-        audit(inc, "policy_input_error", str(e))
-    verdict, reasons, built = decide(resp, policy, schema, inc)
+        resp = strict_json(open(rpath).read())
+        if too_deep(resp):
+            raise ValueError("response is nested too deeply")
+    except (Exception, RecursionError) as e:
+        resp, load_err = None, ("%s: %s" % (type(e).__name__, e))[:200]
+        audit(inc, "policy_input_error", load_err)
+    verdict, reasons, built = decide(resp, policy, schema, inc, load_err)
     if verdict == "allow" and "--no-claim" not in a and policy["max_automatic_actions_per_incident"] >= 1:
         try:  # atomic claim: at most one automatic action
             fd = os.open(os.path.join(inc, "action.lock"), os.O_CREAT | os.O_EXCL | os.O_WRONLY)

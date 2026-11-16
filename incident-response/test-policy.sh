@@ -98,6 +98,28 @@ mkdir -p "$T/missing-field"; echo '{"incident_id":"x"}' > "$T/missing-field/resp
 mk bad-confidence restart_app restart 1.7;                                             expect bad-confidence 3
 mk bad-type restart_app nuke 0.9;                                                      expect bad-type 3
 mkdir -p "$T/no-file";                                                                                  expect no-file 3
+# confidence gate: anything that is not a finite number >= threshold escalates (NaN used to pass every comparison)
+mkc() { # name raw-confidence-token
+  mkraw "$1" "{\"incident_id\":\"$1\",\"summary\":\"s\",\"root_cause_hypothesis\":\"h\",\"confidence\":$2,\"evidence_refs\":[\"a\"],\"proposed_action\":{\"type\":\"restart\",\"action_id\":\"restart_app\",\"params\":{},\"files\":[]},\"risk\":\"r\",\"needs_human\":false}"
+}
+for pair in "nan:NaN" "inf:Infinity" "ninf:-Infinity" "true:true" "str:\"0.9\"" "null:null" "big:1e999" "nbig:-1e999" "neg:-0.5" "above:1.0000001" "below:0.6999999" "arr:[0.9]"; do
+  mkc "conf-${pair%%:*}" "${pair#*:}"; expect "conf-${pair%%:*}" 3
+done
+jq -e '.reasons|any(test("non-finite"))' "$T/conf-nan/decision.json" >/dev/null && jq -e '.reasons|any(test("non-finite"))' "$T/conf-big/decision.json" >/dev/null && { pass=$((pass+1)); echo "ok   NaN/Infinity tokens and 1e999 are reported as non-finite numbers"; } || { fail=$((fail+1)); echo "FAIL non-finite reason"; }
+mkdir -p "$T/conf-missing"; echo '{"incident_id":"x","summary":"s","root_cause_hypothesis":"h","evidence_refs":["a"],"proposed_action":{"type":"restart","action_id":"restart_app","params":{},"files":[]},"risk":"r","needs_human":false}' > "$T/conf-missing/response.json"; expect conf-missing 3
+mkc conf-exact 0.7;   expect conf-exact 0     # exactly the threshold is allowed
+mkc conf-one 1;       expect conf-one 0
+mkc conf-justbelow 0.69; expect conf-justbelow 3
+mkdir -p "$T/deep"; python3 -c "print('{\"incident_id\":' + '['*5000 + ']'*5000 + '}')" > "$T/deep/response.json"
+python3 -I "$D/policy-check.py" "$T/deep" > "$T/deep/out" 2>"$T/deep/err"; rc=$?
+[ $rc -eq 3 ] && jq -e '.decision=="escalate"' "$T/deep/decision.json" >/dev/null && ! grep -q Traceback "$T/deep/out" "$T/deep/err" && { pass=$((pass+1)); echo "ok   deeply nested response escalates cleanly"; } || { fail=$((fail+1)); echo "FAIL deep nesting (rc=$rc)"; head -c 300 "$T/deep/err"; }
+# hostile action.lock written before the policy step (regular file, then dangling symlink): never claimed, never executed
+mk lock-file restart_app restart 0.9; echo '{"action_id":"restart_app","params":{},"argv":["touch","'"$T"'/PWNED"],"env":{},"command":"touch x"}' > "$T/lock-file/action.lock"
+expect lock-file 3; reason lock-file "already taken"
+[ ! -e "$T/PWNED" ] && grep -q PWNED "$T/lock-file/action.lock" && { pass=$((pass+1)); echo "ok   pre-existing action.lock: escalated, left untouched, nothing run"; } || { fail=$((fail+1)); echo "FAIL pre-existing lock"; }
+mk lock-link restart_app restart 0.9; ln -s "$T/PWNED-target" "$T/lock-link/action.lock"
+expect lock-link 3
+[ ! -e "$T/PWNED-target" ] && [ -L "$T/lock-link/action.lock" ] && { pass=$((pass+1)); echo "ok   action.lock symlink (dangling): escalated, target not created"; } || { fail=$((fail+1)); echo "FAIL lock symlink"; }
 # max one automatic action: second run on the same incident must escalate
 mk once restart_app restart 0.9; expect once 0; expect once 3
 # global cooldown across incidents (separate dir so .last_action is isolated)
@@ -110,9 +132,9 @@ cdrun() { GLOBAL_COOLDOWN_SECONDS="$2" python3 -I "$D/policy-check.py" "$CD/$1" 
 [ "$(cdrun b 0)" = 0 ] && { pass=$((pass+1)); echo "ok   cooldown: 0 disables"; } || { fail=$((fail+1)); echo "FAIL cooldown off"; }
 echo "1 x" > "$CD/.last_action"   # ancient timestamp: cooldown over
 [ "$(cdrun c 300)" = 0 ] && { pass=$((pass+1)); echo "ok   cooldown: expires"; } || { fail=$((fail+1)); echo "FAIL cooldown expiry"; }
-for bad in nan inf -inf NaN; do   # non-finite timestamp = no previous action (nan used to crash, inf locked forever)
+for bad in nan inf -inf NaN Infinity garbage; do   # non-finite or non-numeric stamp: cannot prove the cooldown is over -> fail closed
   echo "$bad x" > "$CD/.last_action"; rm -f "$CD/c/action.lock" "$CD/c/decision.json"
-  [ "$(cdrun c 300 --no-claim)" = 0 ] && { pass=$((pass+1)); echo "ok   cooldown: .last_action '$bad' treated as free"; } || { fail=$((fail+1)); echo "FAIL cooldown non-finite $bad"; }
+  [ "$(cdrun c 300 --no-claim)" = 3 ] && grep -q 'cooldown state unreadable' "$CD/c/decision.json" && { pass=$((pass+1)); echo "ok   cooldown: .last_action '$bad' fails closed (cooldown state unreadable)"; } || { fail=$((fail+1)); echo "FAIL cooldown non-finite $bad"; }
 done
 # unreadable .last_action fails closed (only "not found" is free); skipped as root, which can read mode 000
 if [ "$(id -u)" != 0 ]; then

@@ -80,6 +80,29 @@ DOCK
   check "exec audit line records action_id, params and command" "grep '\"kind\":\"exec\"' '$INCIDENTS_DIR/drill-exec/audit.jsonl' | grep -q 'action_id=fault_off params={} command=FAULT_ENDPOINT_500= docker compose'"
   check "action.lock holds the built action (JSON), not model text" "jq -e '.action_id==\"fault_off\" and (.argv|type)==\"array\"' '$INCIDENTS_DIR/drill-exec/action.lock' >/dev/null"
 
+  echo "== non-finite confidence from a model must not execute (fake claude + fake docker, AUTO_EXECUTE=1)"
+  for CASE in "nan:NaN:0" "inf:Infinity:0" "ok:0.9:1"; do
+    CN="${CASE%%:*}"; CV="$(echo "$CASE" | cut -d: -f2)"; WANT="${CASE##*:}"
+    mkdir -p "$T/nanbin-$CN"; cat > "$T/nanbin-$CN/claude" <<FAKE
+#!/usr/bin/env bash
+echo '{"incident_id":"drill-conf-$CN","summary":"s","root_cause_hypothesis":"h","confidence":$CV,"evidence_refs":["app_runtime.json"],"proposed_action":{"type":"restart","action_id":"restart_app","params":{},"files":[]},"risk":"r","needs_human":false}'
+FAKE
+    chmod +x "$T/nanbin-$CN/claude"; rm -f "$T/docker.out"
+    EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" "drill-conf-$CN" "$ROUTE" >/dev/null
+    ( PATH="$T/nanbin-$CN:$T/dockbin:$PATH" RESPONDER=claude DRY_RUN=0 AUTO_EXECUTE=1 GLOBAL_COOLDOWN_SECONDS=0 VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 "$D/run-responder.sh" "drill-conf-$CN" "$ROUTE" >/dev/null 2>&1 )
+    if [ "$WANT" = 1 ]; then
+      check "control: finite confidence 0.9 executes the fake docker" "[ -f '$T/docker.out' ] && grep -qx 'ARG=restart' '$T/docker.out'"
+    else
+      check "confidence $CV: fake docker never called, no action.lock" "[ ! -f '$T/docker.out' ] && [ ! -f '$INCIDENTS_DIR/drill-conf-$CN/action.lock' ]"
+      check "confidence $CV: escalated (policy decision or dropped response), never allowed" "[ -f '$INCIDENTS_DIR/drill-conf-$CN/escalation-packet.json' ] && ! grep -q '\"decision\":\"allow\"' '$INCIDENTS_DIR/drill-conf-$CN/audit.jsonl'"
+    fi
+  done
+  echo "== hostile action.lock written before the policy step is not executed"
+  EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" drill-hostile-lock "$ROUTE" >/dev/null
+  echo '{"action_id":"restart_app","params":{},"argv":["touch","'"$T"'/PWNED2"],"env":{},"command":"touch x"}' > "$INCIDENTS_DIR/drill-hostile-lock/action.lock"; rm -f "$T/docker.out"
+  ( PATH="$T/dockbin:$PATH" DRY_RUN=0 AUTO_EXECUTE=1 GLOBAL_COOLDOWN_SECONDS=0 VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 "$D/run-responder.sh" drill-hostile-lock "$ROUTE" >/dev/null 2>&1 )
+  check "pre-existing action.lock: nothing executed, escalated" "[ ! -e '$T/PWNED2' ] && [ ! -f '$T/docker.out' ] && [ -f '$INCIDENTS_DIR/drill-hostile-lock/escalation-packet.json' ]"
+
   echo "== model path isolation (fake claude on PATH)"
   mkdir -p "$T/fakebin"; cat > "$T/fakebin/claude" <<FAKE
 #!/usr/bin/env bash
