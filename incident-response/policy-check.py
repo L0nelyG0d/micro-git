@@ -47,17 +47,127 @@ def too_deep(obj, limit=16):
     return False
 
 
+SUPPORTED_POLICY_VERSIONS = (2,)
+_TOP_REQUIRED = ("version", "confidence_threshold", "max_automatic_actions_per_incident", "allowed_actions",
+                 "propose_only_types", "denied_patterns", "escalation")
+_TOP_OPTIONAL = ("global_cooldown_seconds", "on_violation")
+_ACTION_REQUIRED = ("types", "argv")
+_ACTION_OPTIONAL = ("description", "env", "params")
+_AID = re.compile(r"[a-z][a-z0-9_]{0,39}")
+
+
+def _num(v):
+    return isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v)
+
+
+def _strlist(v, nonempty=True):
+    return isinstance(v, list) and (bool(v) or not nonempty) and all(isinstance(x, str) for x in v)
+
+
+def _unique_pairs(pairs):
+    d = {}
+    for k, v in pairs:
+        if k in d:
+            raise ValueError("duplicate key %s" % json.dumps(k))
+        d[k] = v
+    return d
+
+
+def validate_policy(p):
+    """Structure check of autonomy-policy.yaml; returns a list of problems (empty = valid). Keys starting with "_" are comments."""
+    if not isinstance(p, dict):
+        return ["policy is not an object"]
+    errs = []
+    known = set(_TOP_REQUIRED + _TOP_OPTIONAL)
+    errs += ["unknown top-level key %s" % json.dumps(k[:40]) for k in p if not k.startswith("_") and k not in known]
+    errs += ["missing top-level key %s" % k for k in _TOP_REQUIRED if k not in p]
+    if "version" in p and (isinstance(p["version"], bool) or p["version"] not in SUPPORTED_POLICY_VERSIONS):
+        errs.append("unsupported policy version %s (supported: %s)" % (json.dumps(p["version"])[:20], list(SUPPORTED_POLICY_VERSIONS)))
+    if "confidence_threshold" in p and not (_num(p["confidence_threshold"]) and 0 <= p["confidence_threshold"] <= 1):
+        errs.append("confidence_threshold must be a finite number between 0 and 1")
+    m = p.get("max_automatic_actions_per_incident")
+    if "max_automatic_actions_per_incident" in p and not (isinstance(m, int) and not isinstance(m, bool) and 0 <= m <= 10):
+        errs.append("max_automatic_actions_per_incident must be an integer between 0 and 10")
+    if "global_cooldown_seconds" in p and not (_num(p["global_cooldown_seconds"]) and 0 <= p["global_cooldown_seconds"] <= 604800):
+        errs.append("global_cooldown_seconds must be a finite number between 0 and 604800")
+    if "on_violation" in p and p["on_violation"] != "escalate":
+        errs.append("on_violation must be \"escalate\"")
+    if "propose_only_types" in p and not _strlist(p["propose_only_types"], nonempty=False):
+        errs.append("propose_only_types must be a list of strings")
+    dp = p.get("denied_patterns")
+    if "denied_patterns" in p:
+        if not isinstance(dp, list):
+            errs.append("denied_patterns must be a list")
+        else:
+            for i, d in enumerate(dp):
+                if not (isinstance(d, dict) and set(d) == {"id", "regex"} and isinstance(d["id"], str) and isinstance(d["regex"], str)):
+                    errs.append("denied_patterns[%d] must be {id: string, regex: string}" % i)
+                else:
+                    try:
+                        re.compile(d["regex"])
+                    except re.error:
+                        errs.append("denied_patterns[%d].regex does not compile" % i)
+    esc = p.get("escalation")
+    if "escalation" in p:
+        if not (isinstance(esc, dict) and isinstance(esc.get("packet_file"), str)
+                and re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,60}", esc["packet_file"]) and ".." not in esc["packet_file"]
+                and set(esc) <= {"packet_file", "notify"}):
+            errs.append("escalation must be {packet_file: plain file name, notify: string}")
+    acts = p.get("allowed_actions")
+    if "allowed_actions" in p:
+        if not isinstance(acts, dict):
+            errs.append("allowed_actions must be an object (action_id -> action)")
+            acts = {}
+        for aid, a in acts.items():
+            w = "allowed_actions.%s" % aid[:40]
+            if not _AID.fullmatch(aid) or aid == "none":
+                errs.append("%s: invalid action_id" % w)
+            if not isinstance(a, dict):
+                errs.append("%s: must be an object" % w); continue
+            errs += ["%s: unknown key %s" % (w, json.dumps(k[:40])) for k in a if k not in _ACTION_REQUIRED + _ACTION_OPTIONAL]
+            errs += ["%s: missing %s" % (w, k) for k in _ACTION_REQUIRED if k not in a]
+            if "types" in a and not _strlist(a["types"]):
+                errs.append("%s: types must be a non-empty list of strings" % w)
+            if "argv" in a and not (_strlist(a["argv"]) and a["argv"][0]):
+                errs.append("%s: argv must be a non-empty list of strings (not a string)" % w)
+            if "description" in a and not isinstance(a["description"], str):
+                errs.append("%s: description must be a string" % w)
+            if "env" in a and not (isinstance(a["env"], dict) and all(isinstance(k, str) and isinstance(v, str) for k, v in a["env"].items())):
+                errs.append("%s: env must be an object of string to string" % w)
+            prm = a.get("params", {})
+            if not isinstance(prm, dict):
+                errs.append("%s: params must be an object" % w); prm = {}
+            for k, rule in prm.items():
+                if not (isinstance(rule, dict) and len(rule) == 1 and next(iter(rule)) in ("enum", "regex")):
+                    errs.append("%s: param %s rule must be exactly one of enum, regex" % (w, k[:40])); continue
+                if "enum" in rule and not _strlist(rule["enum"]):
+                    errs.append("%s: param %s enum must be a non-empty list of strings" % (w, k[:40]))
+                if "regex" in rule:
+                    try:
+                        re.compile(rule["regex"])
+                    except (re.error, TypeError):
+                        errs.append("%s: param %s regex is not a valid pattern" % (w, k[:40]))
+            if _strlist(a.get("argv")):
+                for el in a["argv"]:
+                    mm = re.fullmatch(r"\{\{param:([A-Za-z0-9_]+)\}\}", el)
+                    if "{{" in el and el != "{{COMPOSE_ARGS}}" and not (mm and mm.group(1) in prm):
+                        errs.append("%s: template element not understood: %s" % (w, el[:40]))
+    return errs
+
+
 def load_policy(path):
-    # Policy file is JSON-compatible YAML. Use PyYAML only if present, else JSON.
-    text = open(path).read()
+    """The policy is JSON-compatible YAML and is parsed as JSON only (no PyYAML path: two parsers could disagree about the
+    same file, and a policy that is not plain JSON is refused rather than interpreted). Malformed structure exits non-zero
+    before any decision or action.lock exists."""
     try:
-        return strict_json(text)
-    except ValueError:
-        try:
-            import yaml  # optional
-            return yaml.safe_load(text)
-        except ImportError:
-            sys.exit("policy must be JSON-compatible YAML when PyYAML is absent")
+        with open(path) as f:
+            p = json.loads(f.read(), parse_constant=_reject_constant, object_pairs_hook=_unique_pairs)
+    except (OSError, ValueError) as e:
+        sys.exit("policy unreadable or not plain JSON (%s): %s" % (type(e).__name__, str(e)[:120]))
+    errs = validate_policy(p)
+    if errs:
+        sys.exit("policy invalid: " + "; ".join(errs[:8]))
+    return p
 
 
 def validate(inst, schema):
