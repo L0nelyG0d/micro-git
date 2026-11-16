@@ -9,6 +9,15 @@
 #   deploy   environment "aws-prod" (holds the IAM-user key, main only): deploy/aws/deploy.sh --ci
 #   verify   re-reads dev; checks prod X-Build when the repository variable PROD_URL is set
 # Anything that fails in resolve or a rejected approval stops before AWS is touched.
+#
+# Concurrency (group promote-production, cancel-in-progress false): a run that waits for approval
+# holds the group, so other promotions wait behind it, and a third dispatch cancels the queued run
+# (GitHub keeps one pending run per group). See docs/release-process.md.
+#
+# Rollback: dispatch an older sha. The deploy job runs this run's commit (current scripts and
+# template) and builds the older sha's app (deploy.sh --ref). schema.sql comes from the promoted sha
+# and is additive and idempotent, so it is not rolled back; the older app ignores newer tables and
+# columns. A failed health check on the instance restarts the previous image (#182).
 name: Promote to production
 
 on:
@@ -30,7 +39,8 @@ jobs:
   resolve:
     name: Resolve and check the commit to promote
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    # Untyped sha: up to 12 dev X-Build tries (about 15 minutes); the job must fit inside this.
+    timeout-minutes: 20
     permissions:
       contents: read
       actions: read
@@ -52,11 +62,17 @@ jobs:
 
       - name: Read the build dev serves (X-Build)
         id: dev
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
         run: |
-          # Render free sleeps; allow about 3 minutes for a cold start.
+          # Render free sleeps; allow about 3 minutes for a cold start (12 tries when no sha is
+          # typed). A typed sha does not depend on dev's build: 2 tries only, so a slow dev cannot
+          # hold this job.
+          tries=12
+          if [ -n "$INPUT_SHA" ]; then tries=2; fi
           base="${DEV_URL%/}"
           build=""
-          for i in $(seq 1 12); do
+          for i in $(seq 1 "$tries"); do
             hdrs="$(curl -sS -D - -o /dev/null --connect-timeout 10 --max-time 60 "$base/health" || true)"
             code="$(printf '%s' "$hdrs" | head -n1 | tr -d '\r' | awk '{print $2}')"
             build="$(printf '%s' "$hdrs" | tr -d '\r' | awk -F': ' 'tolower($1)=="x-build"{print $2}')"
@@ -179,7 +195,9 @@ jobs:
     # the guarded change set through role cfn-deploy-micro-git-prod, builds and pushes the image of
     # this exact commit, rolls it out through SSM with APP_COMMIT (and APP_ENV=prod), then checks
     # X-Build == this sha, / 200, /api/repos 200 and /api/auth/me 401 on prod. Region and stack are
-    # fixed in the script. It stops at the first failing step; automatic container rollback is #182.
+    # fixed in the script. It stops at the first failing step. If the new mg-app fails /health within
+    # 60 s, remote-deploy.sh restarts the previous image on the instance and this job fails (#182).
+    # Checkout: this run's own commit (current scripts and template); the app is built from --ref.
     name: Deploy to AWS (deploy.sh, IAM user keys)
     needs: [resolve, approve]
     runs-on: ubuntu-latest
@@ -192,7 +210,11 @@ jobs:
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          ref: ${{ needs.resolve.outputs.sha }}
+          # The workflow's own commit, so the scripts and the template are current even when an older
+          # sha is promoted (rollback). deploy.sh builds the image from --ref (git archive), which
+          # needs the full history.
+          ref: ${{ github.sha }}
+          fetch-depth: 0
           persist-credentials: false
       # The static key goes only into this step's environment (no third-party action handles it).
       - name: deploy/aws/deploy.sh --apply --ci

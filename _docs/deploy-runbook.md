@@ -130,6 +130,8 @@ OIDC path only. It cannot be completed in account 228619515667: the organization
 ## Owner checklist (#201, GitHub and Render)
 
 1. Settings > Environments > `production`: add yourself as required reviewer (restrict to branch `main`). Without a reviewer the `approve` job passes immediately.
+1a. Settings > Environments > `aws-prod`: add yourself as required reviewer too. It holds the IAM-user key, and any workflow that runs on `main` and names this environment gets the key without an approval otherwise. Deployment branches: `main` only (set by bootstrap).
+1b. Settings > Branches: protect `main` (pull request before merging, required checks CI and E2E, no force pushes). The promote workflow runs from `main`; anyone who can push to `main` can change what runs there.
 2. Render dashboard: if the service is not synced from the Blueprint, add `APP_ENV=dev` to its environment variables (the Blueprint sets it).
 3. Optional: Settings > Secrets and variables > Actions > Variables: `PROD_URL` = the stack output `AppUrl` (without a trailing path), so `verify` checks `X-Build` on prod.
-4. Environment `aws-prod` keeps the IAM-user key; nothing to change. The variables `AWS_DEPLOY_MODE`, `AWS_ROLE_ARN`, `AWS_REGION`, `AWS_STACK_NAME`, `AWS_CFN_ROLE_ARN` and the secret `AWS_JWT_SECRET` may be deleted; no workflow reads them.
+4. Environment `aws-prod` keeps the IAM-user key (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`); nothing to change there. The repository variables `AWS_DEPLOY_MODE`, `AWS_REGION`, `AWS_STACK_NAME` and `AWS_CFN_ROLE_ARN` are unused (`deploy.sh` fixes region and stack; `bootstrap.sh` may still set them) and may be deleted, and so may `AWS_ROLE_ARN` and the secret `AWS_JWT_SECRET` (the OIDC path is not used). The workflow needs `AWS_ACCOUNT_ID` (variable, read as `MG_AWS_ACCOUNT`).

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-time AWS bootstrap for the AWS deploy (deploy/aws/deploy.sh and the GitHub job deploy-aws).
+# One-time AWS bootstrap for the AWS deploy (deploy/aws/deploy.sh; the GitHub workflow promote.yml runs deploy.sh --ci).
 # Creates, in order, idempotently: GitHub OIDC provider, policy mg-instance-boundary,
 # role cfn-deploy-<stack> (+ inline policy), role github-deploy-<stack> (+ inline policy).
 #   --no-oidc  skips the OIDC provider and the github-deploy role (accounts where an SCP
@@ -379,7 +379,7 @@ if [ -n "$CI_USER" ]; then
         var_fail=1
       fi
     done
-    [ "$var_fail" = 0 ] || { echo "error: GitHub variables incomplete; the deploy-aws-keys job needs them" >&2; exit 1; }
+    [ "$var_fail" = 0 ] || { echo "error: GitHub variables incomplete" >&2; exit 1; }
     # Only switch CI on when the key really is in the environment, and no repo-level secret of the
     # same name exists (Actions would fall back to it, outside the main-only environment).
     env_secs="$(gh_t secret list --repo "$REPO" --env "$GH_ENV" 2>/dev/null | cut -f1)"
@@ -392,9 +392,10 @@ if [ -n "$CI_USER" ]; then
       fi
     done
     [ "$mode_ok" = 1 ] || { echo "error: not switching the CI job on (AWS_DEPLOY_MODE unchanged)" >&2; exit 1; }
-    # Set last: this is what switches the deploy-aws-keys job on.
+    # Set last. No workflow reads AWS_DEPLOY_MODE since #201 (job deploy of promote.yml uses the
+    # environment secrets directly); it is still set so that existing setups stay consistent.
     if gh_t variable set AWS_DEPLOY_MODE --repo "$REPO" --body keys >/dev/null 2>&1; then
-      echo "  GitHub variable AWS_DEPLOY_MODE=keys set (deploy-aws-keys job enabled)"
+      echo "  GitHub variable AWS_DEPLOY_MODE=keys set (no workflow reads it since #201)"
     else
       echo "error: could not set AWS_DEPLOY_MODE (retry: gh variable set AWS_DEPLOY_MODE --repo $REPO --body keys)" >&2; exit 1
     fi

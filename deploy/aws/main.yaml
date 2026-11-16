@@ -6,16 +6,17 @@ Description: >
   no Elastic IP. Uses the account's DEFAULT VPC (no VPC parameters needed).
   Deploy flow and cookie note: see the comments below.
 
-# Deploy flow (automated by .github/workflows/deploy.yml, job deploy-aws)
-# 1. The workflow stores the JWT secret in SSM Parameter Store as the SecureString
+# Deploy flow (deploy/aws/deploy.sh, run locally or by job deploy of .github/workflows/promote.yml)
+# 1. deploy.sh stores the JWT secret in SSM Parameter Store as the SecureString
 #    /<stack-name>/jwt-secret (outside this stack: CloudFormation cannot create
-#    SecureStrings), then creates/updates this stack.
+#    SecureStrings), then creates/updates this stack through a change set.
 # 2. First boot (user data, runs once; later UserData changes only stop/start the instance) installs Docker, generates the database password, and
 #    starts Postgres and Caddy. It does NOT start the app and holds no app secret.
-# 3. The workflow builds and pushes the root Dockerfile to the ECR repository, then runs
-#    deploy/aws/remote-deploy.sh on the instance through SSM Run Command. That script
-#    reads the JWT secret from SSM with the instance role, applies
-#    backend/db/schema.sql (idempotent), and (re)creates the mg-app container.
+# 3. deploy.sh builds and pushes the root Dockerfile (git archive of the commit) to the ECR
+#    repository, then runs deploy/aws/remote-deploy.sh on the instance through SSM Run Command.
+#    That script reads the JWT secret from SSM with the instance role, applies
+#    backend/db/schema.sql (idempotent), and (re)creates the mg-app container; if /health does
+#    not pass within 60 s it restarts the previous image (#182).
 # 4. Open AppUrl. For HTTPS set DomainName to a name whose A record points at the
 #    instance IP. A stop/start changes the public IP (no Elastic IP is used).
 #

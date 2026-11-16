@@ -39,16 +39,16 @@ User decision (2026-11-13): GitHub deploys with one dedicated IAM user, because 
 - Teardown: `destroy.sh --apply` deletes the user, its keys, the variable `AWS_DEPLOY_MODE` and the two environment secrets.
 - Accepted risk: anyone holding this key (or able to change the workflow on `main`) can deploy any image and run any command as root on the `micro-git-prod` instance through `ssm:SendCommand` (scoped to instances tagged with this stack). That is what a deploy credential does; it cannot reach other stacks, IAM, or other regions. Rotate it with `--rotate-ci-key` and delete it with `destroy.sh` when not needed.
 
-## OIDC path (former job `deploy-aws`, removed from CI in #201; not usable in account 228619515667)
+## OIDC path (former OIDC job, removed from CI in #201; not usable in account 228619515667)
 
-Formerly used by `.github/workflows/deploy.yml`, job `deploy-aws`, which ran when the repository variable `AWS_ROLE_ARN` was set. The job was removed in #201 (ADR 0005, option B); `bootstrap.sh` still creates the OIDC provider and role. The text below describes what the job did.
+Formerly used by a job of `.github/workflows/deploy.yml` (removed in #201), which ran when the repository variable `AWS_ROLE_ARN` was set. The job was removed in #201 (ADR 0005, option B); `bootstrap.sh` still creates the OIDC provider and role. The text below describes what the job did.
 
 ## Status: what is verified and what is not
 
 - Static: `cfn-lint` on `deploy/aws/main.yaml`, `actionlint` on `.github/workflows/deploy.yml` and `shellcheck` on all `deploy/aws/*.sh` are clean.
-- Real account (2026-11-13, account 228619515667): `deploy.sh --apply` (no-OIDC path) was run end to end; see `_docs/deploy-runbook.md` for the result. The OIDC path (the former `deploy-aws` job) is still unverified and cannot run in this account (SCP).
+- Real account (2026-11-13, account 228619515667): `deploy.sh --apply` (no-OIDC path) was run end to end; see `_docs/deploy-runbook.md` for the result. The OIDC path (the former OIDC job) is still unverified and cannot run in this account (SCP).
 
-## How the deploy works (former job `deploy-aws`)
+## How the deploy worked (former OIDC job)
 
 1. Fails early if secret `AWS_JWT_SECRET` is missing or shorter than 32 characters (the value is never printed).
 2. Assumes the role in `AWS_ROLE_ARN` through GitHub OIDC (no stored AWS keys). Fails early if `AWS_CFN_ROLE_ARN` is not set.
@@ -173,7 +173,7 @@ Not used on purpose: App Runner (not free), RDS (`db.t3.micro` is free only for 
 - **Secrets**: the JWT secret is in SSM Parameter Store (SecureString, default `aws/ssm` key) and in `/opt/mg/app.env` (mode 600) on the instance; it is not in user data. The generated DB password is in `/opt/mg/*.env` and is generated in user data on the instance, never in the template. Anyone with `ssm:GetParameter` (with decryption) on `/<stack>/jwt-secret` or shell access to the instance can read the JWT secret.
 - **Rotating the JWT secret**: update the GitHub secret and re-run the deploy; all sessions are invalidated.
 - **Existing hand-made stacks must be recreated under a NEW stack name.** First-boot user data runs once, so editing `UserData` on an existing stack only stops and starts the instance and does not re-run it; an old instance would lack the new layout, and the removed `JwtSecret`/`ImageTag` parameters change the stack. Deploy to a new name (set `AWS_STACK_NAME`), migrate data if needed, then delete the old stack.
-- **JWT secret.** `main.yaml` has no JWT parameter and no user-data secret. For stack `micro-git-prod`, a manual `deploy.sh` run generates a fresh random secret (`openssl rand -hex 32`, piped straight into SSM, never printed) if none exists, so the value that was exposed in the hand-made `mg` stack's user data is not used by it. The OIDC job `deploy-aws` instead overwrites `/<stack>/jwt-secret` from the GitHub secret `AWS_JWT_SECRET` on every deploy: generate that with `openssl rand -hex 32` and never reuse the `mg` value. Never copy a secret from another stack into SSM. Rotating the live secret is an operator action and logs every user out: `deploy.sh --apply --rotate-jwt` (and, if `deploy-aws` is ever enabled, also update `AWS_JWT_SECRET`, or its next deploy reverts it). Rotate the `mg` stack's secret or delete that stack if it is still running.
+- **JWT secret.** `main.yaml` has no JWT parameter and no user-data secret. For stack `micro-git-prod`, a manual `deploy.sh` run generates a fresh random secret (`openssl rand -hex 32`, piped straight into SSM, never printed) if none exists, so the value that was exposed in the hand-made `mg` stack's user data is not used by it. The former OIDC job instead overwrote `/<stack>/jwt-secret` from the GitHub secret `AWS_JWT_SECRET` on every deploy: generate that with `openssl rand -hex 32` and never reuse the `mg` value. Never copy a secret from another stack into SSM. Rotating the live secret is an operator action and logs every user out: `deploy.sh --apply --rotate-jwt` (and, if an OIDC job is ever added back, also update `AWS_JWT_SECRET`, or its next deploy reverts it). Rotate the `mg` stack's secret or delete that stack if it is still running.
 - **AMI upgrades are a deliberate manual action.** CI never changes the AMI of a running stack, and the change-set guard fails the job if `AppInstance` would be replaced or removed. To move to a newer AMI: back up Postgres, then deploy manually with a new `LatestAmiId` knowing the instance is replaced and the data is lost unless restored.
 - **The image serves the SPA and the API** (root `Dockerfile`). Caddy forwards everything to `mg-app:8080`.
 - **Swap**: `t3.micro` has 1 GB RAM; user data adds a 1 GB swap file.
@@ -182,7 +182,7 @@ Not used on purpose: App Runner (not free), RDS (`db.t3.micro` is free only for 
 ## What was actually deployed
 
 - Stack `mg` in `ap-southeast-2`, created by hand with `aws cloudformation deploy` (not by CI). Public address: http://ec2-13-211-236-62.ap-southeast-2.compute.amazonaws.com
-- The former `deploy-aws` job in `.github/workflows/deploy.yml` (removed in #201) ran only when the variable `AWS_ROLE_ARN` exists, and it did not when this was written. It defaults `AWS_REGION` to `us-east-1`, not `ap-southeast-2`, unless the variable is set.
+- The former OIDC job in `.github/workflows/deploy.yml` (removed in #201) ran only when the variable `AWS_ROLE_ARN` exists, and it did not when this was written. It defaults `AWS_REGION` to `us-east-1`, not `ap-southeast-2`, unless the variable is set.
 
 ## Delete the stack / avoid charges
 

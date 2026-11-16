@@ -35,6 +35,13 @@ Render does not deploy on its own: `deploy/render.yaml` sets `autoDeploy: false`
 | Git revert | `git revert <sha>` (or the merge: `git revert -m 1 <merge-sha>`) on a branch, merged through the normal flow; CI, E2E and Deploy then ship it |
 | Database | No down-migrations. `schema.sql` is additive and idempotent and is not rolled back: an older app ignores the newer tables and columns. AWS Postgres: nightly `pg_dump` on the data disk (7 days), snapshot of the data disk on stack delete; data is not rolled back with the app (#182, [runbook](../_docs/deploy-runbook.md#data-volume-backups-and-rollback-182)) |
 
+## Promotion: concurrency, rollback and schema (#204)
+
+- **Concurrency.** `Promote to production` uses the concurrency group `promote-production` without cancel-in-progress. A run that waits for the approval of environment `production` holds the group, so other promotions wait behind it. A third dispatch while one run is running and one is queued cancels the queued run (GitHub keeps one pending run per group). Dispatch again if your run was cancelled.
+- **Rollback to an older sha.** Dispatch the workflow with that sha (it must be on `main` with green CI and E2E). The `deploy` job runs the workflow's own commit, so the current `deploy/aws/` scripts and `main.yaml` are used; `deploy.sh --ref <sha>` builds the app image from the older sha with `git archive`. Infrastructure is not rolled back, and neither is the database.
+- **Schema.** `deploy.sh` applies `backend/db/schema.sql` from the promoted sha. The schema is additive and idempotent, so a rollback leaves newer tables and columns in place; the older app ignores them. A schema change that drops or renames something is not allowed in this repository without a plan (see `_docs/deploy-runbook.md`).
+- **Automatic container rollback.** If the new `mg-app` does not pass `/health` within 60 s, `remote-deploy.sh` starts the previous image on the instance again and the job fails (#182).
+
 ## Which commit is live
 
     curl -sI https://micro-git.onrender.com/health | grep -i '^x-build'
