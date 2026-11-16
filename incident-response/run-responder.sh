@@ -127,17 +127,46 @@ case "$PRC" in
 esac
 # Only what policy-check.py built is executed: action_id/params/argv/env from decision.json (never any model text).
 CMD="$(jq -r .command "$INC/decision.json")"; AID="$(jq -r .action_id "$INC/decision.json")"; APARAMS="$(jq -c .params "$INC/decision.json")"
-if [ "${DRY_RUN:-0}" = 1 ] || [ "${AUTO_EXECUTE:-0}" != 1 ]; then
+if [ "${DRY_RUN:-0}" = 1 ] || [ "${AUTO_EXECUTE:-}" != 1 ]; then   # AUTO_EXECUTE must be exactly the string 1 ("true", "01", " 1", empty do not execute)
   audit "$INC" action_skipped "allowed but not executed (DRY_RUN=${DRY_RUN:-0} AUTO_EXECUTE=${AUTO_EXECUTE:-0}): action_id=$AID params=$APARAMS command=$CMD"
   echo "allowed (not executed): $CMD"; exit 0
 fi
-[ -f "$INC/action.lock" ] || { audit "$INC" action_skipped "no action.lock for an allowed decision: refusing to run (fail closed)" error; echo "refused: no action claim"; exit 1; }
-LOCK="$INC/action.lock"   # execute exactly the argv/env that was claimed
-{ [ -f "$LOCK" ] && [ ! -L "$LOCK" ] && [ "$(jq -r .command "$LOCK" 2>/dev/null)" = "$CMD" ]; } || { audit "$INC" action_skipped "action.lock is not the claim the policy just wrote (symlink or different command): refusing to run (fail closed)" error; echo "refused: action.lock mismatch"; exit 1; }
-CMD="$(jq -r .command "$LOCK")"; AID="$(jq -r .action_id "$LOCK")"; APARAMS="$(jq -c .params "$LOCK")"
-ARGV=(); while IFS= read -r l; do ARGV+=("$l"); done < <(jq -r '.argv[]' "$LOCK")
-ENVSET=(); while IFS= read -r l; do ENVSET+=("$l"); done < <(jq -r '.env | to_entries[] | "\(.key)=\(.value)"' "$LOCK")
-[ "${#ARGV[@]}" -gt 0 ] || { audit "$INC" action_skipped "action.lock has no argv: refusing to run (fail closed)" error; echo "refused: empty argv"; exit 1; }
+# Read action.lock ONCE (one python3 call, status checked) and refuse unless it is a regular non-symlink file whose argv AND env
+# equal the structures in decision.json (not the display string). Output: NUL-separated fields, written to a file so the exit
+# status is not lost: AID, PARAMS(json), COMMAND, N, argv x N, env KEY=VALUE x rest. Any failure -> audit line, nothing runs.
+LOCK="$INC/action.lock"; LOCKOUT="$INC/.lock.read"; rm -f "$LOCKOUT"
+LREASON="$(python3 -I - "$LOCK" "$INC/decision.json" 2>&1 > "$LOCKOUT" <<'PY'
+import json, os, re, stat, sys
+lock, dec = sys.argv[1:3]
+def die(m): sys.stderr.write(m); sys.exit(1)
+try:
+    if stat.S_ISLNK(os.lstat(lock).st_mode): die("action.lock is a symlink")
+    fd = os.open(lock, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+except FileNotFoundError: die("no action.lock for an allowed decision")
+except OSError as e: die("action.lock cannot be opened (%s)" % type(e).__name__)
+try:
+    if not stat.S_ISREG(os.fstat(fd).st_mode): die("action.lock is not a regular file")
+    with os.fdopen(fd) as f: lk = json.loads(f.read())
+    with open(dec) as f: dc = json.loads(f.read())
+except (OSError, ValueError) as e: die("action.lock or decision.json unreadable (%s)" % type(e).__name__)
+if not isinstance(lk, dict) or not isinstance(dc, dict): die("action.lock or decision.json is not an object")
+if dc.get("decision") != "allow": die("decision.json is not an allow")
+argv, env = lk.get("argv"), lk.get("env")
+if not (isinstance(argv, list) and argv and all(isinstance(x, str) for x in argv) and argv[0]): die("action.lock argv is empty or not a list of strings")
+if not (isinstance(env, dict) and all(isinstance(k, str) and re.fullmatch(r"[A-Z_][A-Z0-9_]*", k) and isinstance(v, str) for k, v in env.items())): die("action.lock env is not a map of NAME to string")
+if lk.get("argv") != dc.get("argv") or lk.get("env") != dc.get("env") or lk.get("action_id") != dc.get("action_id"): die("action.lock argv/env/action_id differ from decision.json")
+parts = [str(lk.get("action_id")), json.dumps(lk.get("params")), str(lk.get("command")), str(len(argv))] + argv + ["%s=%s" % kv for kv in env.items()]
+if any("\0" in x for x in parts): die("NUL byte in action.lock")
+sys.stdout.write("\0".join(parts) + "\0")
+PY
+)"; LRC=$?
+if [ "$LRC" -ne 0 ]; then
+  rm -f "$LOCKOUT"; audit "$INC" action_skipped "refusing to run (fail closed): ${LREASON:-action.lock could not be read}" error; echo "refused: action.lock check failed"; exit 1
+fi
+LF=(); while IFS= read -r -d '' l; do LF+=("$l"); done < "$LOCKOUT"; rm -f "$LOCKOUT"
+AID="${LF[0]}"; APARAMS="${LF[1]}"; CMD="${LF[2]}"; NARGV="${LF[3]}"
+[[ "$NARGV" =~ ^[0-9]+$ ]] && [ "$NARGV" -gt 0 ] && [ "${#LF[@]}" -ge $((4 + NARGV)) ] || { audit "$INC" action_skipped "action.lock fields could not be parsed: refusing to run (fail closed)" error; echo "refused: empty argv"; exit 1; }
+ARGV=("${LF[@]:4:NARGV}"); ENVSET=(); [ "${#LF[@]}" -gt $((4 + NARGV)) ] && ENVSET=("${LF[@]:$((4 + NARGV))}")
 [ -n "$CSTR" ] || { audit "$INC" action_skipped "COMPOSE_FILES not set: refusing to run (fail closed)"; echo "refused: COMPOSE_FILES not set"; exit 1; }
 audit "$INC" exec "action_id=$AID params=$APARAMS command=$CMD"
 PASS=(); for n in ${ACTION_ENV_PASSTHROUGH:-POSTGRES_USER POSTGRES_PASSWORD POSTGRES_DB JWT_SECRET GRAFANA_ADMIN_PASSWORD APP_PORT APP_VERSION APP_COMMIT COOKIE_SECURE REGISTER_MAX_PER_IP COMPOSE_ENV_FILES}; do

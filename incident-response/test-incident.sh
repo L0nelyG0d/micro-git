@@ -103,6 +103,42 @@ FAKE
   ( PATH="$T/dockbin:$PATH" DRY_RUN=0 AUTO_EXECUTE=1 GLOBAL_COOLDOWN_SECONDS=0 VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 "$D/run-responder.sh" drill-hostile-lock "$ROUTE" >/dev/null 2>&1 )
   check "pre-existing action.lock: nothing executed, escalated" "[ ! -e '$T/PWNED2' ] && [ ! -f '$T/docker.out' ] && [ -f '$INCIDENTS_DIR/drill-hostile-lock/escalation-packet.json' ]"
 
+  echo "== executor refusals (fake python3 tampers action.lock after policy-check; fake docker records calls)"
+  REALPY="$(command -v python3)"; mkdir -p "$T/tamperbin"
+  cat > "$T/tamperbin/python3" <<TAMP
+#!/usr/bin/env bash
+"$REALPY" "\$@"; rc=\$?
+case "\$*" in *policy-check.py*) [ -n "\${TAMPER:-}" ] && eval "\$TAMPER";; esac
+exit \$rc
+TAMP
+  chmod +x "$T/tamperbin/python3"
+  exec_case() { # id AUTO_EXECUTE-value tamper-command   (nothing may run unless tamper is empty and AUTO_EXECUTE is exactly 1)
+    local id="$1" ae="$2" tamper="${3:-}" lock="$INCIDENTS_DIR/$1/action.lock"
+    EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" "$id" "$ROUTE" >/dev/null; rm -f "$T/docker.out" "$T/PWNED3"
+    ( PATH="$T/tamperbin:$T/dockbin:$PATH" TAMPER="$tamper" LOCKP="$lock" PWN="$T/PWNED3" DRY_RUN=0 AUTO_EXECUTE="$ae" GLOBAL_COOLDOWN_SECONDS=0 VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 "$D/run-responder.sh" "$id" "$ROUTE" >/dev/null 2>&1 )
+  }
+  refused() { # label id reason-substring
+    check "$1: nothing executed (fake docker and PWNED3 absent)" "[ ! -f '$T/docker.out' ] && [ ! -e '$T/PWNED3' ]"
+    check "$1: refusal audited ($3)" "grep action_skipped '$INCIDENTS_DIR/$2/audit.jsonl' | grep -q '$3'"
+    check "$1: no action_result audited" "! grep -q action_result '$INCIDENTS_DIR/$2/audit.jsonl'"
+  }
+  exec_case xr-symlink 1 'mv "$LOCKP" "$LOCKP.real" && ln -s "$LOCKP.real" "$LOCKP"'; refused "lock is a symlink" xr-symlink "action.lock is a symlink"
+  exec_case xr-argv 1 'jq ".argv=[\"touch\",\"$PWN\"]" "$LOCKP" > "$LOCKP.n" && mv "$LOCKP.n" "$LOCKP"'; refused "lock argv differs from decision.json" xr-argv "differ from decision.json"
+  exec_case xr-env 1 'jq ".env.FAULT_ENDPOINT_500=\"1\"" "$LOCKP" > "$LOCKP.n" && mv "$LOCKP.n" "$LOCKP"'; refused "lock env differs only" xr-env "differ from decision.json"
+  exec_case xr-env-extra 1 'jq ".env.EXTRA=\"1\"" "$LOCKP" > "$LOCKP.n" && mv "$LOCKP.n" "$LOCKP"'; refused "lock has an extra env entry" xr-env-extra "differ from decision.json"
+  exec_case xr-deleted 1 'rm -f "$LOCKP"'; refused "lock deleted after policy" xr-deleted "no action.lock"
+  exec_case xr-emptyargv 1 'jq ".argv=[]" "$LOCKP" > "$LOCKP.n" && mv "$LOCKP.n" "$LOCKP"'; refused "lock with empty argv" xr-emptyargv "argv is empty"
+  exec_case xr-garbled 1 'echo "{not json" > "$LOCKP"'; refused "lock is not JSON" xr-garbled "unreadable"
+  exec_case xr-fifo 1 'rm -f "$LOCKP" && mkfifo "$LOCKP"'; refused "lock is a fifo" xr-fifo "not a regular file"
+  for AE in true 01 " 1" ""; do
+    n="xr-ae-$(printf '%s' "$AE" | cksum | cut -d' ' -f1)"; exec_case "$n" "$AE"
+    check "AUTO_EXECUTE='$AE': nothing executes, no lock claimed" "[ ! -f '$T/docker.out' ] && [ ! -e '$INCIDENTS_DIR/$n/action.lock' ] && grep -q 'allowed but not executed' '$INCIDENTS_DIR/$n/audit.jsonl'"
+  done
+  exec_case xr-control 1
+  check "control: executes exactly the template argv" "[ \"\$(grep '^ARG=' '$T/docker.out' | tr '\n' ' ')\" = 'ARG=compose ARG=-f ARG=docker-compose.yml ARG=-f ARG=observability/compose.yaml ARG=-f ARG=observability/app-telemetry.yaml ARG=up ARG=-d ARG=--no-deps ARG=app ' ]"
+  check "control: template env applied (FAULT_ENDPOINT_500 set to empty, not unset)" "grep -qx 'FLAG=\[\]' '$T/docker.out'"
+  check "control: action_result audited" "grep -q action_result '$INCIDENTS_DIR/xr-control/audit.jsonl'"
+
   echo "== model path isolation (fake claude on PATH)"
   mkdir -p "$T/fakebin"; cat > "$T/fakebin/claude" <<FAKE
 #!/usr/bin/env bash
