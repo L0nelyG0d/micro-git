@@ -1,6 +1,6 @@
 # ADR 0007: CI uses the repository scripts
 
-Status: Accepted (2026-11-14): option C. Not applied yet (issue #198)
+Status: Accepted (2026-11-14): option C. Applied in branch `issue-198-ci-repo-scripts` except the `backend-store` switch (issue #198)
 
 Issue: #198
 
@@ -24,7 +24,9 @@ C in one DevOps change, tried on a branch run first.
 
 ## Decision
 
-Option C, applied in branch `issue-198-ci-repo-scripts` (in progress).
+Option C, applied in branch `issue-198-ci-repo-scripts`: `scripts/test-pgurl.sh` step in `backend`, no-stack `ops-tests` job, unused `e2e.yml` steps (Postgres service, `DATABASE_URL`, Apply schema, `docker build -t mg:ci`, `MG_IMAGE`) removed.
+
+Not applied: `backend-store` still calls `go test` directly. `scripts/test-matrix.sh sqlite memory` runs offline in about 2 minutes but fails today because `backend/known_skips.txt` lacks 8 Postgres-only skips (`TestApplySchema*`, `TestMigrate*`) for sqlite and memory. An engineer runs `scripts/test-matrix.sh --update-skips`, reviews the diff, and the job then calls the script. `ops-tests` also omits `incident-response/test-incident.sh --dry-run`: on Linux `stat -f %Lp` succeeds with filesystem info, so the three mode checks (`make-token` 600 twice, incident dir 700) fail; swapping to `stat -c %a ... || stat -f %Lp` fixes it. The Postgres job keeps its own steps. The secret-scan drift is not addressed.
 
 ## Consequences
 

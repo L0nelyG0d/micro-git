@@ -31,7 +31,7 @@ Postgres-only tests (pgx store, statement counts, pool settings, migration check
 - The script always creates its own database `mg_matrix_<pid>` on that server, applies `backend/db/schema.sql` to it and drops it at the end (also on TERM or Ctrl-C), so parallel runs and the shared `mg` database are untouched.
 - Skip accounting: every skipped test must be listed for its store in `backend/known_skips.txt` (`<store> <test name>`); an unlisted skip fails the matrix. After adding a skip on purpose run `scripts/test-matrix.sh --update-skips` and review the diff. The script sets `TEST_MATRIX_STRICT=1`, which makes `testServer` fail instead of skip if `TEST_STORE=postgres` runs without `TEST_DATABASE_URL`. Which skips are expected per store: [`_docs/testing-guidelines.md`](../_docs/testing-guidelines.md).
 
-CI does not run `scripts/test-matrix.sh`, so the skip accounting is checked only locally (tracked in #198).
+CI does not run `scripts/test-matrix.sh` yet, so the skip accounting is checked only locally: `backend/known_skips.txt` lacks 8 Postgres-only skips for sqlite and memory, so the script would fail today. Update the list with `--update-skips`, then switch `backend-store` to the script (ADR 0007, #198).
 
 ## Local Postgres on :54329
 
@@ -63,12 +63,13 @@ Run the Playwright suite by hand: start the stack (for example `docker compose u
 
 | Workflow / job | Trigger | What it checks |
 | --- | --- | --- |
-| CI / `backend` | push to `main`, PRs, manual | gofmt, vet, `go mod tidy -diff`, govulncheck (advisory, `continue-on-error`), schema applied to a `postgres:16` service, `go test -p 1 -race` |
+| CI / `backend` | push to `main`, PRs, manual | gofmt, vet, `go mod tidy -diff`, govulncheck (advisory, `continue-on-error`), `scripts/test-pgurl.sh`, schema applied to a `postgres:16` service, `go test -p 1 -race` |
 | CI / `backend-store` | same | Same suite with `TEST_STORE=sqlite` and `memory`, no database; calls `go test` directly |
+| CI / `ops-tests` | same | No stack: `incident-response/test-policy.sh`, `test-redact.sh` (fixtures and stubs; `test-incident.sh --dry-run` is not run yet: its `stat -f %Lp || stat -c %a` order fails on Linux) and `security-audit/validate-findings.py` on the tracked run files |
 | CI / `frontend` | same | `npm ci`, `npm test -- --run`, `npm run build` (Node 22) |
 | CI / `openapi` | same | `npx @redocly/cli lint _docs/openapi.yaml` |
 | CI / `secret-scan` | same | `git grep` over tracked files for credentialed `postgres://` URLs and `npg_...` tokens; prints file:line only. Excludes `.github/workflows/ci.yml` and lines with `USER:PASSWORD@HOST`, `${` or `%s@` |
-| E2E / `e2e` | same | Builds the Dockerfile image, `docker compose up -d --wait` (compose builds the app and starts its own Postgres, with `REGISTER_MAX_PER_IP=1000`), runs Playwright; uploads `playwright-report` (14 days) |
+| E2E / `e2e` | same | `docker compose up -d --wait` (compose builds the app and starts its own Postgres, with `REGISTER_MAX_PER_IP=1000`), runs Playwright; uploads `playwright-report` (14 days) |
 | E2E / `integration-sqlite` | same | `make setup`, `make smoke-sqlite` |
 
 CI needs no repository secrets; the JWT secret is generated per run and masked. Deploy ([deployment.md](deployment.md)) starts only after CI and E2E both succeed on `main`.
