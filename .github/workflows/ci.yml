@@ -69,6 +69,8 @@ jobs:
         # Advisory until go.mod moves to a patched Go release (see _docs/questions.md).
         continue-on-error: true
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
+      - name: scripts/test-pgurl.sh (URL helper, no database)
+        run: scripts/test-pgurl.sh
       - name: Apply schema
         run: psql -v ON_ERROR_STOP=1 -q "$TEST_DATABASE_URL" -f backend/db/schema.sql
       - name: Backend tests
@@ -81,8 +83,9 @@ jobs:
 
   # The same suite on the two stores that need no service container. Runs in
   # parallel with `backend` (Postgres). A failing store fails the workflow.
-  # Calls go test directly; switching it to `scripts/test-matrix.sh ${{ matrix.store }}`
-  # (to share its skip accounting) is tracked in #198.
+  # Calls go test directly: `scripts/test-matrix.sh ${{ matrix.store }}` would fail
+  # today because backend/known_skips.txt lacks 8 Postgres-only skips for sqlite and
+  # memory (see _docs/decisions/0007-ci-uses-repo-scripts.md). Switch once it is updated.
   backend-store:
     name: Backend tests (${{ matrix.store }})
     runs-on: ubuntu-latest
@@ -107,6 +110,25 @@ jobs:
           echo "::add-mask::$JWT_SECRET"
           export JWT_SECRET
           go test -p 1 -race -timeout 12m ./...
+
+  # Offline checks of the incident-response and security-audit tooling: fixtures
+  # and stubs only, no stack, no model, no network, no secrets.
+  ops-tests:
+    name: Ops tests (incident-response, security-audit)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: incident-response/test-policy.sh
+        run: bash incident-response/test-policy.sh
+      - name: incident-response/test-redact.sh
+        run: bash incident-response/test-redact.sh
+      - name: incident-response/test-incident.sh --dry-run
+        run: bash incident-response/test-incident.sh --dry-run
+      - name: security-audit/validate-findings.py (tracked run files)
+        run: python3 security-audit/validate-findings.py
 
   frontend:
     name: Frontend (tests, build)

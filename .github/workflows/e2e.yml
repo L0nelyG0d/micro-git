@@ -1,7 +1,7 @@
 # E2E: the built image on Postgres 16 (Playwright suite in e2e/), plus the
 # SQLite integration smoke (make smoke-sqlite). Mechanical gate for deploy.yml:
 # deploy runs only when this workflow and CI both succeed for the same commit.
-# No repository secrets are needed; the database is a throwaway service container.
+# No repository secrets are needed; the database is the compose `db` service (throwaway).
 name: E2E
 
 on:
@@ -22,24 +22,9 @@ jobs:
     name: E2E (Playwright, Docker image on Postgres 16)
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: ci
-          POSTGRES_PASSWORD: ci
-          POSTGRES_DB: mg
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U ci -d mg"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 12
     env:
       E2E_BASE_URL: http://localhost:8080
       COOKIE_SECURE: "false"
-      MG_IMAGE: mg:ci
     steps:
       - uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
 
@@ -50,22 +35,13 @@ jobs:
             exit 1
           fi
 
-      - name: Build the Docker image (Dockerfile)
-        run: docker build -t mg:ci -f Dockerfile .
-
-      - name: Generate JWT secret and build the database URL
-        env:
-          PG_CREDS: ci:ci
+      - name: Generate JWT secret
+        # docker compose (next step) builds its own image and starts its own
+        # Postgres (db service); only JWT_SECRET is read from the job environment.
         run: |
           JWT_SECRET="$(openssl rand -base64 48)"
           echo "::add-mask::$JWT_SECRET"
           echo "JWT_SECRET=$JWT_SECRET" >> "$GITHUB_ENV"
-          # Assembled from parts so the secret scan (ci.yml) does not see a
-          # literal credentialed URL in this file. Throwaway service container.
-          echo "DATABASE_URL=postgres://${PG_CREDS}@localhost:5432/mg?sslmode=disable" >> "$GITHUB_ENV"
-
-      - name: Apply schema
-        run: psql -v ON_ERROR_STOP=1 -q "$DATABASE_URL" -f backend/db/schema.sql
 
       - name: Start the stack (docker compose up --wait)
         # docker-compose.yml starts its own Postgres (db service) and reads
