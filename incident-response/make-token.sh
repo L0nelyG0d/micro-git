@@ -10,6 +10,8 @@ if [ -e "$F" ]; then echo "exists: $F (delete it to rotate; mode/ownership re-ch
   ( umask 077; openssl rand -hex 32 > "$F" )
   echo "created $F"
 fi
+# Re-run: refuse a symlink before any chmod/chown (chmod would follow it and change the mode of its target).
+if [ -L "$F" ]; then echo "refused: $F is a symlink; replace it with a regular file (delete it to rotate)" >&2; exit 1; fi
 chmod 600 "$F"
 # Linux bind mounts keep host ownership: the Alertmanager container runs as uid 65534 (nobody) and cannot read a 600 file
 # owned by someone else. Root can hand it over; a normal user is told how (Docker Desktop on macOS needs nothing).

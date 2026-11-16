@@ -20,9 +20,15 @@ log() { echo "verify: $*"; [ -n "$INC" ] && audit "$INC" verify "$*"; return 0; 
 if [ "${DRY_RUN:-0}" = 1 ]; then log "DRY_RUN simulated recovery for $ROUTE"; exit 0; fi
 
 if [ -n "${PROBE_URL:-}" ]; then   # audit what is probed (scheme://host/path only: query strings and user:pass@ may carry secrets)
-  # strip user:pass@ first (an unencoded ?/# inside a password must not leave a prefix), then the query/fragment
-  PU="$(printf '%s' "$PROBE_URL" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)[^/]*@#\1#')"; PU="${PU%%[?#]*}"
-  log "probe enabled: ${PROBE_COUNT:-5} GET per poll to $PU$([ -n "${PROBE_COOKIE_JAR:-}" ] && echo " with a cookie jar")"
+  # Redact first: drop everything from "://" up to the LAST "@" (a password may contain "/", "?", "#" or "@"), then the
+  # query/fragment. The URL as given is never logged. Over-redaction is acceptable here; a leak is not.
+  PU="$(printf '%s' "$PROBE_URL" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)(.*@)?#\1#')"; PU="${PU%%[?#]*}"
+  if printf '%s' "$PU" | grep -Eq '^https?://[^/[:space:]]+(/[^[:space:]]*)?$'; then
+    log "probe enabled: ${PROBE_COUNT:-5} GET per poll to $PU$([ -n "${PROBE_COOKIE_JAR:-}" ] && echo " with a cookie jar")"
+  else   # rejected: no probing; the ratio then relies on organic traffic (see header)
+    log "probe URL rejected (must be http(s)://host[/path]; shown without userinfo or query): $PU"
+    PROBE_URL=""
+  fi
 fi
 Q="(sum(rate(${M_REQ}{route=\"$ROUTE\",status=~\"5..\"}[1m])) or vector(0)) / sum(rate(${M_REQ}{route=\"$ROUTE\"}[1m]))"
 WARM="${WARMUP_SECONDS:-75}"; START_TS=$(date +%s)

@@ -198,17 +198,27 @@ print(listener.run('$T/tmo', ['$T/slow.sh', '$T/tmo'], timeout=2))")
   mkdir -p "$T/vinc"; ( DRY_RUN=0 INCIDENTS_DIR="$T/vinc" PROBE_URL='http://127.0.0.1:1/x?token=SECRETQ' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc >/dev/null 2>&1 )
   check "probe enabled is audited" "grep -q 'probe enabled' '$T/vinc/vinc/audit.jsonl'"
   check "probe audit drops the query string" "! grep -q SECRETQ '$T/vinc/vinc/audit.jsonl'"
-  "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -f %Lp "$T/tok-new" 2>/dev/null || stat -c %a "$T/tok-new")"
+  "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -c %a "$T/tok-new" 2>/dev/null || stat -f %Lp "$T/tok-new")"
   check "make-token creates mode 600" "[ '$TM' = 600 ]"
   PU_OUT="$T/vinc2"; mkdir -p "$PU_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$PU_OUT" PROBE_URL='http://bob:SEC?RETPW@127.0.0.1:1/x?token=Q#f' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc2 >/dev/null 2>&1 )
   check "probe audit drops user:pass@" "grep -q 'http://127.0.0.1:1/x' '$PU_OUT/vinc2/audit.jsonl' && ! grep -q 'SEC\|RETPW\|bob' '$PU_OUT/vinc2/audit.jsonl'"
+  PS_OUT="$T/vinc3"; mkdir -p "$PS_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$PS_OUT" PROBE_URL='http://bob:se/cr@et@127.0.0.1:1/x' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc3 >/dev/null 2>&1 )
+  check "probe with a slash in the password: userinfo not logged" "grep -q 'http://127.0.0.1:1/x' '$PS_OUT/vinc3/audit.jsonl' && ! grep -q 'bob\|se/cr\|cr@et' '$PS_OUT/vinc3/audit.jsonl'"
+  RJ_OUT="$T/vinc4"; mkdir -p "$RJ_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$RJ_OUT" PROBE_URL='ftp://bob:RJPW@host/x?k=Q' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc4 >/dev/null 2>&1 )
+  check "invalid probe URL is rejected, logged without userinfo, no probe" "grep -q 'probe URL rejected' '$RJ_OUT/vinc4/audit.jsonl' && ! grep -q 'bob\|RJPW\|SECRET\|k=Q' '$RJ_OUT/vinc4/audit.jsonl' && ! grep -q 'probe enabled' '$RJ_OUT/vinc4/audit.jsonl'"
   # make-token re-run repairs mode and (Linux root path, stubbed uname/id/chown) ownership
-  chmod 644 "$T/tok-new"; "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -f %Lp "$T/tok-new" 2>/dev/null || stat -c %a "$T/tok-new")"
+  chmod 644 "$T/tok-new"; "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -c %a "$T/tok-new" 2>/dev/null || stat -f %Lp "$T/tok-new")"
   check "make-token re-run repairs mode to 600" "[ '$TM' = 600 ]"
   mkdir -p "$T/lnx"; printf '#!/bin/sh\necho Linux\n' > "$T/lnx/uname"; printf '#!/bin/sh\necho 0\n' > "$T/lnx/id"; printf '#!/bin/sh\necho "$@" > "%s/chown.args"\n' "$T" > "$T/lnx/chown"; chmod +x "$T/lnx/"*
   H1="$(cat "$T/tok-new")"; PATH="$T/lnx:$PATH" "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1
   check "make-token re-run on Linux root chowns to 65534" "grep -q '65534:65534' '$T/chown.args'"
   check "make-token re-run keeps the token content" "[ \"\$(cat '$T/tok-new')\" = '$H1' ]"
+  # re-run on a symlink: refused, and the target keeps its mode (chmod must not follow the link)
+  echo target > "$T/sym-target"; chmod 644 "$T/sym-target"; ln -sf "$T/sym-target" "$T/sym-tok"
+  "$D/make-token.sh" "$T/sym-tok" >/dev/null 2>&1; SRC=$?
+  TM="$(stat -c %a "$T/sym-target" 2>/dev/null || stat -f %Lp "$T/sym-target")"
+  check "make-token re-run refuses a symlink (exit non-zero)" "[ $SRC -ne 0 ]"
+  check "make-token symlink refusal leaves the target mode alone" "[ '$TM' = 644 ]"
   echo "== listener: unreadable token is a config error"
   if [ "$(id -u)" != 0 ]; then
     mkdir -p "$T/utok"; echo dummy-not-a-secret > "$T/utok/tok"; chmod 000 "$T/utok/tok"
@@ -264,7 +274,7 @@ listener.gaudit('auth_rejected', 'x', 'reject'); listener.gaudit('auth_rejected'
   code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{"alerts":[{"status":"firing","fingerprint":"badlabels1","startsAt":"2026-11-12T10:00:00Z","labels":"x"},{"status":"firing","fingerprint":"allroute1","startsAt":"2026-11-12T10:00:01Z","labels":{"alertname":"A","route":"all"}}]}' "$U"); check "non-dict labels / route=all accepted without crash" "[ '$code' = 202 ]"
   code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' -d '{"alerts":[{"status":"firing","fingerprint":7,"startsAt":null,"labels":{"route":"/x"}}]}' "$U"); check "non-string fingerprint/startsAt accepted but rejected+audited" "[ '$code' = 202 ]"
   sleep 4; check "non-string fingerprint audited" "grep -q 'fingerprint/startsAt missing' '$T'/incidents2/listener-audit.jsonl"
-  FI="$(ls -d "$T"/incidents2/inc-* | head -1)"; MODE="$(stat -f %Lp "$FI" 2>/dev/null || stat -c %a "$FI")"
+  FI="$(ls -d "$T"/incidents2/inc-* | head -1)"; MODE="$(stat -c %a "$FI" 2>/dev/null || stat -f %Lp "$FI")"
   check "incident ids have random suffix" "[[ '$(basename "$FI")' =~ ^inc-[0-9]{8}T[0-9]{6}-[A-Za-z0-9]+-[0-9a-f]{6}$ ]]"
   check "incident dir mode 700" "[ '$MODE' = 700 ]"
   check "non-dict labels audited"  "grep -q 'labels is not an object' '$T'/incidents2/listener-audit.jsonl"

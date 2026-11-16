@@ -36,21 +36,24 @@ run_limited() {
     python3 -I -c '
 import os, signal, subprocess, sys
 t = float(sys.argv[1])
-p = subprocess.Popen(sys.argv[2:], start_new_session=True)
+st = {"p": None, "sig": None}
 def fwd(signum, _frame):
-    # the child lives in its own session: forward the signal to its group, then exit 128+N like a shell would
-    try: os.killpg(p.pid, signal.SIGTERM)
-    except ProcessLookupError: pass
-    try: p.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        try: os.killpg(p.pid, signal.SIGKILL)
+    # Installed BEFORE Popen, so no signal can kill the wrapper while the child is unaccounted for. The handler only
+    # records the signal and forwards it to the child group if the child exists; it never waits (the main wait returns
+    # when the child exits, then we exit 128+N like a shell would).
+    st["sig"] = signum
+    if st["p"] is not None:
+        try: os.killpg(st["p"].pid, signum)
         except ProcessLookupError: pass
-    sys.exit(128 + signum)
 for s in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
     signal.signal(s, fwd)
+p = subprocess.Popen(sys.argv[2:], start_new_session=True)   # own session: the child is reachable by group
+st["p"] = p
+if st["sig"] is not None:   # a signal arrived before st["p"] was set: pass it on now
+    try: os.killpg(p.pid, st["sig"])
+    except ProcessLookupError: pass
 try:
     rc = p.wait(timeout=t)
-    sys.exit(128 - rc if rc < 0 else rc)   # killed by signal N: popen reports -N, shells report 128+N
 except subprocess.TimeoutExpired:
     for sig in (signal.SIGTERM, signal.SIGKILL):
         try: os.killpg(p.pid, sig)
@@ -58,6 +61,8 @@ except subprocess.TimeoutExpired:
         try: p.wait(timeout=5); break
         except subprocess.TimeoutExpired: continue
     sys.exit(124)
+if st["sig"] is not None: sys.exit(128 + st["sig"])
+sys.exit(128 - rc if rc < 0 else rc)   # killed by signal N: popen reports -N, shells report 128+N
 ' "$t" "$@"
   fi
 }
