@@ -126,6 +126,10 @@ jobs:
         run: bash incident-response/test-incident.sh --dry-run
       - name: security-audit/validate-findings.py (tracked run files)
         run: python3 security-audit/validate-findings.py
+      - name: deploy/aws/test-template.sh (UserData frozen, change-set guard)
+        run: bash deploy/aws/test-template.sh
+      - name: deploy/aws/test-remote-deploy.sh (data disk, stubbed)
+        run: bash deploy/aws/test-remote-deploy.sh
 
   frontend:
     name: Frontend (tests, build)

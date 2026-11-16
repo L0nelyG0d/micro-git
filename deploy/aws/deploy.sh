@@ -9,8 +9,8 @@
 # Steps (each one idempotent, so re-running is the update path):
 #   1 account guard + Free plan check   2 preflight.sh --no-oidc   3 bootstrap.sh --no-oidc
 #   4 JWT secret in SSM (SecureString, generated once, never printed)
-#   5 stack via change set (refuses to replace/remove AppInstance)   6 image build + push to ECR
-#   7 remote-deploy.sh through SSM Run Command with APP_COMMIT=<sha>
+#   5 stack via change set (refuses to replace/remove AppInstance or the data disk)   6 image build + push to ECR
+#   7 remote-deploy.sh through SSM Run Command with APP_COMMIT=<sha> (and the data volume id, if any)
 #   8 smoke: /health X-Build == sha, / 200, /api/repos 200, /api/auth/me 401
 #
 # Never touches the hand-made stack `mg`. Region and stack name are fixed on purpose.
@@ -22,6 +22,8 @@ readonly STACK=micro-git-prod
 usage() {
   cat <<USAGE
 Usage: $0 [--dry-run | --apply] [--account ID] [--ref GIT-REF] [--profile NAME] [--rotate-jwt] [--ci]
+          [--data-volume on|off]
+       $0 --check-change-set FILE
   --dry-run     read-only checks and the plan (default)
   --apply       create/update everything; needs --account (or MG_AWS_ACCOUNT, or a typed answer on a terminal)
   --account     expected AWS account id; aborts if the session is another account
@@ -30,11 +32,17 @@ Usage: $0 [--dry-run | --apply] [--account ID] [--ref GIT-REF] [--profile NAME] 
   --rotate-jwt  replace the JWT secret in SSM (logs every user out)
   --ci          GitHub Actions mode: skip preflight and bootstrap (the CI user has no IAM rights),
                 Free plan check is informational only
+  --data-volume set the stack parameter EnableDataVolume (on: create and attach the data disk,
+                remote-deploy.sh mounts it at /opt/mg/data). Without the flag the stack keeps its
+                current value (default off for a new stack). off is refused once the disk exists.
+  --check-change-set FILE
+                offline: read the JSON of 'aws cloudformation describe-change-set' from FILE, print
+                why it would replace or remove a protected resource, exit 1 if it would (no AWS call)
 Region $REGION and stack $STACK are fixed.
 USAGE
 }
 
-MODE=dry-run; WANT_ACCOUNT="${MG_AWS_ACCOUNT:-}"; REF=HEAD; PROFILE=""; ROTATE_JWT=""; CI_MODE=""
+MODE=dry-run; CHECK_CS=""; WANT_ACCOUNT="${MG_AWS_ACCOUNT:-}"; REF=HEAD; PROFILE=""; ROTATE_JWT=""; CI_MODE=""; DATA_VOLUME_PARAM=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --dry-run) MODE=dry-run ;;
@@ -44,11 +52,46 @@ while [ $# -gt 0 ]; do
     --profile) PROFILE="${2:?--profile needs a value}"; shift ;;
     --rotate-jwt) ROTATE_JWT=1 ;;
     --ci) CI_MODE=1 ;;
+    --check-change-set) CHECK_CS="${2:?--check-change-set needs a file}"; shift ;;
+    --data-volume)
+      case "${2:-}" in on) DATA_VOLUME_PARAM=true ;; off) DATA_VOLUME_PARAM=false ;;
+        *) echo "--data-volume needs on or off" >&2; exit 2 ;; esac
+      shift ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage >&2; exit 2 ;;
   esac
   shift
 done
+
+# Resources a stack update must never replace or remove: the instance (Postgres starts on its root
+# disk) and the data disk with its attachment (Postgres after the move). Replacement "Conditional"
+# counts too: for AppInstance that is what any UserData edit produces (#207).
+readonly PROTECTED="AppInstance DataVolume DataVolumeAttachment"
+# Reads describe-change-set JSON from $1. Prints the protected logical ids the change set would remove
+# or replace (space separated, empty if none) on stdout, and the reasons on stderr.
+protected_changes() { # change-set.json
+  local bad
+  # Some jq builds exit 0 on a parse error: require an object with a Changes array explicitly.
+  [ "$(jq -r 'if type == "object" and (.Changes | type) == "array" then "ok" else empty end' "$1" 2>/dev/null)" = ok ] \
+    || return 2
+  bad="$(jq -r --arg p "$PROTECTED" '($p | split(" ")) as $prot | [(.Changes // [])[].ResourceChange
+    | select(. != null) | select(.LogicalResourceId as $id | $prot | index($id))
+    | select(.Action == "Remove" or .Replacement == "True" or .Replacement == "Conditional")
+    | .LogicalResourceId] | unique | join(" ")' "$1")" || return 2
+  if [ -n "$bad" ]; then
+    jq -r --arg b "$bad" '($b | split(" ")) as $ids | (.Changes // [])[].ResourceChange | select(. != null)
+      | select(.LogicalResourceId as $id | $ids | index($id))
+      | "  \(.LogicalResourceId): Action \(.Action), Replacement \(.Replacement // "-")",
+        (.Details[]? | "    \(.Target.Attribute)/\(.Target.Name // "-"): RequiresRecreation \(.Target.RequiresRecreation // "-"), \(.ChangeSource // "-") \(.CausingEntity // "")")' \
+      "$1" >&2 || true
+  fi
+  printf '%s\n' "$bad"
+}
+if [ -n "$CHECK_CS" ]; then
+  bad="$(protected_changes "$CHECK_CS")" || { echo "error: cannot read $CHECK_CS as change-set JSON" >&2; exit 2; }
+  if [ -n "$bad" ]; then echo "UNSAFE: the change set would replace or remove $bad"; exit 1; fi
+  echo "safe: no protected resource ($PROTECTED) is replaced or removed"; exit 0
+fi
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(git -C "$HERE" rev-parse --show-toplevel)"
@@ -189,14 +232,18 @@ fi
 
 "${AWS[@]}" cloudformation validate-template --template-body "file://$HERE/main.yaml" >/dev/null
 echo "template valid"
+# Parameters not given here keep their current stack value (aws cloudformation deploy), so a CI run
+# without --data-volume never switches the data disk on or off.
+OVERRIDES=("LatestAmiId=$ami")
+[ -n "$DATA_VOLUME_PARAM" ] && OVERRIDES+=("EnableDataVolume=$DATA_VOLUME_PARAM")
 if dry; then
   plan aws cloudformation deploy --template-file deploy/aws/main.yaml --stack-name "$STACK" --role-arn "$CFN_ROLE_ARN" \
-    --capabilities CAPABILITY_IAM --parameter-overrides "LatestAmiId=$ami" --no-execute-changeset --no-fail-on-empty-changeset
-  echo "[dry-run] then: refuse if AppInstance is removed/replaced, execute-change-set, wait stack-$([ $existed = true ] && echo update || echo create)-complete"
+    --capabilities CAPABILITY_IAM --parameter-overrides "${OVERRIDES[@]}" --no-execute-changeset --no-fail-on-empty-changeset
+  echo "[dry-run] then: refuse if $PROTECTED would be removed or replaced (True or Conditional), execute-change-set, wait stack-$([ $existed = true ] && echo update || echo create)-complete"
 else
   rc=0
   "${AWS[@]}" cloudformation deploy --template-file "$HERE/main.yaml" --stack-name "$STACK" \
-    --role-arn "$CFN_ROLE_ARN" --capabilities CAPABILITY_IAM --parameter-overrides "LatestAmiId=$ami" \
+    --role-arn "$CFN_ROLE_ARN" --capabilities CAPABILITY_IAM --parameter-overrides "${OVERRIDES[@]}" \
     --no-execute-changeset --no-fail-on-empty-changeset > "$WORK/cs.out" 2>&1 || rc=$?
   cat "$WORK/cs.out"
   arn="$(grep -oE 'arn:aws[^ ]*:changeSet/[^ ]+' "$WORK/cs.out" | head -n1 || true)"
@@ -211,13 +258,14 @@ else
       --query 'Summaries[?Status==`FAILED`].[ChangeSetName,StatusReason]' --output text 2>/dev/null || true
     die "creating the change set failed (exit $rc)"
   else
-    bad="$("${AWS[@]}" cloudformation describe-change-set --change-set-name "$arn" \
-      --query "length(Changes[?ResourceChange.LogicalResourceId=='AppInstance' && (ResourceChange.Action=='Remove' || ResourceChange.Replacement=='True' || ResourceChange.Replacement=='Conditional')])" --output text)"
-    if [ "$bad" != 0 ]; then
+    "${AWS[@]}" cloudformation describe-change-set --change-set-name "$arn" --output json > "$WORK/cs.json"
+    # Prints why (property, RequiresRecreation, what caused it) on stderr, so the owner can review by hand.
+    bad="$(protected_changes "$WORK/cs.json")" || die "cannot parse the change set"
+    if [ -n "$bad" ]; then
       "${AWS[@]}" cloudformation delete-change-set --change-set-name "$arn" || true
-      die "the change set would replace or remove AppInstance (Postgres lives on it); aborted, review by hand"
+      die "the change set would replace or remove $bad (Postgres lives on it); aborted, review by hand"
     fi
-    echo "change set is safe (AppInstance kept); executing"
+    echo "change set is safe ($PROTECTED kept where present); executing"
     "${AWS[@]}" cloudformation execute-change-set --change-set-name "$arn"
     if ! "${AWS[@]}" cloudformation wait "stack-$([ $existed = true ] && echo update || echo create)-complete" --stack-name "$STACK"; then
       echo "stack operation failed; failed events:" >&2
@@ -229,13 +277,14 @@ else
     echo "stack is $(stack_status)"
   fi
   # Server-side guard as well (the client-side check above can be skipped by anyone holding
-  # ExecuteChangeSet): the stack policy denies replacing or deleting AppInstance. Local runs
-  # only; the CI user has no SetStackPolicy right.
+  # ExecuteChangeSet): the stack policy denies replacing or deleting the protected resources. Local
+  # runs only; the CI user has no SetStackPolicy right.
   if [ -z "$CI_MODE" ]; then
     "${AWS[@]}" cloudformation set-stack-policy --stack-name "$STACK" --stack-policy-body '{"Statement":[
-      {"Effect":"Deny","Action":["Update:Replace","Update:Delete"],"Principal":"*","Resource":"LogicalResourceId/AppInstance"},
+      {"Effect":"Deny","Action":["Update:Replace","Update:Delete"],"Principal":"*","Resource":[
+        "LogicalResourceId/AppInstance","LogicalResourceId/DataVolume","LogicalResourceId/DataVolumeAttachment"]},
       {"Effect":"Allow","Action":"Update:*","Principal":"*","Resource":"*"}]}'
-    echo "stack policy: AppInstance cannot be replaced or deleted by a stack update"
+    echo "stack policy: $PROTECTED cannot be replaced or deleted by a stack update"
   fi
 fi
 
@@ -251,7 +300,10 @@ fi
 out() { "${AWS[@]}" cloudformation describe-stacks --stack-name "$STACK" \
   --query "Stacks[0].Outputs[?OutputKey=='$1'].OutputValue | [0]" --output text; }
 INSTANCE_ID="$(out InstanceId)"; REPO_URI="$(out EcrRepositoryUri)"; APP_URL="$(out AppUrl)"
-echo "instance $INSTANCE_ID, repository $REPO_URI, url $APP_URL"
+DATA_VOLUME_ID="$(out DataVolumeId)"   # "None" unless EnableDataVolume=true
+if [ "$DATA_VOLUME_ID" = None ] || [ -z "$DATA_VOLUME_ID" ]; then DATA_VOLUME_ID=""
+elif ! [[ "$DATA_VOLUME_ID" =~ ^vol-[0-9a-f]+$ ]]; then die "unexpected DataVolumeId '$DATA_VOLUME_ID'"; fi
+echo "instance $INSTANCE_ID, repository $REPO_URI, url $APP_URL, data volume ${DATA_VOLUME_ID:-none}"
 
 step "6/8 Image $REPO_URI:$SHA7"
 if "${AWS[@]}" ecr describe-images --repository-name "$STACK-app" --image-ids "imageTag=$SHA7" >/dev/null 2>&1; then
@@ -270,7 +322,7 @@ fi
 
 step "7/8 Roll out on $INSTANCE_ID (SSM Run Command, APP_COMMIT=$SHA)"
 if dry; then
-  echo "[dry-run] ssm send-command AWS-RunShellScript: remote-deploy.sh $STACK $REGION $REPO_URI:$SHA7 schema.sql $SHA"
+  echo "[dry-run] ssm send-command AWS-RunShellScript: remote-deploy.sh $STACK $REGION $REPO_URI:$SHA7 schema.sql $SHA ${DATA_VOLUME_ID}"
 else
   ping=""
   for _ in $(seq 1 40); do   # a new instance needs a few minutes to register with SSM
@@ -284,7 +336,7 @@ else
   # belongs to the deployed commit, like the image.
   script="$(base64 < "$HERE/remote-deploy.sh" | tr -d '\n')"
   schema="$(git -C "$ROOT" show "$SHA:backend/db/schema.sql" | base64 | tr -d '\n')"
-  cmd="echo $script | base64 -d > /tmp/remote-deploy.sh; echo $schema | base64 -d > /tmp/schema.sql; bash /tmp/remote-deploy.sh '$STACK' '$REGION' '$REPO_URI:$SHA7' /tmp/schema.sql '$SHA'"
+  cmd="echo $script | base64 -d > /tmp/remote-deploy.sh; echo $schema | base64 -d > /tmp/schema.sql; bash /tmp/remote-deploy.sh '$STACK' '$REGION' '$REPO_URI:$SHA7' /tmp/schema.sql '$SHA' '$DATA_VOLUME_ID'"
   params="$(jq -n --arg c "$cmd" '{commands: [$c], executionTimeout: ["900"]}')"
   cid="$("${AWS[@]}" ssm send-command --instance-ids "$INSTANCE_ID" --document-name AWS-RunShellScript \
     --comment "micro-git deploy $SHA7" --parameters "$params" --timeout-seconds 900 --query Command.CommandId --output text)"
