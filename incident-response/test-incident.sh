@@ -62,6 +62,24 @@ if [ $DRY -eq 1 ]; then
   "$D/run-responder.sh" drill-dry-2 "$ROUTE" >/dev/null
   check "escalation-packet.json written" "[ -f '$INCIDENTS_DIR/drill-dry-2/escalation-packet.json' ]"
 
+  echo "== action_id contract (stub proposes an id; policy builds; executor runs only the built argv)"
+  check "stub response has action_id fault_off, empty params, no command field" "jq -e '.proposed_action.action_id==\"fault_off\" and .proposed_action.params=={} and (.proposed_action|has(\"command\")|not)' '$INC/response.json' >/dev/null"
+  check "decision records action_id, params, argv" "jq -e '.action_id==\"fault_off\" and .params=={} and .argv[0]==\"docker\" and .env.FAULT_ENDPOINT_500==\"\"' '$INC/decision.json' >/dev/null"
+  check "dry-run audit records action_id, params and command" "grep -q 'action_skipped' '$INC/audit.jsonl' && grep 'action_skipped' '$INC/audit.jsonl' | grep -q 'action_id=fault_off params={} command=FAULT_ENDPOINT_500= docker compose'"
+  EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" drill-nocompose "$ROUTE" >/dev/null
+  ( unset COMPOSE_FILES COMPOSE_FILE; "$D/run-responder.sh" drill-nocompose "$ROUTE" >/dev/null 2>&1 )
+  check "stub does not need compose args: it still proposes fault_off, the policy fails closed without COMPOSE_FILES" "jq -e '.proposed_action.action_id==\"fault_off\"' '$INCIDENTS_DIR/drill-nocompose/response.json' >/dev/null && jq -e '.decision==\"escalate\" and .command==null' '$INCIDENTS_DIR/drill-nocompose/decision.json' >/dev/null && grep -q 'COMPOSE_FILES not set' '$INCIDENTS_DIR/drill-nocompose/decision.json'"
+  mkdir -p "$T/dockbin"; cat > "$T/dockbin/docker" <<DOCK
+#!/usr/bin/env bash
+{ printf 'ARG=%s\\n' "\$@"; echo "FLAG=[\${FAULT_ENDPOINT_500-unset}]"; } > "$T/docker.out"
+DOCK
+  chmod +x "$T/dockbin/docker"
+  EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" drill-exec "$ROUTE" >/dev/null
+  ( PATH="$T/dockbin:$PATH" DRY_RUN=0 AUTO_EXECUTE=1 GLOBAL_COOLDOWN_SECONDS=0 VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 "$D/run-responder.sh" drill-exec "$ROUTE" >/dev/null 2>&1 )
+  check "executor runs exactly the built argv (fake docker) with the flag cleared" "grep -qx 'ARG=compose' '$T/docker.out' && grep -qx 'ARG=-f' '$T/docker.out' && grep -qx 'ARG=up' '$T/docker.out' && grep -qx 'ARG=--no-deps' '$T/docker.out' && grep -qx 'ARG=app' '$T/docker.out' && grep -qx 'FLAG=\[\]' '$T/docker.out'"
+  check "exec audit line records action_id, params and command" "grep '\"kind\":\"exec\"' '$INCIDENTS_DIR/drill-exec/audit.jsonl' | grep -q 'action_id=fault_off params={} command=FAULT_ENDPOINT_500= docker compose'"
+  check "action.lock holds the built action (JSON), not model text" "jq -e '.action_id==\"fault_off\" and (.argv|type)==\"array\"' '$INCIDENTS_DIR/drill-exec/action.lock' >/dev/null"
+
   echo "== model path isolation (fake claude on PATH)"
   mkdir -p "$T/fakebin"; cat > "$T/fakebin/claude" <<FAKE
 #!/usr/bin/env bash
