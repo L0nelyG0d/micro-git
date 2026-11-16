@@ -59,7 +59,7 @@ done
 # unreadable .last_action fails closed (only "not found" is free); skipped as root, which can read mode 000
 if [ "$(id -u)" != 0 ]; then
   rm -f "$CD/c/action.lock" "$CD/c/decision.json"; echo "$(date +%s) x" > "$CD/.last_action"; chmod 000 "$CD/.last_action"
-  [ "$(cdrun c 300)" = 3 ] && [ ! -f "$CD/c/action.lock" ] && grep -q 'global action cooldown' "$CD/c/decision.json" && { pass=$((pass+1)); echo "ok   cooldown: unreadable .last_action fails closed"; } || { fail=$((fail+1)); echo "FAIL cooldown unreadable"; }
+  [ "$(cdrun c 300)" = 3 ] && [ ! -f "$CD/c/action.lock" ] && grep -q 'cooldown state unreadable' "$CD/c/decision.json" && ! grep -q 'left)' "$CD/c/decision.json" && { pass=$((pass+1)); echo "ok   cooldown: unreadable .last_action fails closed with an honest reason"; } || { fail=$((fail+1)); echo "FAIL cooldown unreadable"; }
   chmod 600 "$CD/.last_action"
 fi
 # future-dated stamp: the reported wait equals the enforced wait (ts - now + cooldown), not the bare cooldown

@@ -113,44 +113,54 @@ def last_action_path(inc):
     return os.path.join(os.path.dirname(os.path.abspath(inc)), ".last_action")
 
 
-def cooldown_left(inc, policy):
-    """Seconds left of the global cooldown (0 = free). Only a missing file (FileNotFoundError) or garbled content is 'free';
+def cooldown_state(inc, policy):
+    """(seconds left, unreadable). Seconds left of the global cooldown (0 = free). Only a missing file (FileNotFoundError) or garbled content is 'free';
     any other read error (permissions, I/O) fails closed with the full cooldown. A timestamp in the future keeps the cooldown
     running until ts + cooldown, and the reported seconds are exactly that."""
     cd = cooldown_seconds(policy)
     if cd <= 0:
-        return 0
+        return 0, False
     try:
         ts = float(open(last_action_path(inc)).read().split()[0])
     except FileNotFoundError:
-        return 0
+        return 0, False
     except OSError:
-        return cd   # unreadable state: cannot prove the cooldown is over -> fail closed
+        return cd, True   # unreadable state: cannot prove the cooldown is over -> fail closed
     except (ValueError, IndexError):
-        return 0
+        return 0, False
     if not math.isfinite(ts):
-        return 0   # nan/inf: treat like garbage, "no previous action"
-    return max(0, int(cd - (time.time() - ts) + 0.999))
+        return 0, False   # nan/inf: treat like garbage, "no previous action"
+    return max(0, int(cd - (time.time() - ts) + 0.999)), False
+
+
+def cooldown_left(inc, policy):
+    return cooldown_state(inc, policy)[0]
+
+
+def cooldown_reason(policy, left, unreadable):
+    if unreadable:
+        return "cooldown state unreadable: .last_action cannot be read, so the global cooldown cannot be proven over (fail closed)"
+    return "global action cooldown: another automatic action ran less than %ds ago (%ds left)" % (cooldown_seconds(policy), left)
 
 
 def claim_cooldown(inc, policy):
-    """Atomically (flock) check and stamp .last_action. Returns seconds left (0 = claimed)."""
+    """Atomically (flock) check and stamp .last_action. Returns (seconds left, unreadable); (0, False) = claimed."""
     cd = cooldown_seconds(policy)
     if cd <= 0:
-        return 0
+        return 0, False
     path = last_action_path(inc)
     lf = open(path + ".lock", "a")
     try:
         if fcntl:
             fcntl.flock(lf, fcntl.LOCK_EX)
-        left = cooldown_left(inc, policy)
+        left, unreadable = cooldown_state(inc, policy)
         if left:
-            return left
+            return left, unreadable
         tmp = path + ".tmp%d" % os.getpid()
         with open(tmp, "w") as f:
             f.write("%d %s\n" % (time.time(), os.path.basename(os.path.abspath(inc))))
         os.replace(tmp, path)
-        return 0
+        return 0, False
     finally:
         lf.close()
 
@@ -183,9 +193,9 @@ def decide(resp, policy, schema, inc):
             reasons.append("command not in allowlist for type %s%s" % (typ, "" if compose_args() else " (COMPOSE_FILES not set: fail closed)"))
     if os.path.exists(os.path.join(inc, "action.lock")):
         reasons.append("an automatic action was already taken for this incident")
-    left = cooldown_left(inc, policy)
+    left, unreadable = cooldown_state(inc, policy)
     if left:
-        reasons.append("global action cooldown: another automatic action ran less than %ds ago (%ds left)" % (cooldown_seconds(policy), left))
+        reasons.append(cooldown_reason(policy, left, unreadable))
     return ("escalate" if reasons else "allow"), reasons
 
 
@@ -212,10 +222,10 @@ def main():
         except FileExistsError:
             verdict, reasons = "escalate", ["an automatic action was already taken for this incident"]
         else:
-            left = claim_cooldown(inc, policy)   # global, across incidents; release the per-incident claim if refused
+            left, unreadable = claim_cooldown(inc, policy)   # global, across incidents; release the per-incident claim if refused
             if left:
                 os.unlink(os.path.join(inc, "action.lock"))
-                verdict, reasons = "escalate", ["global action cooldown: another automatic action ran less than %ds ago (%ds left)" % (cooldown_seconds(policy), left)]
+                verdict, reasons = "escalate", [cooldown_reason(policy, left, unreadable)]
     decision = {"incident_id": os.path.basename(os.path.abspath(inc)), "decision": verdict, "reasons": reasons,
                 "command": (resp or {}).get("proposed_action", {}).get("command") if isinstance(resp, dict) else None,
                 "policy_version": policy["version"]}
