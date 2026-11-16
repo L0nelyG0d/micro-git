@@ -11,9 +11,13 @@ Global cooldown: after an automatic action is claimed, no other incident may cla
 global_cooldown_seconds (policy, default 300; env GLOBAL_COOLDOWN_SECONDS overrides, 0 = off), stamped in
 <incidents dir>/.last_action under flock, so flapping alerts or a listener restart cannot loop restarts.
 Env: COMPOSE_FILES (colon list; COMPOSE_FILE fallback) and COMPOSE_PROJECT_NAME expand the {{COMPOSE_ARGS}}
-placeholder of command templates.
+placeholder of action templates.
+The model never supplies a command: it proposes proposed_action.action_id (+ params). build_action() validates both
+against autonomy-policy.yaml and builds argv/env itself; decision.json carries action_id, params, command (display
+string), argv and env, and the executor (run-responder.sh) runs only that argv/env. A legacy `command` field in the
+response is refused (escalate).
 """
-import json, math, os, re, sys, time, datetime
+import json, math, os, re, shlex, sys, time, datetime
 try:
     import fcntl
 except ImportError:  # non-POSIX: cooldown still works, without the cross-process lock
@@ -22,11 +26,32 @@ except ImportError:  # non-POSIX: cooldown still works, without the cross-proces
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 
+def _reject_constant(name):
+    raise ValueError("non-finite number %s" % name)
+
+
+def strict_json(text):
+    """json.loads that refuses the non-standard NaN/Infinity/-Infinity tokens (they would defeat every numeric comparison)."""
+    return json.loads(text, parse_constant=_reject_constant)
+
+
+def too_deep(obj, limit=16):
+    """Iterative nesting check (no recursion): the responder schema is shallow; anything deeper is hostile or broken."""
+    stack = [(obj, 1)]
+    while stack:
+        o, d = stack.pop()
+        if isinstance(o, (dict, list)):
+            if d > limit:
+                return True
+            stack.extend((v, d + 1) for v in (o.values() if isinstance(o, dict) else o))
+    return False
+
+
 def load_policy(path):
     # Policy file is JSON-compatible YAML. Use PyYAML only if present, else JSON.
     text = open(path).read()
     try:
-        return json.loads(text)
+        return strict_json(text)
     except ValueError:
         try:
             import yaml  # optional
@@ -42,6 +67,8 @@ def validate(inst, schema):
     if t == "number":
         if isinstance(inst, bool) or not isinstance(inst, (int, float)):
             return ["expected number"]
+        if not math.isfinite(inst):
+            return ["non-finite number"]   # 1e999 parses to inf
     elif t in tmap and (not isinstance(inst, tmap[t]) or (t != "boolean" and isinstance(inst, bool))):
         return ["expected " + t]
     if "enum" in schema and inst not in schema["enum"]:
@@ -80,8 +107,8 @@ def audit(inc, kind, detail, decision="n/a"):
                             "actor": "policy-check.py", "kind": kind, "detail": detail, "decision": decision}) + "\n")
 
 
-def compose_args():
-    """'-p NAME -f a -f b' from env, or None (fail closed) when no compose file list is configured."""
+def compose_argv():
+    """['-p', NAME, '-f', a, '-f', b] from env, or None (fail closed) when no compose file list is configured."""
     lst = os.environ.get("COMPOSE_FILES") or os.environ.get("COMPOSE_FILE") or ""
     if not lst or not re.fullmatch(r"[A-Za-z0-9_./:-]+", lst) or ".." in lst:
         return None
@@ -90,22 +117,72 @@ def compose_args():
     proj = os.environ.get("COMPOSE_PROJECT_NAME", "")
     if proj and not re.fullmatch(r"[a-z0-9][a-z0-9_-]*", proj):
         return None
-    parts = (["-p", proj] if proj else []) + [x for f in lst.split(":") if f for x in ("-f", f)]
-    return " ".join(parts)
+    return (["-p", proj] if proj else []) + [x for f in lst.split(":") if f for x in ("-f", f)]
 
 
-def expand(template):
-    if "{{COMPOSE_ARGS}}" not in template:
-        return template
-    ca = compose_args()
-    return None if ca is None else template.replace("{{COMPOSE_ARGS}}", re.escape(ca).replace("\\ ", " "))
+# Param values: strict allowlist of characters on top of the per-param rule; no whitespace, no shell syntax, no leading "-".
+SAFE_PARAM = re.compile(r"[A-Za-z0-9_./:=@%+][A-Za-z0-9_./:=@%+-]{0,119}")
+ENV_NAME = re.compile(r"[A-Z_][A-Z0-9_]*")
+
+
+def build_action(act, policy):
+    """Validate action_id/params and build the command. Returns (spec, built, reasons); built = {action_id, params,
+    argv, env, command} or None. Never raises on model input; every problem is a reason (fail closed)."""
+    aid, typ, params = act.get("action_id"), act.get("type"), act.get("params", {})
+    allowed = policy["allowed_actions"]
+    if not isinstance(aid, str) or aid not in allowed:
+        return None, None, ["unknown action_id %s: not in the policy allowlist (%s)" % (json.dumps(str(aid)[:60]), ", ".join(sorted(allowed)))]
+    spec = allowed[aid]
+    if typ not in spec["types"]:
+        return spec, None, ["action_id %s is not allowed for incident type %s (allowed: %s)" % (aid, typ, ", ".join(spec["types"]))]
+    if not isinstance(params, dict):
+        return spec, None, ["params must be an object"]
+    rules, reasons = spec.get("params", {}), []
+    for k in params:
+        if k not in rules:
+            reasons.append("unknown param %s for action_id %s" % (json.dumps(str(k)[:40]), aid))
+    for k, rule in rules.items():
+        if k not in params:
+            reasons.append("missing param %s for action_id %s" % (k, aid)); continue
+        v = params[k]
+        if not isinstance(v, str):
+            reasons.append("param %s must be a string" % k)
+        elif not SAFE_PARAM.fullmatch(v) or v.startswith("-"):
+            reasons.append("param %s has a forbidden value (whitespace/shell metacharacters/leading dash are never allowed)" % k)
+        elif "enum" in rule and v not in rule["enum"]:
+            reasons.append("param %s not in its allowed values" % k)
+        elif "regex" in rule and not re.fullmatch(rule["regex"], v):
+            reasons.append("param %s does not match its rule" % k)
+        elif any(re.search(d["regex"], v) for d in policy["denied_patterns"]):
+            reasons.append("param %s hit a denied pattern" % k)
+    if reasons:
+        return spec, None, reasons
+    ca = None
+    argv = []
+    for el in spec["argv"]:
+        if el == "{{COMPOSE_ARGS}}":
+            ca = compose_argv()
+            if ca is None:
+                return spec, None, ["COMPOSE_FILES not set or invalid: cannot build the command (fail closed)"]
+            argv += ca
+        elif re.fullmatch(r"\{\{param:([A-Za-z0-9_]+)\}\}", el):
+            argv.append(params[el[8:-2]])
+        elif "{{" in el:
+            return spec, None, ["policy template element not understood: " + el]
+        else:
+            argv.append(el)
+    env = dict(spec.get("env", {}))
+    if not all(ENV_NAME.fullmatch(k) and isinstance(v, str) and SAFE_PARAM.fullmatch(v or "x") for k, v in env.items()):
+        return spec, None, ["policy env entry invalid"]
+    command = " ".join(["%s=%s" % (k, shlex.quote(v) if v else "") for k, v in env.items()] + [shlex.quote(x) for x in argv])
+    return spec, {"action_id": aid, "params": params, "argv": argv, "env": env, "command": command}, []
 
 
 def cooldown_seconds(policy):
     """Global cooldown between automatic actions of ANY incident. Env GLOBAL_COOLDOWN_SECONDS overrides the policy; 0 = off."""
     try:
         return max(0, int(os.environ.get("GLOBAL_COOLDOWN_SECONDS", policy.get("global_cooldown_seconds", 300))))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return 300   # unparseable -> keep the safe default
 
 
@@ -113,80 +190,103 @@ def last_action_path(inc):
     return os.path.join(os.path.dirname(os.path.abspath(inc)), ".last_action")
 
 
-def cooldown_left(inc, policy):
-    """Seconds left of the global cooldown (0 = free). Only a missing file (FileNotFoundError) or garbled content is 'free';
-    any other read error (permissions, I/O) fails closed with the full cooldown. A timestamp in the future keeps the cooldown
+def cooldown_state(inc, policy):
+    """(seconds left, unreadable). Seconds left of the global cooldown (0 = free). Only a missing file (FileNotFoundError) is 'free';
+    any other problem (permissions, I/O, garbled or non-finite content) fails closed with the full cooldown. A timestamp in the future keeps the cooldown
     running until ts + cooldown, and the reported seconds are exactly that."""
     cd = cooldown_seconds(policy)
     if cd <= 0:
-        return 0
+        return 0, False
     try:
         ts = float(open(last_action_path(inc)).read().split()[0])
     except FileNotFoundError:
-        return 0
+        return 0, False
     except OSError:
-        return cd   # unreadable state: cannot prove the cooldown is over -> fail closed
+        return cd, True   # unreadable state: cannot prove the cooldown is over -> fail closed
     except (ValueError, IndexError):
-        return 0
+        return cd, True   # garbled/empty stamp: cannot prove the cooldown is over -> fail closed
     if not math.isfinite(ts):
-        return 0   # nan/inf: treat like garbage, "no previous action"
-    return max(0, int(cd - (time.time() - ts) + 0.999))
+        return cd, True   # nan/inf: same
+    return max(0, int(cd - (time.time() - ts) + 0.999)), False
+
+
+def cooldown_left(inc, policy):
+    return cooldown_state(inc, policy)[0]
+
+
+def cooldown_reason(policy, left, unreadable):
+    if unreadable:
+        return "cooldown state unreadable: .last_action cannot be read, so the global cooldown cannot be proven over (fail closed)"
+    return "global action cooldown: another automatic action ran less than %ds ago (%ds left)" % (cooldown_seconds(policy), left)
 
 
 def claim_cooldown(inc, policy):
-    """Atomically (flock) check and stamp .last_action. Returns seconds left (0 = claimed)."""
+    """Atomically (flock) check and stamp .last_action. Returns (seconds left, unreadable); (0, False) = claimed."""
     cd = cooldown_seconds(policy)
     if cd <= 0:
-        return 0
+        return 0, False
     path = last_action_path(inc)
     lf = open(path + ".lock", "a")
     try:
         if fcntl:
             fcntl.flock(lf, fcntl.LOCK_EX)
-        left = cooldown_left(inc, policy)
+        left, unreadable = cooldown_state(inc, policy)
         if left:
-            return left
+            return left, unreadable
         tmp = path + ".tmp%d" % os.getpid()
         with open(tmp, "w") as f:
             f.write("%d %s\n" % (time.time(), os.path.basename(os.path.abspath(inc))))
         os.replace(tmp, path)
-        return 0
+        return 0, False
     finally:
         lf.close()
 
 
-def decide(resp, policy, schema, inc):
+def decide(resp, policy, schema, inc, load_err=None):
+    """Returns (verdict, reasons, built). built is the command built by the policy (only when verdict is allow)."""
     reasons = []
+    if resp is None and load_err:
+        return "escalate", ["schema: response unreadable: " + load_err], None
+    act0 = resp.get("proposed_action") if isinstance(resp, dict) else None
+    if isinstance(act0, dict):   # clear reasons for the new contract before the generic schema errors
+        if "command" in act0:
+            return "escalate", ["legacy command field refused: the responder must propose action_id (and params), never a shell command"], None
+        if "action_id" not in act0:
+            return "escalate", ["missing action_id in proposed_action (use \"none\" for code_fix_pr/escalate)"], None
+        aid = act0["action_id"]
+        if aid != "none" and (not isinstance(aid, str) or aid not in policy["allowed_actions"]):
+            return "escalate", ["unknown action_id %s: not in the policy allowlist (%s)" % (json.dumps(str(aid)[:60]), ", ".join(sorted(policy["allowed_actions"])))], None
+    schema = json.loads(json.dumps(schema))   # the policy is authoritative: its allowlist (+ "none") is the action_id enum
+    schema["properties"]["proposed_action"]["properties"]["action_id"]["enum"] = sorted(policy["allowed_actions"]) + ["none"]
     errs = validate(resp, schema) if isinstance(resp, dict) else ["response is not an object"]
     if errs:
-        return "escalate", ["schema: " + e for e in errs]
+        return "escalate", ["schema: " + e for e in errs], None
     act = resp["proposed_action"]
-    cmd, typ = act["command"], act["type"]
-    if cmd != cmd.strip():
-        reasons.append("command has leading/trailing whitespace")
+    typ, aid = act["type"], act["action_id"]
+    built = None
     if resp["needs_human"]:
         reasons.append("responder set needs_human")
-    if resp["confidence"] < policy["confidence_threshold"]:
-        reasons.append("confidence %.2f < threshold %.2f" % (resp["confidence"], policy["confidence_threshold"]))
+    conf, thr = resp["confidence"], policy.get("confidence_threshold")
+    thr_ok = isinstance(thr, (int, float)) and not isinstance(thr, bool) and math.isfinite(thr)
+    if not thr_ok:
+        reasons.append("policy confidence_threshold is not a finite number")
+    elif not (isinstance(conf, (int, float)) and not isinstance(conf, bool) and math.isfinite(conf) and conf >= thr):
+        reasons.append("confidence %s is not a finite number >= threshold %.2f" % (conf, thr))
     if typ in policy["propose_only_types"]:
         reasons.append("action type %s is propose-only" % typ)
+        if aid != "none" or act.get("params"):
+            reasons.append("propose-only type %s must use action_id none and no params" % typ)
+    elif aid == "none":
+        reasons.append("action_id none is not executable for type %s" % typ)
     else:
-        for d in policy["denied_patterns"]:
-            if re.search(d["regex"], cmd):
-                reasons.append("denied pattern: " + d["id"])
-        match = []
-        for a in policy["allowed_actions"]:
-            rx = expand(a["command_regex"])
-            if rx is not None and a["type"] == typ and re.fullmatch(rx, cmd):
-                match.append(a)
-        if not match:
-            reasons.append("command not in allowlist for type %s%s" % (typ, "" if compose_args() else " (COMPOSE_FILES not set: fail closed)"))
+        _spec, built, r = build_action(act, policy)
+        reasons += r
     if os.path.exists(os.path.join(inc, "action.lock")):
         reasons.append("an automatic action was already taken for this incident")
-    left = cooldown_left(inc, policy)
+    left, unreadable = cooldown_state(inc, policy)
     if left:
-        reasons.append("global action cooldown: another automatic action ran less than %ds ago (%ds left)" % (cooldown_seconds(policy), left))
-    return ("escalate" if reasons else "allow"), reasons
+        reasons.append(cooldown_reason(policy, left, unreadable))
+    return ("escalate" if reasons else "allow"), reasons, (None if reasons else built)
 
 
 def main():
@@ -197,27 +297,35 @@ def main():
     os.makedirs(inc, exist_ok=True)
     opt = lambda n, d: a[a.index(n) + 1] if n in a else d
     policy = load_policy(opt("--policy", os.path.join(HERE, "autonomy-policy.yaml")))
-    schema = json.load(open(os.path.join(HERE, "response.schema.json")))
+    schema = strict_json(open(os.path.join(HERE, "response.schema.json")).read())
     rpath = opt("--response", os.path.join(inc, "response.json"))
+    load_err = None
     try:
-        resp = json.load(open(rpath))
-    except Exception as e:
-        resp = None
-        audit(inc, "policy_input_error", str(e))
-    verdict, reasons = decide(resp, policy, schema, inc)
+        resp = strict_json(open(rpath).read())
+        if too_deep(resp):
+            raise ValueError("response is nested too deeply")
+    except (Exception, RecursionError) as e:
+        resp, load_err = None, ("%s: %s" % (type(e).__name__, e))[:200]
+        audit(inc, "policy_input_error", load_err)
+    verdict, reasons, built = decide(resp, policy, schema, inc, load_err)
     if verdict == "allow" and "--no-claim" not in a and policy["max_automatic_actions_per_incident"] >= 1:
         try:  # atomic claim: at most one automatic action
             fd = os.open(os.path.join(inc, "action.lock"), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            os.write(fd, resp["proposed_action"]["command"].encode()); os.close(fd)
+            os.write(fd, json.dumps(built).encode()); os.close(fd)   # the claimed action; the executor runs exactly this
         except FileExistsError:
-            verdict, reasons = "escalate", ["an automatic action was already taken for this incident"]
+            verdict, reasons, built = "escalate", ["an automatic action was already taken for this incident"], None
         else:
-            left = claim_cooldown(inc, policy)   # global, across incidents; release the per-incident claim if refused
+            left, unreadable = claim_cooldown(inc, policy)   # global, across incidents; release the per-incident claim if refused
             if left:
                 os.unlink(os.path.join(inc, "action.lock"))
-                verdict, reasons = "escalate", ["global action cooldown: another automatic action ran less than %ds ago (%ds left)" % (cooldown_seconds(policy), left)]
+                verdict, reasons, built = "escalate", [cooldown_reason(policy, left, unreadable)], None
+    pa = resp.get("proposed_action") if isinstance(resp, dict) else None
+    pa = pa if isinstance(pa, dict) else {}
+    b = built or {}
     decision = {"incident_id": os.path.basename(os.path.abspath(inc)), "decision": verdict, "reasons": reasons,
-                "command": (resp or {}).get("proposed_action", {}).get("command") if isinstance(resp, dict) else None,
+                "action_id": b.get("action_id", pa.get("action_id") if isinstance(pa.get("action_id"), str) else None),
+                "params": b.get("params", pa.get("params") if isinstance(pa.get("params"), dict) else None),
+                "command": b.get("command"), "argv": b.get("argv"), "env": b.get("env"),
                 "policy_version": policy["version"]}
     json.dump(decision, open(os.path.join(inc, "decision.json"), "w"), indent=2)
     audit(inc, "policy_decision", json.dumps(decision), verdict)

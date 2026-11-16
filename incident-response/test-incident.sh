@@ -62,10 +62,51 @@ if [ $DRY -eq 1 ]; then
   "$D/run-responder.sh" drill-dry-2 "$ROUTE" >/dev/null
   check "escalation-packet.json written" "[ -f '$INCIDENTS_DIR/drill-dry-2/escalation-packet.json' ]"
 
+  echo "== action_id contract (stub proposes an id; policy builds; executor runs only the built argv)"
+  check "stub response has action_id fault_off, empty params, no command field" "jq -e '.proposed_action.action_id==\"fault_off\" and .proposed_action.params=={} and (.proposed_action|has(\"command\")|not)' '$INC/response.json' >/dev/null"
+  check "decision records action_id, params, argv" "jq -e '.action_id==\"fault_off\" and .params=={} and .argv[0]==\"docker\" and .env.FAULT_ENDPOINT_500==\"\"' '$INC/decision.json' >/dev/null"
+  check "dry-run audit records action_id, params and command" "grep -q 'action_skipped' '$INC/audit.jsonl' && grep 'action_skipped' '$INC/audit.jsonl' | grep -q 'action_id=fault_off params={} command=FAULT_ENDPOINT_500= docker compose'"
+  EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" drill-nocompose "$ROUTE" >/dev/null
+  ( unset COMPOSE_FILES COMPOSE_FILE; "$D/run-responder.sh" drill-nocompose "$ROUTE" >/dev/null 2>&1 )
+  check "stub does not need compose args: it still proposes fault_off, the policy fails closed without COMPOSE_FILES" "jq -e '.proposed_action.action_id==\"fault_off\"' '$INCIDENTS_DIR/drill-nocompose/response.json' >/dev/null && jq -e '.decision==\"escalate\" and .command==null' '$INCIDENTS_DIR/drill-nocompose/decision.json' >/dev/null && grep -q 'COMPOSE_FILES not set' '$INCIDENTS_DIR/drill-nocompose/decision.json'"
+  mkdir -p "$T/dockbin"; cat > "$T/dockbin/docker" <<DOCK
+#!/usr/bin/env bash
+{ printf 'ARG=%s\\n' "\$@"; echo "FLAG=[\${FAULT_ENDPOINT_500-unset}]"; } > "$T/docker.out"
+DOCK
+  chmod +x "$T/dockbin/docker"
+  EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" drill-exec "$ROUTE" >/dev/null
+  ( PATH="$T/dockbin:$PATH" DRY_RUN=0 AUTO_EXECUTE=1 GLOBAL_COOLDOWN_SECONDS=0 VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 "$D/run-responder.sh" drill-exec "$ROUTE" >/dev/null 2>&1 )
+  check "executor runs exactly the built argv (fake docker) with the flag cleared" "grep -qx 'ARG=compose' '$T/docker.out' && grep -qx 'ARG=-f' '$T/docker.out' && grep -qx 'ARG=up' '$T/docker.out' && grep -qx 'ARG=--no-deps' '$T/docker.out' && grep -qx 'ARG=app' '$T/docker.out' && grep -qx 'FLAG=\[\]' '$T/docker.out'"
+  check "exec audit line records action_id, params and command" "grep '\"kind\":\"exec\"' '$INCIDENTS_DIR/drill-exec/audit.jsonl' | grep -q 'action_id=fault_off params={} command=FAULT_ENDPOINT_500= docker compose'"
+  check "action.lock holds the built action (JSON), not model text" "jq -e '.action_id==\"fault_off\" and (.argv|type)==\"array\"' '$INCIDENTS_DIR/drill-exec/action.lock' >/dev/null"
+
+  echo "== non-finite confidence from a model must not execute (fake claude + fake docker, AUTO_EXECUTE=1)"
+  for CASE in "nan:NaN:0" "inf:Infinity:0" "ok:0.9:1"; do
+    CN="${CASE%%:*}"; CV="$(echo "$CASE" | cut -d: -f2)"; WANT="${CASE##*:}"
+    mkdir -p "$T/nanbin-$CN"; cat > "$T/nanbin-$CN/claude" <<FAKE
+#!/usr/bin/env bash
+echo '{"incident_id":"drill-conf-$CN","summary":"s","root_cause_hypothesis":"h","confidence":$CV,"evidence_refs":["app_runtime.json"],"proposed_action":{"type":"restart","action_id":"restart_app","params":{},"files":[]},"risk":"r","needs_human":false}'
+FAKE
+    chmod +x "$T/nanbin-$CN/claude"; rm -f "$T/docker.out"
+    EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" "drill-conf-$CN" "$ROUTE" >/dev/null
+    ( PATH="$T/nanbin-$CN:$T/dockbin:$PATH" RESPONDER=claude DRY_RUN=0 AUTO_EXECUTE=1 GLOBAL_COOLDOWN_SECONDS=0 VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 "$D/run-responder.sh" "drill-conf-$CN" "$ROUTE" >/dev/null 2>&1 )
+    if [ "$WANT" = 1 ]; then
+      check "control: finite confidence 0.9 executes the fake docker" "[ -f '$T/docker.out' ] && grep -qx 'ARG=restart' '$T/docker.out'"
+    else
+      check "confidence $CV: fake docker never called, no action.lock" "[ ! -f '$T/docker.out' ] && [ ! -f '$INCIDENTS_DIR/drill-conf-$CN/action.lock' ]"
+      check "confidence $CV: escalated (policy decision or dropped response), never allowed" "[ -f '$INCIDENTS_DIR/drill-conf-$CN/escalation-packet.json' ] && ! grep -q '\"decision\":\"allow\"' '$INCIDENTS_DIR/drill-conf-$CN/audit.jsonl'"
+    fi
+  done
+  echo "== hostile action.lock written before the policy step is not executed"
+  EVIDENCE_FIXTURE="$D/fixtures/evidence" "$D/collect-evidence.sh" drill-hostile-lock "$ROUTE" >/dev/null
+  echo '{"action_id":"restart_app","params":{},"argv":["touch","'"$T"'/PWNED2"],"env":{},"command":"touch x"}' > "$INCIDENTS_DIR/drill-hostile-lock/action.lock"; rm -f "$T/docker.out"
+  ( PATH="$T/dockbin:$PATH" DRY_RUN=0 AUTO_EXECUTE=1 GLOBAL_COOLDOWN_SECONDS=0 VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 "$D/run-responder.sh" drill-hostile-lock "$ROUTE" >/dev/null 2>&1 )
+  check "pre-existing action.lock: nothing executed, escalated" "[ ! -e '$T/PWNED2' ] && [ ! -f '$T/docker.out' ] && [ -f '$INCIDENTS_DIR/drill-hostile-lock/escalation-packet.json' ]"
+
   echo "== model path isolation (fake claude on PATH)"
   mkdir -p "$T/fakebin"; cat > "$T/fakebin/claude" <<FAKE
 #!/usr/bin/env bash
-{ printf '%s\\n' "\$@"; echo "CWD=\$PWD"; ls .incident .incident/evidence 2>&1; [ -t 0 ] && echo STDIN_TTY || echo STDIN_NOT_TTY; } > "$T/fake.out"
+{ printf '%s\\n' "\$@"; echo "CWD=\$PWD"; echo "ENV_USER=\${USER:-}"; env | cut -d= -f1 | sed 's/^/ENVNAME=/'; ls .incident .incident/evidence 2>&1; [ -t 0 ] && echo STDIN_TTY || echo STDIN_NOT_TTY; } > "$T/fake.out"
 echo '{"incident_id":"x"}'
 FAKE
   chmod +x "$T/fakebin/claude"
@@ -78,6 +119,7 @@ FAKE
   cp -R "$INCIDENTS_DIR/drill-fake" "$INCIDENTS_DIR/drill-nomk"
   PATH="$T/nomkbin:$T/fakebin:$PATH" RESPONDER=claude "$D/run-responder.sh" drill-nomk "$ROUTE" >/dev/null 2>&1; NOMK=$?
   check "mktemp failure -> exit 1 + escalation packet, no model run" "[ $NOMK = 1 ] && [ -f '$INCIDENTS_DIR/drill-nomk/escalation-packet.json' ] && grep -q 'mktemp' '$INCIDENTS_DIR/drill-nomk/audit.jsonl'"
+  check "scrubbed env keeps USER (macOS keychain login), drops other vars" "[ -z \"\${USER:-}\" ] || { grep -qx \"ENV_USER=\$USER\" '$T/fake.out' && ! grep -qE '^ENVNAME=(INCIDENTS_DIR|COMPOSE_FILES|ALERT_TOKEN_FILE)$' '$T/fake.out'; }"
   check "model stdin is not a tty (/dev/null)" "grep -q STDIN_NOT_TTY '$T/fake.out'"
   echo "== compose arg validation"
   for bad in ":a.yml" "a.yml:" "a.yml::b.yml" "-f:b.yml" "a.yml:-x"; do
