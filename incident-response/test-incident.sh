@@ -205,7 +205,15 @@ print(listener.run('$T/tmo', ['$T/slow.sh', '$T/tmo'], timeout=2))")
   PS_OUT="$T/vinc3"; mkdir -p "$PS_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$PS_OUT" PROBE_URL='http://bob:se/cr@et@127.0.0.1:1/x' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc3 >/dev/null 2>&1 )
   check "probe with a slash in the password: userinfo not logged" "grep -q 'http://127.0.0.1:1/x' '$PS_OUT/vinc3/audit.jsonl' && ! grep -q 'bob\|se/cr\|cr@et' '$PS_OUT/vinc3/audit.jsonl'"
   RJ_OUT="$T/vinc4"; mkdir -p "$RJ_OUT"; ( DRY_RUN=0 INCIDENTS_DIR="$RJ_OUT" PROBE_URL='ftp://bob:RJPW@host/x?k=Q' VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x vinc4 >/dev/null 2>&1 )
-  check "invalid probe URL is rejected, logged without userinfo, no probe" "grep -q 'probe URL rejected' '$RJ_OUT/vinc4/audit.jsonl' && ! grep -q 'bob\|RJPW\|SECRET\|k=Q' '$RJ_OUT/vinc4/audit.jsonl' && ! grep -q 'probe enabled' '$RJ_OUT/vinc4/audit.jsonl'"
+  check "invalid probe URL is rejected, logged without userinfo, no probe" "grep -q 'PROBE_URL rejected' '$RJ_OUT/vinc4/audit.jsonl' && ! grep -q 'bob\|RJPW\|SECRET\|k=Q' '$RJ_OUT/vinc4/audit.jsonl' && ! grep -q 'probe enabled' '$RJ_OUT/vinc4/audit.jsonl'"
+  # password-with-slash shapes: pa/ss must not appear in stdout, stderr or audit (a rejected URL prints fixed text only)
+  PWI=0; for PX in 'u:pa/ss@host/x' 'http:u:pa/ss@host/x' '//u:pa/ss@host/x' 'http://u:pa/ss@host/x'; do
+    PWI=$((PWI+1)); PX_OUT="$T/pw$PWI"; mkdir -p "$PX_OUT"
+    ( DRY_RUN=0 INCIDENTS_DIR="$PX_OUT" PROBE_URL="$PX" VERIFY_MINUTES=0 WARMUP_SECONDS=0 VERIFY_INTERVAL=1 PROM_URL=http://127.0.0.1:1 APP_URL=http://127.0.0.1:1 PROBE_COUNT=1 "$D/runbooks/verify-recovery.sh" /x pw$PWI >"$PX_OUT/stdout" 2>"$PX_OUT/stderr" )
+    check "probe shape $PWI: audit written" "[ -s '$PX_OUT/pw$PWI/audit.jsonl' ]"
+    check "probe shape $PWI: pa/ss not in stdout, stderr or audit" "! grep -q 'pa/ss' '$PX_OUT/stdout' '$PX_OUT/stderr' '$PX_OUT/pw$PWI/audit.jsonl'"
+  done
+  check "probe shape 4 (accepted http) audits scheme://host/path only" "grep -q 'to http://host/x' '$T/pw4/pw4/audit.jsonl'"
   # make-token re-run repairs mode and (Linux root path, stubbed uname/id/chown) ownership
   chmod 644 "$T/tok-new"; "$D/make-token.sh" "$T/tok-new" >/dev/null 2>&1; TM="$(stat -c %a "$T/tok-new" 2>/dev/null || stat -f %Lp "$T/tok-new")"
   check "make-token re-run repairs mode to 600" "[ '$TM' = 600 ]"
@@ -219,6 +227,10 @@ print(listener.run('$T/tmo', ['$T/slow.sh', '$T/tmo'], timeout=2))")
   TM="$(stat -c %a "$T/sym-target" 2>/dev/null || stat -f %Lp "$T/sym-target")"
   check "make-token re-run refuses a symlink (exit non-zero)" "[ $SRC -ne 0 ]"
   check "make-token symlink refusal leaves the target mode alone" "[ '$TM' = 644 ]"
+  # dangling symlink: -e is false, so the create branch used to write the token through the link
+  ln -sf "$T/dang-target" "$T/dang-tok"; "$D/make-token.sh" "$T/dang-tok" >/dev/null 2>&1; DRC=$?
+  check "make-token refuses a dangling symlink (exit non-zero)" "[ $DRC -ne 0 ]"
+  check "make-token dangling symlink: link target NOT created" "[ ! -e '$T/dang-target' ] && [ ! -L '$T/dang-target' ]"
   echo "== listener: unreadable token is a config error"
   if [ "$(id -u)" != 0 ]; then
     mkdir -p "$T/utok"; echo dummy-not-a-secret > "$T/utok/tok"; chmod 000 "$T/utok/tok"

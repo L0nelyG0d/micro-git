@@ -19,14 +19,23 @@ INC=""; [ -n "$ID" ] && valid_id "$ID" && INC="$INCIDENTS_DIR/$ID"
 log() { echo "verify: $*"; [ -n "$INC" ] && audit "$INC" verify "$*"; return 0; }
 if [ "${DRY_RUN:-0}" = 1 ]; then log "DRY_RUN simulated recovery for $ROUTE"; exit 0; fi
 
-if [ -n "${PROBE_URL:-}" ]; then   # audit what is probed (scheme://host/path only: query strings and user:pass@ may carry secrets)
-  # Redact first: drop everything from "://" up to the LAST "@" (a password may contain "/", "?", "#" or "@"), then the
-  # query/fragment. The URL as given is never logged. Over-redaction is acceptable here; a leak is not.
-  PU="$(printf '%s' "$PROBE_URL" | sed -E 's#^([A-Za-z][A-Za-z0-9+.-]*://)(.*@)?#\1#')"; PU="${PU%%[?#]*}"
-  if printf '%s' "$PU" | grep -Eq '^https?://[^/[:space:]]+(/[^[:space:]]*)?$'; then
+if [ -n "${PROBE_URL:-}" ]; then
+  # The URL as given is NEVER logged or echoed (a rejected value may carry a password; a password may contain "/", "?", "#").
+  # Accepted only as http(s)://, logged as scheme://host[:port][/path]: userinfo is dropped up to the LAST "@", then the
+  # query and fragment. The host part must be a plain hostname[:port], otherwise the URL is rejected.
+  PU=""
+  case "$PROBE_URL" in
+    http://*|https://*)
+      SCHEME="${PROBE_URL%%://*}"; REST="${PROBE_URL#*://}"
+      REST="${REST##*@}"            # longest prefix ending in "@" = everything up to the last "@"
+      REST="${REST%%[?#]*}"         # drop query and fragment
+      if printf '%s' "${REST%%/*}" | grep -Eq '^[A-Za-z0-9.-]+(:[0-9]+)?$'; then PU="$SCHEME://$REST"; fi
+      ;;
+  esac
+  if [ -n "$PU" ]; then
     log "probe enabled: ${PROBE_COUNT:-5} GET per poll to $PU$([ -n "${PROBE_COOKIE_JAR:-}" ] && echo " with a cookie jar")"
-  else   # rejected: no probing; the ratio then relies on organic traffic (see header)
-    log "probe URL rejected (must be http(s)://host[/path]; shown without userinfo or query): $PU"
+  else   # rejected: fixed text only, no probing; the ratio then relies on organic traffic (see header)
+    log "PROBE_URL rejected (must be http:// or https://); probing disabled"
     PROBE_URL=""
   fi
 fi
