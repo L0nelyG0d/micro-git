@@ -1,6 +1,6 @@
 # Testing
 
-How the project is tested locally and in CI. Rules for writing tests live in [`_docs/testing-guidelines.md`](../_docs/testing-guidelines.md); the Playwright suite and the older manual browser journey are described in [`_docs/e2e.md`](../_docs/e2e.md); setup in [`_docs/README.md`](../_docs/README.md).
+How the project is tested locally and in CI. Rules for writing tests live in [`_docs/testing-guidelines.md`](../_docs/testing-guidelines.md); the Playwright suite and the older manual browser journey are described in [`_docs/e2e.md`](../_docs/e2e.md); setup in [`docs/developer-guide.md`](developer-guide.md).
 
 ## Test levels
 

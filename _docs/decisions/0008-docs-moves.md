@@ -1,6 +1,6 @@
 # ADR 0008: Docs moves and role models
 
-Status: Accepted (2026-11-14)
+Status: Accepted (2026-11-14). Applied 2026-11-16 (issue #199); the open items of `_docs/questions.md` remain for the user
 
 Issue: #199
 

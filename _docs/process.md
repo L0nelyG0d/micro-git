@@ -12,9 +12,11 @@ The main session is the orchestrator. It launches the roles below as subagents a
 - QA - checks the result against the acceptance criteria, follows `_docs/team/qa-engineer.md`
 - Code reviewer - reviews the code after QA PASS, then merges into `main` and pushes, follows `_docs/team/code-reviewer.md`
 - Architect - keeps the structure map and the ownership of each area, reviews changes for structural fit, writes ADRs in `_docs/decisions/`, follows `_docs/team/architect.md`. May launch sub-architects (one per area) that report to it
-- DevOps - CI/CD, Render, AWS, observability, incident response, security audit. A branch per issue, hands over to QA, never merges; follows `_docs/team/devops.md`
+- DevOps - CI/CD, Render, AWS, observability, incident response, security audit. A branch per issue, hands over to QA, never merges; prepares and dry-runs AWS changes but never applies them (the owner does); follows `_docs/team/devops.md`
 
-Models (user decision 2026-11-12, replaces 2026-10-19): PM runs on Haiku (`haiku`); the engineer on Sonnet or Opus (`sonnet`/`opus`); the code reviewer and the system analyst on Opus (`opus`); QA on Sonnet (`sonnet`). At most 5 subagents at once (user decision 2026-11-12, was 3). Tests run against the local Postgres on port 54329 (see AGENTS.md), not Neon. The architect runs on Fable, sub-architects on Opus for design and approval, DevOps on Opus; any agent that writes code or config runs on Sonnet (user decisions 2026-11-13 to 2026-11-15, ADR 0008).
+Models (user decision 2026-11-12, replaces 2026-10-19): PM runs on Haiku (`haiku`); the engineer on Sonnet or Opus (`sonnet`/`opus`); the code reviewer and the system analyst on Opus (`opus`); QA on Sonnet (`sonnet`). At most 5 subagents at once (user decision 2026-11-12, was 3). Tests run against the local Postgres on port 54329 (see AGENTS.md), not Neon. The architect runs on Fable.
+
+Usage policy (user decision 2026-11-15, replaces the limits above where they differ): at most 3 agents alive at once, QA and reviewers included. Sonnet or Haiku for everything that edits files, for QA and for PM work; Opus only for a sub-architect's design and approval and for the code review of risky changes (backend code, deploy workflows, security-relevant scripts, IAM and policy files). Docs-only and small script or comment changes skip the separate Opus review: Sonnet QA, then the merge. Related issues whose files overlap go into one branch, one QA, one review and one merge. QA tests at the smallest scale that proves the change (`_docs/team/qa-engineer.md`, "Test scale"). No polling loops; wait for notifications.
 
 ## Lifecycle
 

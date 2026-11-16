@@ -1,6 +1,6 @@
 # Deployment
 
-One Docker image serves the API and the built SPA. It is deployed to two targets, Render and AWS, by `.github/workflows/deploy.yml` after CI and E2E are green on `main`. CD details (jobs, secrets and variables): [`deploy/README.md`](../deploy/README.md). Per-target details: [`deploy/render/README.md`](../deploy/render/README.md), [`deploy/aws/README.md`](../deploy/aws/README.md). Operations (live check, rollback, key rotation): [`_docs/deploy-runbook.md`](../_docs/deploy-runbook.md). App configuration reference: [`_docs/README.md`](../_docs/README.md). Merge flow, smoke checks and rollback: [release-process.md](release-process.md). What CI and E2E check before a deploy: [testing.md](testing.md).
+One Docker image serves the API and the built SPA. It is deployed to two targets, Render and AWS, by `.github/workflows/deploy.yml` after CI and E2E are green on `main`. CD details (jobs, secrets and variables): [`deploy/README.md`](../deploy/README.md). Per-target details: [`deploy/render/README.md`](../deploy/render/README.md), [`deploy/aws/README.md`](../deploy/aws/README.md). Operations (live check, rollback, key rotation): [`_docs/deploy-runbook.md`](../_docs/deploy-runbook.md). App configuration reference: [`docs/developer-guide.md`](developer-guide.md). Merge flow, smoke checks and rollback: [release-process.md](release-process.md). What CI and E2E check before a deploy: [testing.md](testing.md).
 
 ## Docker image
 
@@ -40,7 +40,7 @@ For plain HTTP on localhost set `COOKIE_SECURE=false` (empty also works but logs
 | `METRICS_ADDR` | app, optional | Separate listener for `/metrics`; see `_docs/plan.md` |
 | `APP_PORT` | compose | Host port, default 8080 |
 | `REGISTER_MAX_PER_IP` | compose, test stacks only | Raises the per-IP register limit |
-| `SQLITE_PATH`, `DB_MAX_CONNS`, `DB_STATEMENT_TIMEOUT` | app, optional | See `_docs/README.md` |
+| `SQLITE_PATH`, `DB_MAX_CONNS`, `DB_STATEMENT_TIMEOUT` | app, optional | See `docs/developer-guide.md` |
 
 ## Schema and migrations
 

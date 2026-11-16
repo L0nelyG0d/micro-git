@@ -1,6 +1,6 @@
 # ADR 0007: CI uses the repository scripts
 
-Status: Accepted (2026-11-14): option C
+Status: Accepted (2026-11-14): option C. Not applied yet (issue #198)
 
 Issue: #198
 

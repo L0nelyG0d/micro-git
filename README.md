@@ -9,7 +9,7 @@ Live: https://micro-git.onrender.com (Render). The AWS address and the status of
     make setup         # go mod download + npm ci
     make dev-sqlite    # backend on SQLite (data/mg.db) plus the frontend, no Postgres needed
 
-Other ways to run it (memory store, Postgres, Docker Compose, mock frontend) and the full setup: [`_docs/README.md`](_docs/README.md#quick-start). `make help` lists every target.
+Other ways to run it (memory store, Postgres, Docker Compose, mock frontend) and the full setup: [`docs/developer-guide.md`](docs/developer-guide.md#quick-start). `make help` lists every target.
 
 ## Repository layout
 
@@ -25,7 +25,7 @@ Other ways to run it (memory store, Postgres, Docker Compose, mock frontend) and
 | `observability/` | Local compose overlay: OpenTelemetry collector, Prometheus, Loki, Tempo, Grafana, Alertmanager | DevOps |
 | `incident-response/` | Alert listener, evidence collection, autonomy policy, responder, runbooks | DevOps |
 | `security-audit/` | Semgrep run, findings schema and validation, capability table, tracked results in `runs/` | DevOps |
-| `docs/` | Reader-facing guides and reports | DevOps, QA engineer (`testing.md`) |
+| `docs/` | Reader-facing guides and reports, including the developer manual `developer-guide.md` | DevOps, QA engineer (`testing.md`) |
 | `_docs/` | Process and project docs: how the team works, what is built, contracts, runbooks, decisions | Architect (layout); each file has its own owner, see the map |
 | `.env.example`, `frontend/.env.example` | Names of the environment variables, no values | Software engineer |
 | `.gitignore`, `skills-lock.json` | Ignore rules (local data, session exports, archives); pinned UI skills | Architect |
@@ -34,7 +34,7 @@ The full map, the layering rules and the ownership table: [`_docs/team/architect
 
 ## Where to read
 
-- Developer manual (setup, tests, architecture, CLI, migration): [`_docs/README.md`](_docs/README.md)
+- Developer manual (setup, tests, architecture, CLI, migration): [`docs/developer-guide.md`](docs/developer-guide.md)
 - What the app does (features, endpoints, tables, rules): [`_docs/plan.md`](_docs/plan.md); API contract: [`_docs/openapi.yaml`](_docs/openapi.yaml); visual design: [`_docs/DESIGN.md`](_docs/DESIGN.md)
 - How the team works: [`_docs/process.md`](_docs/process.md), [`_docs/AGENTS.md`](_docs/AGENTS.md), role briefs in [`_docs/team/`](_docs/team/), backlog in [`_docs/tasks.md`](_docs/tasks.md), open questions in [`_docs/questions.md`](_docs/questions.md)
 - Architecture decisions: [`_docs/decisions/`](_docs/decisions/README.md)
