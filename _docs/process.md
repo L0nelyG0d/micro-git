@@ -18,6 +18,8 @@ Models (user decision 2026-11-12, replaces 2026-10-19): PM runs on Haiku (`haiku
 
 Usage policy (user decision 2026-11-15, replaces the limits above where they differ): at most 3 agents alive at once, QA and reviewers included. Sonnet or Haiku for everything that edits files, for QA and for PM work; Opus only for a sub-architect's design and approval and for the code review of risky changes (backend code, deploy workflows, security-relevant scripts, IAM and policy files). Docs-only and small script or comment changes skip the separate Opus review: Sonnet QA, then the merge. Related issues whose files overlap go into one branch, one QA, one review and one merge. QA tests at the smallest scale that proves the change (`_docs/team/qa-engineer.md`, "Test scale"). No polling loops; wait for notifications.
 
+Models now (user decision 2026-11-16, replaces the model choices above; every role moved down one model): the architect/orchestrator runs on Opus (`opus`); the code reviewer on Sonnet (`sonnet`), and only for risky changes (backend code, deploy workflows, security-relevant scripts, IAM and policy files); the system analyst on Sonnet; implementers (engineer, DevOps), QA and PM on Haiku (`haiku`); sub-architects, when used, on Sonnet. Docs-only and small script or test changes skip the review: Haiku QA, then the merge. At most 3 agents alive at once still holds.
+
 ## Lifecycle
 
 1. Pick the next open issue from the backlog, in order (later tasks depend on earlier ones)
