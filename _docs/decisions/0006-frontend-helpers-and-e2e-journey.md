@@ -1,6 +1,6 @@
 # ADR 0006: Frontend class helper and the manual e2e journey
 
-Status: Accepted (2026-11-14): option C
+Status: Accepted (2026-11-14): option C. Not applied yet (issue #193)
 
 Issue: #193
 

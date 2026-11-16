@@ -7,7 +7,7 @@ format on PostgreSQL, a SQLite file or in memory (your choice, see "Quick start"
 Clone, push and fetch of the git protocol are not supported; use the web UI or the `mg` command-line client (see "Command line"). See `_docs/plan.md` for the full
 feature list, endpoints, tables and rules.
 
-The original brainstorm chat, cleaned and redacted, is in [`_docs/brainstorm-history.md`](brainstorm-history.md).
+The original brainstorm chat, cleaned and redacted, is in [`_docs/brainstorm-history.md`](../_docs/brainstorm-history.md).
 
 ## Quick start
 
@@ -331,7 +331,7 @@ frontend/                React + TypeScript + Vite + Tailwind + shadcn/ui
 
 ### API contract
 
-[`_docs/openapi.yaml`](openapi.yaml) describes every endpoint (OpenAPI 3.0.3): request and
+[`_docs/openapi.yaml`](../_docs/openapi.yaml) describes every endpoint (OpenAPI 3.0.3): request and
 response schemas, the `session` cookie auth, the `{"error": ...}` shape and every status
 code the handlers return. The API routes themselves have no `/api` prefix: in development the Vite dev server proxies `/api/*`
 and strips the prefix, and in the Docker image the server does the same in `backend/static.go`. Lint it with
@@ -525,6 +525,6 @@ same `DATABASE_URL`. The SQLite file is only read, never modified.
 Two targets, both deployed by the Deploy workflow after CI and E2E are green on `main`:
 
 - [Deployment and CD overview](../deploy/README.md) (jobs, secrets and variables)
-- [Image, compose and environment variables](../docs/deployment.md)
+- [Image, compose and environment variables](deployment.md)
 - [Render](../deploy/render/README.md), live: https://micro-git.onrender.com
-- [AWS](../deploy/aws/README.md), stack `micro-git-prod` in `ap-southeast-2` (manual workflow `Promote to production`); URL: stack output `AppUrl`, current address in the [deploy runbook](deploy-runbook.md)
+- [AWS](../deploy/aws/README.md), stack `micro-git-prod` in `ap-southeast-2` (manual workflow `Promote to production`); URL: stack output `AppUrl`, current address in the [deploy runbook](../_docs/deploy-runbook.md)

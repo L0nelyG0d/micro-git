@@ -9,7 +9,7 @@
 - `go test ./path/to/pkg` - one package
 - `go test -run TestName ./...` - one test by name
 - `npm test` (in `frontend/`) - frontend tests
-- `make run-sqlite` - backend on SQLite (`data/mg.db`, git-ignored), no Postgres; `make dev-sqlite` adds the frontend; `make run-memory` for the in-memory store; `make clean-data` deletes the SQLite files; `make smoke-sqlite` is the integration smoke (`_docs/README.md` "Quick start")
+- `make run-sqlite` - backend on SQLite (`data/mg.db`, git-ignored), no Postgres; `make dev-sqlite` adds the frontend; `make run-memory` for the in-memory store; `make clean-data` deletes the SQLite files; `make smoke-sqlite` is the integration smoke (`docs/developer-guide.md` "Quick start")
 
 Rules
 
