@@ -184,7 +184,7 @@ def validate(inst, schema):
     if "enum" in schema and inst not in schema["enum"]:
         errs.append("not in enum %s" % schema["enum"])
     if isinstance(inst, str):
-        if "pattern" in schema and not re.search(schema["pattern"], inst):
+        if "pattern" in schema and not re.fullmatch(schema["pattern"], inst):
             errs.append("pattern mismatch")
         if "maxLength" in schema and len(inst) > schema["maxLength"]:
             errs.append("too long")

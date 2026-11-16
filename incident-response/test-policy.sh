@@ -86,6 +86,17 @@ b"; do
   n="param-loose-$(printf '%s' "$v" | cksum | cut -d' ' -f1)"; mk "$n" set_level config_change 0.9 false "$(jq -nc --arg v "$v" '{level:"info",name:$v}')"
   expect "$n" 3 --policy "$T/loose-policy.json"
 done
+# full match (issue #203 D): a trailing newline or trailing text must not satisfy a pattern/regex rule
+mkraw inc-id-newline "$(jq -nc '{incident_id:"x\n",summary:"s",root_cause_hypothesis:"h",confidence:0.9,evidence_refs:["a"],proposed_action:{type:"restart",action_id:"restart_app",params:{},files:[]},risk:"r",needs_human:false}')"
+expect inc-id-newline 3; jq -e '.reasons|any(test("incident_id: pattern mismatch"))' "$T/inc-id-newline/decision.json" >/dev/null && { pass=$((pass+1)); echo "ok   incident_id with a trailing newline: pattern mismatch"; } || { fail=$((fail+1)); echo "FAIL incident_id newline reason"; }
+mkraw inc-id-ok "$(jq -nc '{incident_id:"x",summary:"s",root_cause_hypothesis:"h",confidence:0.9,evidence_refs:["a"],proposed_action:{type:"restart",action_id:"restart_app",params:{},files:[]},risk:"r",needs_human:false}')"
+expect inc-id-ok 0
+jq '.allowed_actions.set_level.params.name={regex:"^[a-z]+$"}' "$T/param-policy.json" > "$T/nl-policy.json"
+mk param-trailing-newline set_level config_change 0.9 false "$(jq -nc '{level:"info",name:"abc\n"}')"; expect param-trailing-newline 3 --policy "$T/nl-policy.json"
+jq '.allowed_actions.set_level.params.name={regex:"[a-z]"}' "$T/param-policy.json" > "$T/prefix-policy.json"   # unanchored: must still be a FULL match
+pp2() { mk "$1" set_level config_change 0.9 false "$2"; expect "$1" "$3" --policy "$T/prefix-policy.json"; }
+pp2 param-prefix-only '{"level":"info","name":"a1"}' 3
+pp2 param-single-char '{"level":"info","name":"a"}' 0
 # confidence, needs_human, propose-only (they apply to a valid action too)
 mk low-confidence restart_app restart 0.5;                  expect low-confidence 3
 mk needs-human    restart_app restart 0.95 true;            expect needs-human 3
