@@ -45,7 +45,11 @@ type Config struct {
 	// AppEnv is APP_ENV, the environment label (dev, prod, ...): [a-z0-9-]{1,16},
 	// default "local". An invalid value falls back to "local" and adds a warning.
 	AppEnv string
-	Pool   PoolConfig
+	// TrustedProxyHops is TRUSTED_PROXY_HOPS: how many reverse proxies sit in
+	// front of the app (0-5, default 0). The rate limiter then takes the client
+	// from X-Forwarded-For, counted from the right. Invalid: 0 plus a warning.
+	TrustedProxyHops int
+	Pool             PoolConfig
 	// Warnings are startup notices about risky defaults. They never contain
 	// secret values; main logs them.
 	Warnings []string
@@ -181,19 +185,24 @@ func LoadConfig(getenv func(string) string) (Config, error) {
 	if envWarn != "" {
 		warnings = append(warnings, envWarn)
 	}
+	hops, hopsWarn := parseTrustedProxyHops(getenv("TRUSTED_PROXY_HOPS"))
+	if hopsWarn != "" {
+		warnings = append(warnings, hopsWarn)
+	}
 	return Config{
-		AppEnv:       appEnv,
-		Store:        store,
-		DBDriver:     driver,
-		SQLitePath:   sqlitePath,
-		Warnings:     warnings,
-		Pool:         pool,
-		Addr:         ":" + strconv.Itoa(portNum),
-		DatabaseURL:  dbURL,
-		JWTSecret:    secret,
-		CookieSecure: secure,
-		MetricsAddr:  metricsAddr,
-		ApplySchema:  getenv("APPLY_SCHEMA") == "true",
+		AppEnv:           appEnv,
+		TrustedProxyHops: hops,
+		Store:            store,
+		DBDriver:         driver,
+		SQLitePath:       sqlitePath,
+		Warnings:         warnings,
+		Pool:             pool,
+		Addr:             ":" + strconv.Itoa(portNum),
+		DatabaseURL:      dbURL,
+		JWTSecret:        secret,
+		CookieSecure:     secure,
+		MetricsAddr:      metricsAddr,
+		ApplySchema:      getenv("APPLY_SCHEMA") == "true",
 	}, nil
 }
 
@@ -227,4 +236,18 @@ func parseAppEnv(v string) (string, string) {
 		return defaultAppEnv, "APP_ENV must match [a-z0-9-]{1,16}; using \"local\""
 	}
 	return v, ""
+}
+
+// parseTrustedProxyHops is the single reading of TRUSTED_PROXY_HOPS: an
+// integer from 0 to maxTrustedProxyHops, default 0. An invalid value gives 0
+// and a warning (the process still starts).
+func parseTrustedProxyHops(v string) (int, string) {
+	if v == "" {
+		return 0, ""
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil || n < 0 || n > maxTrustedProxyHops {
+		return 0, fmt.Sprintf("TRUSTED_PROXY_HOPS must be a number from 0 to %d; using 0 (X-Forwarded-For is ignored)", maxTrustedProxyHops)
+	}
+	return n, ""
 }

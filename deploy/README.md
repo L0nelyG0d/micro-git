@@ -74,6 +74,8 @@ Never put these values in the repository, an issue or a commit message.
 
 `APP_ENV` (`[a-z0-9-]{1,16}`, default `local`; an invalid value falls back to `local` with a startup warning) becomes field `env` in every JSON log line, label `env` on the `build_info` metric and resource attribute `deployment.environment` on spans. Render sets `dev` (`render.yaml`); the AWS rollout starts the container with `APP_ENV=prod` (`remote-deploy.sh`).
 
+`TRUSTED_PROXY_HOPS` (0-5, default 0) tells the login/register limiter how many proxies sit in front of the app so it can read the client from `X-Forwarded-For` (counted from the right). The AWS rollout sets 1 (Caddy is the only way in); `render.yaml` does not set it until the number of proxies in front of a Render service is measured. See `_docs/rate-limiter.md`.
+
 ## Which commit is live
 
     curl -sI https://micro-git.onrender.com/health | grep -i '^x-build'

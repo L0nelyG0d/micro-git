@@ -397,6 +397,7 @@ Description: Issue #193, ADR `_docs/decisions/0006-frontend-helpers-and-e2e-jour
 ## 194. Rate limiter behind a proxy
 Goal: The limits are per client on Render and AWS, not per proxy.
 Description: Issue #194. `backend/ratelimit.go` keys on `RemoteAddr`; behind Render's proxy and Caddy that may be the proxy address. Record what the server sees, then trust a forwarded address only from a known proxy. Standard library only.
+Status: implemented on branch `issue-194-ratelimit-client-ip` (`TRUSTED_PROXY_HOPS`, AWS 1, Render 0); criterion 1 (measuring what the app sees in production) waits for a deploy, see `_docs/rate-limiter.md`.
 
 ## 195. ADR 0003: ops and deploy directory moves
 Goal: Decided.
